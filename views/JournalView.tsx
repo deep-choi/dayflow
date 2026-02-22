@@ -173,7 +173,7 @@ const JournalView: React.FC<JournalViewProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-white relative">
-      <div className="h-14 flex items-center justify-between px-4 sm:px-8 bg-white/80 backdrop-blur-md sticky top-0 z-10 flex-shrink-0 gap-4">
+      <div className="hidden sm:flex h-14 items-center justify-between px-4 sm:px-8 bg-white/80 backdrop-blur-md sticky top-0 z-10 flex-shrink-0 gap-4">
         <div className="flex flex-1 items-center gap-2 overflow-hidden text-sm font-medium text-[#9b9a97] min-w-0">
           {isWriting ? (
             <span className="text-[#37352f] font-medium">{editingId ? '수정' : '작성'}</span>
@@ -191,7 +191,7 @@ const JournalView: React.FC<JournalViewProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        <div className="max-w-[800px] mx-auto py-20 px-4 sm:px-8 w-full animate-in fade-in duration-500">
+        <div className="max-w-[800px] mx-auto pt-6 pb-12 px-4 sm:py-20 sm:px-8 w-full animate-in fade-in duration-500">
           {!isWriting && (
             <div className="mb-16">
               {/* Header Controls */}
@@ -361,7 +361,7 @@ const JournalView: React.FC<JournalViewProps> = ({
                 </div>
 
                 <div className="space-y-16">
-                  <div className="text-[16px] leading-[1.8] text-[#37352f] whitespace-pre-wrap min-h-[400px] prose prose-slate max-w-none">
+                  <div className="text-[16px] leading-[1.8] text-[#37352f] whitespace-pre-wrap min-h-[100px] prose prose-slate max-w-none">
                     {selectedEntry.content}
                   </div>
 

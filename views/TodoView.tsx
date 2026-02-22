@@ -1298,7 +1298,7 @@ const TodoView: React.FC<TodoViewProps> = ({
           <h1 className="text-[14px] font-normal text-[#37352f]">할 일</h1>
         </div>
 
-        <div className="px-4 pt-8 pb-5 sm:px-8 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth">
+        <div className="px-4 pt-6 pb-5 sm:px-8 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth">
           <button
             onClick={() => setFilterMode('all')}
             className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${filterMode === 'all'

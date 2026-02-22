@@ -126,7 +126,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
     return (
         <div className="flex flex-col h-full bg-white relative overflow-hidden">
             {/* Header Area */}
-            <div className="h-14 flex items-center justify-between px-8 bg-white/80 backdrop-blur-md sticky top-0 z-10 flex-shrink-0 border-b border-[#f1f1f0]">
+            <div className="hidden sm:flex h-14 items-center justify-between px-8 bg-white/80 backdrop-blur-md sticky top-0 z-10 flex-shrink-0 border-b border-[#f1f1f0]">
                 <div className="flex items-center gap-2 overflow-hidden text-sm font-medium text-[#9b9a97]">
                     {selectedAgent ? (
                         <>
@@ -141,7 +141,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
             </div>
 
             <main className="flex-1 overflow-y-auto custom-scrollbar bg-white">
-                <div className="max-w-[800px] mx-auto py-12 px-4 sm:px-8 w-full animate-in fade-in duration-500">
+                <div className="max-w-[800px] mx-auto pt-6 pb-12 px-4 sm:py-12 sm:px-8 w-full animate-in fade-in duration-500">
 
 
                     {/* 2. Middle Section: Table-style Post List (From Image) */}
