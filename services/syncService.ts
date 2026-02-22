@@ -1,5 +1,5 @@
 import { supabase } from '../utils/supabase';
-import { CalendarEvent, Todo, TodoList, JournalEntry, JournalCategory, CommunityPost, AIAgent, AppSettings, ChatSession, ActivityItem, AiPost, CalendarTag } from '../types';
+import { CalendarEvent, Todo, TodoList, TodoTab, TodoStep, JournalEntry, JournalCategory, CommunityPost, AIAgent, AppSettings, ChatSession, ActivityItem, AiPost, CalendarTag } from '../types';
 
 // ─── Debounce helper ──────────────────────────────────────────────
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -81,6 +81,10 @@ export const syncTodos = (userId: string, todos: Todo[]) => {
             text: t.text,
             completed: t.completed,
             order: i,
+            start_date: t.startDate || null,
+            due_date: t.dueDate || null,
+            sub_tasks: t.subTasks || null,
+            step_id: t.stepId || null,
         }));
         if (rows.length === 0) {
             console.warn(`[Sync] syncTodos: Blocked deletion of all todos for user ${userId} (Potential race condition guard).`);
@@ -112,6 +116,8 @@ export const syncTodoLists = (userId: string, lists: TodoList[]) => {
             user_id: userId,
             title: l.title,
             order: l.order,
+            due_date: l.dueDate || null,
+            tab_id: l.tabId || null,
         }));
         if (rows.length === 0) {
             const { error } = await supabase.from('todo_lists').delete().eq('user_id', userId);
@@ -124,6 +130,70 @@ export const syncTodoLists = (userId: string, lists: TodoList[]) => {
 
         const { error: deleteStaleError } = await supabase
             .from('todo_lists')
+            .delete()
+            .eq('user_id', userId)
+            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
+        if (deleteStaleError) throw deleteStaleError;
+    });
+};
+
+// ─── Todo Tabs ─────────────────────────────────────────────────────
+export const syncTodoTabs = (userId: string, tabs: TodoTab[]) => {
+    if (!userId) {
+        console.error('[Sync] syncTodoTabs aborted: No userId provided');
+        return;
+    }
+    debouncedSync(scopedKey('todo_tabs', userId), async () => {
+        const rows = tabs.map(t => ({
+            id: t.id,
+            user_id: userId,
+            name: t.name,
+            color: t.color,
+            order: t.order,
+        }));
+        if (rows.length === 0) {
+            const { error } = await supabase.from('todo_tabs').delete().eq('user_id', userId);
+            if (error) throw error;
+            return;
+        }
+
+        const { error: upsertError } = await supabase.from('todo_tabs').upsert(rows, { onConflict: 'id' });
+        if (upsertError) throw upsertError;
+
+        const { error: deleteStaleError } = await supabase
+            .from('todo_tabs')
+            .delete()
+            .eq('user_id', userId)
+            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
+        if (deleteStaleError) throw deleteStaleError;
+    });
+};
+
+// ─── Todo Steps ────────────────────────────────────────────────────
+export const syncTodoSteps = (userId: string, steps: TodoStep[]) => {
+    if (!userId) {
+        console.error('[Sync] syncTodoSteps aborted: No userId provided');
+        return;
+    }
+    debouncedSync(scopedKey('todo_steps', userId), async () => {
+        const rows = steps.map(s => ({
+            id: s.id,
+            user_id: userId,
+            list_id: s.listId,
+            title: s.title,
+            order: s.order,
+        }));
+        if (rows.length === 0) {
+            const { error } = await supabase.from('todo_steps').delete().eq('user_id', userId);
+            if (error) throw error;
+            return;
+        }
+
+        const { error: upsertError } = await supabase.from('todo_steps').upsert(rows, { onConflict: 'id' });
+        if (upsertError) throw upsertError;
+
+        const { error: deleteStaleError } = await supabase
+            .from('todo_steps')
             .delete()
             .eq('user_id', userId)
             .not('id', 'in', toInFilter(rows.map((row) => row.id)));

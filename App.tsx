@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react'; // Refreshed for Calendar fix
-import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, CalendarTag, JournalCategory, Comment, User, ApiUsageStats, TriggerContext, ChatSession, ChatMessage } from './types';
+import React, { useState, useEffect, useRef } from 'react';
+import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ApiUsageStats, TriggerContext, ChatSession, ChatMessage } from './types';
 import { Calendar as CalendarIcon, CheckSquare, BookOpen, MessageCircle, Sparkles, ChevronDown, Plus, Trash2, Settings2, Hash, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
@@ -14,7 +14,7 @@ import ChatView from './views/ChatView';
 import AuthView from './views/AuthView';
 import { DEFAULT_GEMINI_MODEL, getActiveGeminiConfig, getActiveAIConfig } from './utils/aiConfig';
 import { normalizeKoreanText } from './utils/encodingFix';
-import { syncEvents, syncTodos, syncTodoLists, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncUserData, setOnSyncError } from './services/syncService';
+import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncUserData, setOnSyncError } from './services/syncService';
 import { debugManualSync } from './utils/debugSync';
 import { useAuthSession } from './hooks/useAuthSession';
 
@@ -214,8 +214,13 @@ const DEFAULT_TAGS: CalendarTag[] = [
   { id: 'tag_3', name: '생일', color: '#35B37E' },
 ];
 
+const DEFAULT_TODO_TABS: TodoTab[] = [
+  { id: 'tab_todo', name: '할 일', color: '#1a73e8', order: 0 },
+  { id: 'tab_project', name: '프로젝트', color: '#9c27b0', order: 1 },
+];
+
 const DEFAULT_TODO_LISTS: TodoList[] = [
-  { id: 'default', title: '할 일', order: 1 },
+  { id: 'default', title: '해야 할 일', order: 1, tabId: 'tab_todo' },
 ];
 
 const VALID_VIEWS: ViewState[] = ['dashboard', 'calendar', 'todo', 'journal', 'board', 'chat', 'settings', 'api-settings', 'personas'];
@@ -257,8 +262,10 @@ const App: React.FC = () => {
 
   // App Data State
   const [events, setEvents] = useState<CalendarEvent[]>(() => getInitialState('events', []));
-  const [todoLists, setTodoLists] = useState<TodoList[]>(() => getInitialState('todoLists', []));
+  const [todoLists, setTodoLists] = useState<TodoList[]>(() => getInitialState('todoLists', DEFAULT_TODO_LISTS));
+  const [todoTabs, setTodoTabs] = useState<TodoTab[]>(() => getInitialState('todoTabs', DEFAULT_TODO_TABS));
   const [todos, setTodos] = useState<Todo[]>(() => getInitialState('todos', []));
+  const [todoSteps, setTodoSteps] = useState<TodoStep[]>(() => getInitialState('todoSteps', []));
   const [entries, setEntries] = useState<JournalEntry[]>(() => getInitialState('entries', []));
   const [posts, setPosts] = useState<AiPost[]>(() => getInitialState('posts', []));
 
@@ -410,6 +417,22 @@ const App: React.FC = () => {
       syncTodoLists(currentUser.id, todoLists);
     }
   }, [todoLists, currentUser?.id, isDataLoaded]);
+
+  useEffect(() => {
+    if (currentUser && isDataLoaded) {
+      localStorage.setItem('lifesync_cache_todoTabs', JSON.stringify(todoTabs));
+      if (skipSyncRef.current) return;
+      syncTodoTabs(currentUser.id, todoTabs);
+    }
+  }, [todoTabs, currentUser?.id, isDataLoaded]);
+
+  useEffect(() => {
+    if (currentUser && isDataLoaded) {
+      localStorage.setItem('lifesync_cache_todoSteps', JSON.stringify(todoSteps));
+      if (skipSyncRef.current) return;
+      syncTodoSteps(currentUser.id, todoSteps);
+    }
+  }, [todoSteps, currentUser?.id, isDataLoaded]);
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
@@ -600,7 +623,9 @@ const App: React.FC = () => {
     // --- Stage 1: Critical UI Data (Settings, Todos, Events) ---
     const fetchCritical = Promise.race([
       Promise.all([
+        supabase.from('todo_tabs').select('*').eq('user_id', userId).order('order'),
         supabase.from('todo_lists').select('*').eq('user_id', userId).order('order'),
+        supabase.from('todo_steps').select('*').eq('user_id', userId).order('order'),
         supabase.from('todos').select('*').eq('user_id', userId).order('order'),
         supabase.from('calendar_events').select('*').eq('user_id', userId),
         supabase.from('user_data').select('*').eq('user_id', userId).maybeSingle()
@@ -619,15 +644,49 @@ const App: React.FC = () => {
     }
 
     const [
+      { data: dbTodoTabs },
       { data: dbTodoLists },
+      { data: dbTodoSteps },
       { data: dbTodos },
       { data: dbEvents },
       { data: dbUserData }
     ] = criticalResults;
 
     // Apply Stage 1 data
-    if (dbTodoLists) setTodoLists(dbTodoLists.map((list: any) => ({ ...list, title: normalizeKoreanText(list.title) })));
-    if (dbTodos) setTodos(dbTodos.map((t: any) => ({ id: t.id, listId: t.list_id || undefined, text: normalizeKoreanText(t.text), completed: t.completed, date: new Date().toISOString() } as Todo)));
+    if (dbTodoTabs && dbTodoTabs.length > 0) {
+      setTodoTabs(dbTodoTabs.map((tab: any) => ({
+        id: tab.id,
+        name: normalizeKoreanText(tab.name),
+        color: tab.color,
+        order: tab.order
+      })));
+    } else if (dbTodoTabs && dbTodoTabs.length === 0) {
+      // If user has NO tabs, but maybe has lists, we should provide default tabs
+      setTodoTabs(DEFAULT_TODO_TABS);
+    }
+    if (dbTodoLists) setTodoLists(dbTodoLists.map((list: any) => ({
+      ...list,
+      title: normalizeKoreanText(list.title),
+      dueDate: list.due_date || undefined,
+      tabId: list.tab_id || (list.type === 'project' ? 'tab_project' : 'tab_todo')
+    })));
+    if (dbTodos) setTodos(dbTodos.map((t: any) => ({
+      id: t.id,
+      listId: t.list_id || undefined,
+      text: normalizeKoreanText(t.text),
+      completed: t.completed,
+      date: new Date().toISOString(),
+      startDate: t.start_date || undefined,
+      dueDate: t.due_date || undefined,
+      subTasks: t.sub_tasks ? (typeof t.sub_tasks === 'string' ? JSON.parse(t.sub_tasks) : t.sub_tasks) : undefined,
+      stepId: t.step_id || undefined
+    } as Todo)));
+    if (dbTodoSteps) setTodoSteps(dbTodoSteps.map((s: any) => ({
+      id: s.id,
+      listId: s.list_id,
+      title: normalizeKoreanText(s.title),
+      order: s.order
+    } as TodoStep)));
     if (dbEvents) setEvents(dbEvents.map((e: any) => {
       const [startDate, startTime] = e.start_time ? e.start_time.split('T') : ['', ''];
       const [endDate, endTime] = e.end_time ? e.end_time.split('T') : ['', ''];
@@ -853,7 +912,7 @@ const App: React.FC = () => {
     return () => clearInterval(intervalId);
   }, [currentUser, settings.autoAiReactions, activeGeminiConfig?.apiKey, entries, events, todos, aiAgents, activityLog]);
 
-  const addTodoList = async (title: string) => {
+  const addTodoList = async (title: string, tabId: string, dueDate?: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
     const nextOrder = Math.max(0, ...todoLists.map(l => l.order)) + 1;
@@ -861,6 +920,8 @@ const App: React.FC = () => {
       id: crypto.randomUUID(),
       title: trimmed,
       order: nextOrder,
+      tabId,
+      dueDate
     };
     setTodoLists(prev => [...prev, newList]);
 
@@ -869,8 +930,88 @@ const App: React.FC = () => {
         id: newList.id,
         user_id: currentUser.id,
         title: newList.title,
-        "order": newList.order
+        "order": newList.order,
+        tab_id: newList.tabId,
+        due_date: newList.dueDate || null
       }]);
+    }
+  };
+
+  const addTodoTab = async (name: string, color: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const nextOrder = Math.max(0, ...todoTabs.map(t => t.order)) + 1;
+    const newTab: TodoTab = {
+      id: crypto.randomUUID(),
+      name: trimmed,
+      color,
+      order: nextOrder
+    };
+    setTodoTabs(prev => [...prev, newTab]);
+    if (currentUser) {
+      await supabase.from('todo_tabs').insert([{
+        id: newTab.id,
+        user_id: currentUser.id,
+        name: newTab.name,
+        color: newTab.color,
+        "order": newTab.order
+      }]);
+    }
+  };
+
+  const updateTodoTab = async (id: string, updates: Partial<TodoTab>) => {
+    setTodoTabs(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+    if (currentUser) {
+      await supabase.from('todo_tabs').update(updates).eq('id', id);
+    }
+  };
+
+  const deleteTodoTab = async (id: string) => {
+    if (window.confirm('이 탭을 삭제할까요? 관련 목록은 삭제되지 않지만 다른 탭으로 이동해야 할 수도 있습니다.')) {
+      setTodoTabs(prev => prev.filter(t => t.id !== id));
+      if (currentUser) {
+        await supabase.from('todo_tabs').delete().eq('id', id);
+      }
+    }
+  };
+
+  const addTodoStep = async (title: string, listId: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    const nextOrder = Math.max(0, ...todoSteps.filter(s => s.listId === listId).map(s => s.order)) + 1;
+    const newStep: TodoStep = {
+      id: crypto.randomUUID(),
+      listId,
+      title: trimmed,
+      order: nextOrder
+    };
+    setTodoSteps(prev => [...prev, newStep]);
+    if (currentUser) {
+      await supabase.from('todo_steps').insert([{
+        id: newStep.id,
+        user_id: currentUser.id,
+        list_id: newStep.listId,
+        title: newStep.title,
+        "order": newStep.order
+      }]);
+    }
+  };
+
+  const updateTodoStep = async (id: string, updates: Partial<TodoStep>) => {
+    setTodoSteps(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+    if (currentUser) {
+      await supabase.from('todo_steps').update(updates).eq('id', id);
+    }
+  };
+
+  const deleteTodoStep = async (id: string) => {
+    if (!window.confirm('이 단계를 삭제하시겠습니까? 관련 할 일들은 해제됩니다.')) return;
+    setTodoSteps(prev => prev.filter(s => s.id !== id));
+    setTodos(prev => prev.map(t => t.stepId === id ? { ...t, stepId: undefined } : t));
+
+    if (currentUser) {
+      await supabase.from('todos').update({ step_id: null }).eq('step_id', id);
+      await supabase.from('todo_steps').delete().eq('id', id);
     }
   };
 
@@ -993,8 +1134,18 @@ const App: React.FC = () => {
     }
   };
 
-  const updateTodoList = (id: string, updates: Partial<TodoList>) => {
+  const updateTodoList = async (id: string, updates: Partial<TodoList>) => {
     setTodoLists(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
+    if (currentUser) {
+      const dbUpdates: any = {};
+      if (updates.title !== undefined) dbUpdates.title = updates.title;
+      if (updates.tabId !== undefined) dbUpdates.tab_id = updates.tabId;
+      if (updates.dueDate !== undefined) dbUpdates.due_date = updates.dueDate || null;
+
+      if (Object.keys(dbUpdates).length > 0) {
+        await supabase.from('todo_lists').update(dbUpdates).eq('id', id);
+      }
+    }
   };
 
   const updateTodoListOrder = (newLists: TodoList[]) => {
@@ -1286,17 +1437,19 @@ const App: React.FC = () => {
     });
   };
 
-  const addTodo = async (text: string, listId?: string, dueDate?: string, category: Todo['category'] = 'personal') => {
+  const addTodo = async (text: string, listId?: string, dueDate?: string, stepId?: string, category: Todo['category'] = 'personal') => {
     const targetListId = listId || todoLists[0]?.id || 'routine';
     const listLabel = todoLists.find(l => l.id === targetListId)?.title || '목록';
-    const newTodo = {
+    const newTodo: Todo = {
       id: crypto.randomUUID(),
       text,
       completed: false,
       date: new Date().toISOString(),
       category,
       listId: targetListId,
+      stepId,
       dueDate,
+      subTasks: [],
     };
 
     setTodos(prev => [...prev, newTodo]);
@@ -1306,9 +1459,12 @@ const App: React.FC = () => {
         id: newTodo.id,
         user_id: currentUser.id,
         list_id: targetListId,
+        step_id: stepId || null,
         text: newTodo.text,
         completed: newTodo.completed,
-        "order": todos.length
+        "order": todos.length,
+        due_date: newTodo.dueDate || null,
+        sub_tasks: newTodo.subTasks || null
       }]);
     }
 
@@ -1347,6 +1503,9 @@ const App: React.FC = () => {
       if (updates.text !== undefined) dbUpdates.text = updates.text;
       if (updates.completed !== undefined) dbUpdates.completed = updates.completed;
       if (updates.listId !== undefined) dbUpdates.list_id = updates.listId;
+      if (updates.stepId !== undefined) dbUpdates.step_id = updates.stepId || null;
+      if (updates.dueDate !== undefined) dbUpdates.due_date = updates.dueDate || null;
+      if (updates.subTasks !== undefined) dbUpdates.sub_tasks = updates.subTasks || null;
 
       if (Object.keys(dbUpdates).length > 0) {
         await supabase.from('todos').update(dbUpdates).eq('id', id);
@@ -1422,7 +1581,9 @@ const App: React.FC = () => {
           list_id: removed.listId,
           text: removed.text,
           completed: removed.completed,
-          "order": todos.length
+          "order": todos.length,
+          due_date: removed.dueDate || null,
+          sub_tasks: removed.subTasks || null
         }]);
       }
       logActivity({
@@ -1674,7 +1835,28 @@ const App: React.FC = () => {
           />
         );
       case 'todo':
-        return <TodoView todos={todos} lists={todoLists} onAddList={addTodoList} onUpdateList={updateTodoList} onUpdateListOrder={updateTodoListOrder} onAddTodo={addTodo} onUpdateTodo={updateTodo} onToggleTodo={toggleTodo} onDeleteTodo={deleteTodo} onDeleteList={deleteTodoList} />;
+        return (
+          <TodoView
+            todos={todos}
+            lists={todoLists}
+            tabs={todoTabs}
+            steps={todoSteps}
+            onAddList={addTodoList}
+            onUpdateList={updateTodoList}
+            onUpdateListOrder={updateTodoListOrder}
+            onAddTodo={addTodo}
+            onUpdateTodo={updateTodo}
+            onToggleTodo={toggleTodo}
+            onDeleteTodo={deleteTodo}
+            onDeleteList={deleteTodoList}
+            onAddTab={addTodoTab}
+            onUpdateTab={updateTodoTab}
+            onDeleteTab={deleteTodoTab}
+            onAddStep={addTodoStep}
+            onUpdateStep={updateTodoStep}
+            onDeleteStep={deleteTodoStep}
+          />
+        );
       case 'journal':
         return (
           <JournalView

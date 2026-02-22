@@ -1,3 +1,16 @@
+export interface SubTask {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
+export interface TodoStep {
+  id: string;
+  listId: string;
+  title: string;
+  order: number;
+}
+
 export interface Todo {
   id: string;
   text: string;
@@ -5,7 +18,17 @@ export interface Todo {
   date: string; // ISO date string YYYY-MM-DD
   category?: 'work' | 'personal' | 'shopping' | 'health';
   listId?: string;
+  stepId?: string; // Optional reference to TodoStep
+  startDate?: string; // ISO date string YYYY-MM-DD
   dueDate?: string; // ISO date string YYYY-MM-DD
+  subTasks?: SubTask[];
+}
+
+export interface TodoTab {
+  id: string;
+  name: string;
+  color: string;
+  order: number;
 }
 
 export interface TodoList {
@@ -13,6 +36,8 @@ export interface TodoList {
   title: string;
   order: number;
   importance?: 'high' | 'medium' | 'low';
+  dueDate?: string;
+  tabId?: string; // Reference to TodoTab
 }
 
 export interface JournalEntry {

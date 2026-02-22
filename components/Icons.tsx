@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  Edit3,
   Calendar as CalendarIcon,
   CheckSquare,
   BookOpen,
@@ -24,12 +25,15 @@ import {
   MapPin,
   MessageCircle,
   Search,
-  GripVertical
+  GripVertical,
+  Maximize2,
+  AlertCircle
 } from 'lucide-react';
 
 
 export {
   LayoutDashboard,
+  Edit3,
   CalendarIcon,
   CheckSquare,
   BookOpen,
@@ -54,5 +58,7 @@ export {
   MapPin,
   MessageCircle,
   Search,
-  GripVertical
+  GripVertical,
+  Maximize2,
+  AlertCircle
 };
