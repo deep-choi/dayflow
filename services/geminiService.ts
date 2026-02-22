@@ -267,7 +267,7 @@ Output JSON with:
 export interface ChatActionResult {
   reply: string;
   action: {
-    type: "add_event" | "delete_event" | "add_todo" | "add_journal" | "generate_insight" | "none";
+    type: "add_event" | "delete_event" | "add_todo" | "add_journal" | "generate_insight" | "generate_image" | "generate_video" | "none";
     event?: {
       title: string;
       date: string;
@@ -291,6 +291,7 @@ export interface ChatActionResult {
       content: string;
       mood?: string;
     };
+    prompt?: string;
   };
 }
 
@@ -353,6 +354,12 @@ const sanitizeAction = (
   }
 
   if (actionType === "generate_insight") return { type: "generate_insight" };
+  if (actionType === "generate_image") {
+    return { type: "generate_image", prompt: typeof rawAction.prompt === "string" ? rawAction.prompt.trim() : latestUserText.trim() };
+  }
+  if (actionType === "generate_video") {
+    return { type: "generate_video", prompt: typeof rawAction.prompt === "string" ? rawAction.prompt.trim() : latestUserText.trim() };
+  }
   return { type: "none" };
 };
 
@@ -424,6 +431,7 @@ Persona guidance:
 - Use calendar/todo/journal context only when directly relevant to the user's current request.
 - Use bullets only when the user asks for structured output.
 - Match the user's language naturally.
+- If the user asks to "draw", "generate an image", or "create video", set the action type to "generate_image" or "generate_video" and provide a detailed prompt in English (e.g. "A futuristic city in cyberpunk style") even if the user spoke Korean.
 - ${otherPersonaInstruction || "No other persona constraint provided."}
 `;
 
@@ -448,6 +456,7 @@ Persona guidance:
 - 달력/할일/메모 맥락은 현재 요청과 직접 관련 있을 때만 사용해.
 - 구조화된 출력을 요청받지 않으면 목록형 문장을 남발하지 마.
 - Use vivid wording unique to this persona's role.
+- If the user asks to "draw", "generate an image", or "create video", set the action type to "generate_image" or "generate_video" and provide a detailed prompt in English (e.g. "A majestic mountain landscape at sunset, cinematic lighting") even if the user spoke Korean.
 - ${otherPersonaInstruction || "No other persona constraint provided."}
 `;
 
@@ -460,7 +469,8 @@ Persona guidance:
 
 IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
 - "reply": string (your conversational response)
-- "action": object with key "type" (one of: "add_event", "delete_event", "add_todo", "add_journal", "generate_insight", "none")
+- "action": object with key "type" (one of: "add_event", "delete_event", "add_todo", "add_journal", "generate_insight", "generate_image", "generate_video", "none")
+  - If type is "generate_image" or "generate_video", include "prompt": string (a descriptive prompt in English for the generation model)
   - If type is "add_event", include "event": { "title": string, "date": string (YYYY-MM-DD), "startTime"?: string (HH:mm), "endTime"?: string (HH:mm), "type"?: string }
   - If type is "delete_event", include "deleteEvent": { "id"?: string, "title"?: string, "date"?: string, "startTime"?: string }
   - If type is "add_todo", include "todo": { "text": string, "category"?: string, "dueDate"?: string }
@@ -506,7 +516,7 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
         systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
         responseMimeType: "application/json",
         temperature: 0.68,
-        maxOutputTokens: 500,
+        maxOutputTokens: 1000,
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -554,6 +564,7 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
                   },
                   nullable: true,
                 },
+                prompt: { type: Type.STRING, nullable: true },
               },
               required: ["type"],
             },
@@ -563,9 +574,23 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
       },
     });
 
-    const text = response.text || "";
+    let text = "";
+    try {
+      const resp = response as any;
+      text = typeof resp.text === "function" ? resp.text() : resp.text || "";
+    } catch (e) {
+      text = (response as any).text || "";
+    }
+
     const latestUserText = [...messageHistory].reverse().find((m) => m.role === "user")?.content || "";
     const nowForSanitize = new Date();
+
+    // Clean text if it contains markdown JSON blocks
+    if (text.includes("```json")) {
+      text = text.split("```json")[1].split("```")[0].trim();
+    } else if (text.includes("```")) {
+      text = text.split("```")[1].split("```")[0].trim();
+    }
 
     try {
       const parsed: ChatActionResult = JSON.parse(text);
@@ -802,4 +827,45 @@ export const analyzePersonaUpdate = async (
   _modelName: string = DEFAULT_GEMINI_MODEL
 ): Promise<Partial<AIAgent> | null> => {
   return null;
+};
+
+export const callGeminiImageGeneration = async (
+  apiKey: string,
+  prompt: string,
+  modelName: string = 'gemini-3-pro-image-preview',
+  onUpdateUsage?: (stats: { totalRequests: number; totalTokens: number }) => void
+): Promise<string> => {
+  if (!apiKey) throw new Error("API Key is required.");
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    });
+
+    if (onUpdateUsage) {
+      onUpdateUsage({ totalRequests: 1, totalTokens: 1000 }); // Default cost for image
+    }
+
+    // Based on SDK: generateContent returns the response directly or result with response.
+    // The lint suggests 'response' is not on the type, so it might be the response itself.
+    const candidates = (response as any).candidates || [];
+    const firstCandidate = candidates[0];
+    const parts = firstCandidate?.content?.parts || [];
+
+    // Find the first image part
+    const imagePart = parts.find((p: any) => p.inlineData && p.inlineData.mimeType.startsWith('image/'));
+
+    if (imagePart && imagePart.inlineData) {
+      const { mimeType, data } = imagePart.inlineData;
+      return `data:${mimeType};base64,${data}`;
+    }
+
+    throw new Error("이미지 데이터를 받지 못했습니다.");
+  } catch (error) {
+    console.error("Gemini image generation failed:", error);
+    throw error;
+  }
 };

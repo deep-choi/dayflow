@@ -23,6 +23,10 @@ export const XAI_MODEL_OPTIONS: XaiModelOption[] = [
     { id: 'grok-3-mini', label: 'Grok 3 Mini' },
     { id: 'grok-3', label: 'Grok 3' },
     { id: 'grok-2-vision-1212', label: 'Grok 2 Vision (1212)' },
+    { id: 'grok-imagine-image-pro', label: 'Grok Imagine Image Pro' },
+    { id: 'grok-imagine-image', label: 'Grok Imagine Image' },
+    { id: 'grok-2-image-1212', label: 'Grok 2 Image (1212)' },
+    { id: 'grok-imagine-video', label: 'Grok Imagine Video' },
 ];
 
 export const GEMINI_MODEL_OPTIONS: GeminiModelOption[] = [
@@ -34,6 +38,8 @@ export const GEMINI_MODEL_OPTIONS: GeminiModelOption[] = [
     { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite' },
     { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
     { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+    { id: 'gemini-3-pro-image-preview', label: 'Gemini 3 Pro Image Preview' },
+    { id: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
 ];
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
@@ -177,5 +183,42 @@ export const getActiveGeminiConfig = (settings: AppSettings): ActiveGeminiConfig
     if (typeof settings.geminiApiKey === 'string' && settings.geminiApiKey.trim().length > 0) {
         return { apiKey: settings.geminiApiKey, modelName: DEFAULT_GEMINI_MODEL };
     }
+    return null;
+};
+
+export const isImageGenerationModel = (modelId: string): boolean => {
+    const id = modelId.toLowerCase();
+    return (
+        id.includes('imagine') ||
+        id.includes('image') ||
+        id === 'grok-2' || // Grok-2 is multimodal often
+        id === 'grok-3'
+    );
+};
+
+export const isVideoGenerationModel = (modelId: string): boolean => {
+    const id = modelId.toLowerCase();
+    return id.includes('video');
+};
+
+export const findMediaConnection = (settings: AppSettings, type: 'image' | 'video'): ActiveAIConfig | null => {
+    const connections = settings.apiConnections || [];
+    const checkFunc = type === 'image' ? isImageGenerationModel : isVideoGenerationModel;
+
+    // First try active connection
+    const active = getActiveAIConfig(settings);
+    if (active && checkFunc(active.modelName)) return active;
+
+    // Then try any active connection that matches
+    const found = connections.find(c => c.isActive && hasUsableKey(c) && checkFunc(c.modelName));
+    if (found) {
+        return {
+            connectionId: found.id,
+            provider: found.provider,
+            apiKey: found.apiKey,
+            modelName: found.provider === 'gemini' ? normalizeGeminiModelName(found.modelName) : found.modelName,
+        };
+    }
+
     return null;
 };

@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { CalendarEvent, Todo, JournalEntry, AiPost, TodoList, AppSettings, AIAgent, ChatMessage, ChatMode } from '../types';
-import { generateLifeInsight, generateChatResponse, ChatActionResult } from '../services/geminiService';
+import { generateLifeInsight, generateChatResponse, ChatActionResult, callGeminiImageGeneration } from '../services/geminiService';
 import { Sparkles, ChevronRight, Plus } from '../components/Icons';
 import { format, parseISO, isSameDay } from 'date-fns';
 import { ko } from 'date-fns/locale';
-import { getAgentAIConfig, isChatSupportedProvider } from '../utils/aiConfig';
+import { getAgentAIConfig, isChatSupportedProvider, isImageGenerationModel, isVideoGenerationModel, findMediaConnection } from '../utils/aiConfig';
+import { callXaiImageGeneration, callXaiVideoGeneration } from '../services/xaiService';
+import { ApiUsageStats } from '../types';
 
 interface ChatViewProps {
     events: CalendarEvent[];
@@ -461,6 +463,14 @@ const ChatView: React.FC<ChatViewProps> = ({
             return { type: 'generate_insight' };
         }
 
+        if (action.type === 'generate_image') {
+            return { type: 'generate_image', data: { prompt: action.prompt } };
+        }
+
+        if (action.type === 'generate_video') {
+            return { type: 'generate_video', data: { prompt: action.prompt } };
+        }
+
         if (action.type === 'delete_event' && action.deleteEvent) {
             const target = resolveDeleteTarget(action.deleteEvent);
             if (!target) return null;
@@ -639,6 +649,10 @@ const ChatView: React.FC<ChatViewProps> = ({
                     content: `✅ AI 인사이트를 생성했어요!\n\n**AI 보드** 탭에서 주인님의 라이프 분석 리포트를 확인해보세요. 📊\n\n더 많은 데이터가 쌓일수록 더 정확한 분석이 가능해요!`,
                     quickReplies: ['분석 더 해줘', '오늘 할 일 뭐야?', '고마워'],
                 };
+            case 'generate_image':
+                return { content: '이미지를 생성했어요!' };
+            case 'generate_video':
+                return { content: '영상을 생성했어요!' };
             default:
                 return { content: '처리 완료!' };
         }
@@ -866,77 +880,167 @@ const ChatView: React.FC<ChatViewProps> = ({
                             continue;
                         }
 
-                        const result = await generateChatResponse(
-                            agentConfig.apiKey,
-                            agentHistory,
-                            events,
-                            todos,
-                            entries,
-                            userName,
-                            agentConfig.modelName,
-                            currentAgent,
-                            chatMode,
-                            currentMemory,
-                            agentConfig.provider,
-                            otherPersonaNames
-                        );
-
                         let assistantMessage: ChatMessage;
-                        if (index === 0) {
-                            const fallbackAction = mapGeminiActionToChatAction(result.action);
 
-                            if (!fallbackAction && result.action?.type === 'delete_event') {
+                        if (isImageGenerationModel(agentConfig.modelName)) {
+                            try {
+                                const imageUrl = agentConfig.provider === 'xai'
+                                    ? await callXaiImageGeneration(
+                                        agentConfig.apiKey,
+                                        messageText,
+                                        agentConfig.modelName,
+                                        (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
+                                    )
+                                    : await callGeminiImageGeneration(
+                                        agentConfig.apiKey,
+                                        messageText,
+                                        agentConfig.modelName
+                                    );
                                 assistantMessage = {
                                     id: crypto.randomUUID(),
                                     role: 'assistant',
-                                    content: '삭제할 일정을 찾지 못했어요. 일정 제목이나 날짜를 조금 더 구체적으로 말해 주세요.',
+                                    content: '이미지를 생성했어요!',
+                                    imageUrl,
                                     timestamp: new Date().toISOString(),
                                     agentId: currentAgent.id,
-                                    quickReplies: ['오늘 일정 보여줘', '내일 일정 보여줘'],
                                 };
-                            } else if (fallbackAction) {
-                                if (requiresConfirmation(fallbackAction)) {
-                                    setPendingAction(fallbackAction);
-                                    const prompt = buildConfirmationPrompt(fallbackAction);
-                                    assistantMessage = {
-                                        id: crypto.randomUUID(),
-                                        role: 'assistant',
-                                        content: prompt.content,
-                                        timestamp: new Date().toISOString(),
-                                        agentId: currentAgent.id,
-                                        action: fallbackAction,
-                                        quickReplies: prompt.quickReplies,
-                                    };
+                            } catch (err) {
+                                assistantMessage = {
+                                    id: crypto.randomUUID(),
+                                    role: 'assistant',
+                                    content: `이미지 생성에 실패했어요: ${(err as Error).message}`,
+                                    timestamp: new Date().toISOString(),
+                                    agentId: currentAgent.id,
+                                };
+                            }
+                        } else if (isVideoGenerationModel(agentConfig.modelName)) {
+                            try {
+                                const videoUrl = await callXaiVideoGeneration(
+                                    agentConfig.apiKey,
+                                    messageText,
+                                    agentConfig.modelName,
+                                    (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
+                                );
+                                assistantMessage = {
+                                    id: crypto.randomUUID(),
+                                    role: 'assistant',
+                                    content: '영상을 생성했어요!',
+                                    videoUrl,
+                                    timestamp: new Date().toISOString(),
+                                    agentId: currentAgent.id,
+                                };
+                            } catch (err) {
+                                assistantMessage = {
+                                    id: crypto.randomUUID(),
+                                    role: 'assistant',
+                                    content: `영상 생성에 실패했어요: ${(err as Error).message}`,
+                                    timestamp: new Date().toISOString(),
+                                    agentId: currentAgent.id,
+                                };
+                            }
+                        } else {
+                            const result = await generateChatResponse(
+                                agentConfig.apiKey,
+                                agentHistory,
+                                events,
+                                todos,
+                                entries,
+                                userName,
+                                agentConfig.modelName,
+                                currentAgent,
+                                chatMode,
+                                currentMemory,
+                                agentConfig.provider,
+                                otherPersonaNames
+                            );
+
+                            const fallbackAction = mapGeminiActionToChatAction(result.action);
+
+                            if (fallbackAction?.type === 'generate_image' || fallbackAction?.type === 'generate_video') {
+                                const mediaType = fallbackAction.type === 'generate_image' ? 'image' : 'video';
+                                const mediaConfig = findMediaConnection(settings, mediaType);
+                                const prompt = fallbackAction.data?.prompt || messageText;
+
+                                assistantMessage = {
+                                    id: crypto.randomUUID(),
+                                    role: 'assistant',
+                                    content: result.reply || `${mediaType === 'image' ? '이미지' : '영상'}를 생성했어요!`,
+                                    timestamp: new Date().toISOString(),
+                                    agentId: currentAgent.id,
+                                };
+
+                                if (mediaConfig) {
+                                    try {
+                                        if (mediaType === 'image') {
+                                            const imageUrl = mediaConfig.provider === 'xai'
+                                                ? await callXaiImageGeneration(mediaConfig.apiKey, prompt, mediaConfig.modelName, (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats }))
+                                                : await callGeminiImageGeneration(mediaConfig.apiKey, prompt, mediaConfig.modelName, (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats }));
+                                            assistantMessage.imageUrl = imageUrl;
+                                        } else {
+                                            const videoUrl = await callXaiVideoGeneration(mediaConfig.apiKey, prompt, mediaConfig.modelName, (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats }));
+                                            assistantMessage.videoUrl = videoUrl;
+                                        }
+                                        assistantMessage.content = result.reply || `${mediaType === 'image' ? '이미지' : '영상'}를 생성했어요!`;
+                                    } catch (err) {
+                                        assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `생성 실패: ${(err as Error).message}`;
+                                    }
                                 } else {
-                                    await executeAction(fallbackAction);
-                                    const response = getResponseForAction(fallbackAction, messageText);
+                                    assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `연결된 ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델이 없어 생성할 수 없어요.`;
+                                }
+                            } else if (index === 0) {
+                                if (!fallbackAction && result.action?.type === 'delete_event') {
                                     assistantMessage = {
                                         id: crypto.randomUUID(),
                                         role: 'assistant',
-                                        content: response.content,
+                                        content: '삭제할 일정을 찾지 못했어요. 일정 제목이나 날짜를 조금 더 구체적으로 말해 주세요.',
                                         timestamp: new Date().toISOString(),
                                         agentId: currentAgent.id,
-                                        action: { ...fallbackAction, executed: true },
-                                        quickReplies: response.quickReplies,
+                                        quickReplies: ['오늘 일정 보여줘', '내일 일정 보여줘'],
+                                    };
+                                } else if (fallbackAction) {
+                                    if (requiresConfirmation(fallbackAction)) {
+                                        setPendingAction(fallbackAction);
+                                        const prompt = buildConfirmationPrompt(fallbackAction);
+                                        assistantMessage = {
+                                            id: crypto.randomUUID(),
+                                            role: 'assistant',
+                                            content: prompt.content,
+                                            timestamp: new Date().toISOString(),
+                                            agentId: currentAgent.id,
+                                            action: fallbackAction,
+                                            quickReplies: prompt.quickReplies,
+                                        };
+                                    } else {
+                                        await executeAction(fallbackAction);
+                                        const response = getResponseForAction(fallbackAction, messageText);
+                                        assistantMessage = {
+                                            id: crypto.randomUUID(),
+                                            role: 'assistant',
+                                            content: response.content,
+                                            timestamp: new Date().toISOString(),
+                                            agentId: currentAgent.id,
+                                            action: { ...fallbackAction, executed: true },
+                                            quickReplies: response.quickReplies,
+                                        };
+                                    }
+                                } else {
+                                    assistantMessage = {
+                                        id: crypto.randomUUID(),
+                                        role: 'assistant',
+                                        content: result.reply || '도와드릴게요, 주인님.',
+                                        timestamp: new Date().toISOString(),
+                                        agentId: currentAgent.id,
                                     };
                                 }
                             } else {
                                 assistantMessage = {
                                     id: crypto.randomUUID(),
                                     role: 'assistant',
-                                    content: result.reply || '도와드릴게요, 주인님.',
+                                    content: result.reply || `${currentAgent.name}입니다. 이어서 도와드릴게요.`,
                                     timestamp: new Date().toISOString(),
                                     agentId: currentAgent.id,
                                 };
                             }
-                        } else {
-                            assistantMessage = {
-                                id: crypto.randomUUID(),
-                                role: 'assistant',
-                                content: result.reply || `${currentAgent.name}입니다. 이어서 도와드릴게요, 주인님.`,
-                                timestamp: new Date().toISOString(),
-                                agentId: currentAgent.id,
-                            };
                         }
 
                         const assistantMessageWithMeta = withConfigMeta(assistantMessage, agentConfig);
@@ -967,64 +1071,84 @@ const ChatView: React.FC<ChatViewProps> = ({
                         return;
                     }
 
-                    const result = await generateChatResponse(
-                        singleAgentConfig.apiKey,
-                        singleHistory,
-                        events,
-                        todos,
-                        entries,
-                        userName,
-                        singleAgentConfig.modelName,
-                        singleAgent,
-                        chatMode,
-                        singlePersonaMemory,
-                        singleAgentConfig.provider,
-                        []
-                    );
-
-                    const fallbackAction = mapGeminiActionToChatAction(result.action);
-                    if (!fallbackAction && result.action?.type === 'delete_event') {
-                        const assistantMessage: ChatMessage = {
-                            id: crypto.randomUUID(),
-                            role: 'assistant',
-                            content: '삭제할 일정을 찾지 못했어요. 일정 제목이나 날짜를 조금 더 구체적으로 말해 주세요.',
-                            timestamp: new Date().toISOString(),
-                            agentId: singleAgent?.id,
-                            quickReplies: ['오늘 일정 보여줘', '내일 일정 보여줘'],
-                        };
-                        setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                        setIsProcessing(false);
-                        return;
-                    }
-                    if (fallbackAction) {
-                        if (requiresConfirmation(fallbackAction)) {
-                            setPendingAction(fallbackAction);
-                            const prompt = buildConfirmationPrompt(fallbackAction);
+                    if (isImageGenerationModel(singleAgentConfig.modelName)) {
+                        try {
+                            const imageUrl = singleAgentConfig.provider === 'xai'
+                                ? await callXaiImageGeneration(
+                                    singleAgentConfig.apiKey,
+                                    messageText,
+                                    singleAgentConfig.modelName,
+                                    (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
+                                )
+                                : await callGeminiImageGeneration(
+                                    singleAgentConfig.apiKey,
+                                    messageText,
+                                    singleAgentConfig.modelName
+                                );
                             const assistantMessage: ChatMessage = {
                                 id: crypto.randomUUID(),
                                 role: 'assistant',
-                                content: prompt.content,
+                                content: '이미지를 생성했어요!',
+                                imageUrl,
                                 timestamp: new Date().toISOString(),
                                 agentId: singleAgent?.id,
-                                action: fallbackAction,
-                                quickReplies: prompt.quickReplies,
                             };
                             setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                        } else {
-                            await executeAction(fallbackAction);
-                            const response = getResponseForAction(fallbackAction, messageText);
+                        } catch (err) {
                             const assistantMessage: ChatMessage = {
                                 id: crypto.randomUUID(),
                                 role: 'assistant',
-                                content: response.content,
+                                content: `이미지 생성에 실패했어요: ${(err as Error).message}`,
                                 timestamp: new Date().toISOString(),
                                 agentId: singleAgent?.id,
-                                action: { ...fallbackAction, executed: true },
-                                quickReplies: response.quickReplies,
+                            };
+                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                        }
+                    } else if (isVideoGenerationModel(singleAgentConfig.modelName)) {
+                        try {
+                            const videoUrl = await callXaiVideoGeneration(
+                                singleAgentConfig.apiKey,
+                                messageText,
+                                singleAgentConfig.modelName,
+                                (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
+                            );
+                            const assistantMessage: ChatMessage = {
+                                id: crypto.randomUUID(),
+                                role: 'assistant',
+                                content: '영상을 생성했어요!',
+                                videoUrl,
+                                timestamp: new Date().toISOString(),
+                                agentId: singleAgent?.id,
+                            };
+                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                        } catch (err) {
+                            const assistantMessage: ChatMessage = {
+                                id: crypto.randomUUID(),
+                                role: 'assistant',
+                                content: `영상 생성에 실패했어요: ${(err as Error).message}`,
+                                timestamp: new Date().toISOString(),
+                                agentId: singleAgent?.id,
                             };
                             setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
                         }
                     } else {
+                        const result = await generateChatResponse(
+                            singleAgentConfig.apiKey,
+                            singleHistory,
+                            events,
+                            todos,
+                            entries,
+                            userName,
+                            singleAgentConfig.modelName,
+                            singleAgent,
+                            chatMode,
+                            singlePersonaMemory,
+                            singleAgentConfig.provider,
+                            []
+                        );
+
+                        const fallbackAction = mapGeminiActionToChatAction(result.action);
+
                         const assistantMessage: ChatMessage = {
                             id: crypto.randomUUID(),
                             role: 'assistant',
@@ -1032,7 +1156,76 @@ const ChatView: React.FC<ChatViewProps> = ({
                             timestamp: new Date().toISOString(),
                             agentId: singleAgent?.id,
                         };
-                        setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+
+                        // Dynamic Media Generation Check
+                        if (fallbackAction?.type === 'generate_image' || fallbackAction?.type === 'generate_video') {
+                            const mediaType = fallbackAction.type === 'generate_image' ? 'image' : 'video';
+                            const mediaConfig = findMediaConnection(settings, mediaType);
+                            const prompt = fallbackAction.data?.prompt || messageText;
+
+                            if (mediaConfig) {
+                                try {
+                                    if (mediaType === 'image') {
+                                        const imageUrl = mediaConfig.provider === 'xai'
+                                            ? await callXaiImageGeneration(
+                                                mediaConfig.apiKey,
+                                                prompt,
+                                                mediaConfig.modelName,
+                                                (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
+                                            )
+                                            : await callGeminiImageGeneration(
+                                                mediaConfig.apiKey,
+                                                prompt,
+                                                mediaConfig.modelName,
+                                                (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
+                                            );
+                                        assistantMessage.imageUrl = imageUrl;
+                                    } else {
+                                        const videoUrl = await callXaiVideoGeneration(
+                                            mediaConfig.apiKey,
+                                            prompt,
+                                            mediaConfig.modelName,
+                                            (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
+                                        );
+                                        assistantMessage.videoUrl = videoUrl;
+                                    }
+                                    assistantMessage.content = result.reply || `${mediaType === 'image' ? '이미지' : '영상'}를 생성했어요!`;
+                                } catch (err) {
+                                    assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `생성 실패: ${(err as Error).message}`;
+                                }
+                            } else {
+                                assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `연결된 ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델이 없어 생성할 수 없어요.`;
+                            }
+                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                        } else {
+                            if (!fallbackAction && result.action?.type === 'delete_event') {
+                                assistantMessage.content = '삭제할 일정을 찾지 못했어요. 일정 제목이나 날짜를 조금 더 구체적으로 말해 주세요.';
+                                assistantMessage.quickReplies = ['오늘 일정 보여줘', '내일 일정 보여줘'];
+                                setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                                setIsProcessing(false);
+                                return;
+                            }
+
+                            if (fallbackAction) {
+                                if (requiresConfirmation(fallbackAction)) {
+                                    setPendingAction(fallbackAction);
+                                    const prompt = buildConfirmationPrompt(fallbackAction);
+                                    assistantMessage.content = prompt.content;
+                                    assistantMessage.action = fallbackAction;
+                                    assistantMessage.quickReplies = prompt.quickReplies;
+                                    setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                                } else {
+                                    await executeAction(fallbackAction);
+                                    const response = getResponseForAction(fallbackAction, messageText);
+                                    assistantMessage.content = response.content;
+                                    assistantMessage.action = { ...fallbackAction, executed: true };
+                                    assistantMessage.quickReplies = response.quickReplies;
+                                    setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                                }
+                            } else {
+                                setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                            }
+                        }
                     }
                 }
             } catch (error) {
@@ -1082,40 +1275,66 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 </div>
                             )}
 
-                            <div className={`flex flex-col min-w-0 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                            <div className={`flex flex-col min-w-0 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'} gap-2`}>
                                 {msg.role === 'assistant' && (
-                                    <span className="text-xs text-[#9b9a97] mb-1.5 ml-1">
+                                    <span className="text-xs text-[#9b9a97] mb-0 ml-1">
                                         {messageAgent?.name || 'LifeSync AI'}
                                         {msg.provider && msg.modelName ? ` · ${msg.provider.toUpperCase()} · ${msg.modelName}` : ''}
                                     </span>
                                 )}
 
-                                <div
-                                    className={`
-                                    p-3.5 rounded-2xl leading-relaxed shadow-sm text-[14px] sm:text-[15px] break-words [overflow-wrap:anywhere]
-                                    ${msg.role === 'user'
-                                            ? 'bg-[#37352f] text-white rounded-br-sm'
-                                            : 'bg-white border border-[#e9e9e8] text-[#37352f] rounded-bl-sm'}
-                                `}
-                                >
-                                    {renderRichMessage(msg.content)}
-                                </div>
+                                {msg.content && (
+                                    <div
+                                        className={`
+                                            p-3.5 rounded-2xl leading-relaxed shadow-sm text-[14px] sm:text-[15px] break-words [overflow-wrap:anywhere]
+                                            ${msg.role === 'user'
+                                                ? 'bg-[#37352f] text-white rounded-br-sm'
+                                                : 'bg-white border border-[#e9e9e8] text-[#37352f] rounded-bl-sm'}
+                                        `}
+                                    >
+                                        {renderRichMessage(msg.content)}
+                                    </div>
+                                )}
 
-                                {/* Quick Replies - Only for the first message */}
-                                {msg.role === 'assistant' && index === 0 && msg.quickReplies && msg.quickReplies.length > 0 && (
-                                    <div className="flex flex-wrap gap-2 mt-3 ml-1 max-w-full">
-                                        {msg.quickReplies.map((reply, idx) => (
-                                            <button
-                                                key={idx}
-                                                onClick={() => handleQuickReply(reply)}
-                                                className="max-w-full px-3 py-1.5 text-xs font-medium bg-white border border-[#e9e9e8] text-[#787774] rounded-lg hover:bg-[#f7f7f5] hover:text-[#37352f] transition-all whitespace-normal break-words text-left"
-                                            >
-                                                {reply}
-                                            </button>
-                                        ))}
+                                {msg.imageUrl && (
+                                    <div className="w-full rounded-2xl overflow-hidden border border-[#e9e9e8] bg-white shadow-sm transition-transform active:scale-[0.99]">
+                                        <img
+                                            src={msg.imageUrl}
+                                            alt="Generated"
+                                            className="w-full h-auto block cursor-pointer hover:opacity-95 transition-opacity"
+                                            onClick={() => window.open(msg.imageUrl, '_blank')}
+                                        />
+                                    </div>
+                                )}
+
+                                {msg.videoUrl && (
+                                    <div className="w-full rounded-2xl overflow-hidden border border-[#e9e9e8] bg-white shadow-sm">
+                                        <video
+                                            src={msg.videoUrl}
+                                            controls
+                                            autoPlay
+                                            muted
+                                            loop
+                                            className="w-full h-auto block"
+                                        />
                                     </div>
                                 )}
                             </div>
+
+                            {/* Quick Replies - Only for the first message */}
+                            {msg.role === 'assistant' && index === 0 && msg.quickReplies && msg.quickReplies.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mt-3 ml-1 max-w-full">
+                                    {msg.quickReplies.map((reply, idx) => (
+                                        <button
+                                            key={idx}
+                                            onClick={() => handleQuickReply(reply)}
+                                            className="max-w-full px-3 py-1.5 text-xs font-medium bg-white border border-[#e9e9e8] text-[#787774] rounded-lg hover:bg-[#f7f7f5] hover:text-[#37352f] transition-all whitespace-normal break-words text-left"
+                                        >
+                                            {reply}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )
                 })}
@@ -1300,7 +1519,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                     </div>
                 </div>
             </div>
-        </div>
+        </div >
     );
 };
 

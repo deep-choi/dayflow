@@ -2,8 +2,9 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { AIAgent, AppSettings, ApiConnection, User } from '../types';
 import { Plus, Trash2, Save, RotateCcw, Download, Trash, Edit3, X, CheckCircle2, Circle, FlaskConical, Upload, Image as ImageIcon } from 'lucide-react';
 import { callGeminiAPI } from '../utils/gemini';
+import { callGeminiImageGeneration } from '../services/geminiService';
 import { testXaiConnection } from '../services/xaiService';
-import { DEFAULT_GEMINI_MODEL, DEFAULT_XAI_MODEL, GEMINI_MODEL_OPTIONS, XAI_MODEL_OPTIONS, normalizeGeminiModelName } from '../utils/aiConfig';
+import { DEFAULT_GEMINI_MODEL, DEFAULT_XAI_MODEL, GEMINI_MODEL_OPTIONS, XAI_MODEL_OPTIONS, normalizeGeminiModelName, isImageGenerationModel, isVideoGenerationModel } from '../utils/aiConfig';
 import PersonaSettingsView from './PersonaSettingsView';
 
 type SettingsTab = 'account' | 'api' | 'persona' | 'data';
@@ -131,7 +132,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             if (conn.provider === 'xai') {
                 await testXaiConnection(conn.apiKey, conn.modelName);
             } else {
-                await callGeminiAPI(conn.apiKey, '간단한 연결 테스트입니다. "연결 성공"이라고만 답해주세요.', undefined, conn.modelName);
+                if (isImageGenerationModel(conn.modelName)) {
+                    await callGeminiImageGeneration(conn.apiKey, 'A simple test image of a star.', conn.modelName);
+                } else {
+                    await callGeminiAPI(conn.apiKey, '간단한 연결 테스트입니다. "연결 성공"이라고만 답해주세요.', undefined, conn.modelName);
+                }
             }
             alert(`테스트 성공: ${conn.modelName}`);
         } catch (error: any) {

@@ -173,8 +173,10 @@ export interface ChatMessage {
   provider?: ApiConnection['provider'];
   modelName?: string;
   connectionId?: string;
+  imageUrl?: string;
+  videoUrl?: string;
   action?: {
-    type: 'add_event' | 'delete_event' | 'add_todo' | 'add_journal' | 'generate_insight' | 'onboarding';
+    type: 'add_event' | 'delete_event' | 'add_todo' | 'add_journal' | 'generate_insight' | 'generate_image' | 'generate_video' | 'onboarding';
     data?: any;
     executed?: boolean;
   };
