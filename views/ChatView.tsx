@@ -1319,22 +1319,21 @@ const ChatView: React.FC<ChatViewProps> = ({
                                         />
                                     </div>
                                 )}
+                                {/* Quick Replies - Only for the first message */}
+                                {msg.role === 'assistant' && index === 0 && msg.quickReplies && msg.quickReplies.length > 0 && (
+                                    <div className="flex flex-wrap gap-2 mt-1 max-w-full">
+                                        {msg.quickReplies.map((reply, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => handleQuickReply(reply)}
+                                                className="max-w-full px-3 py-1.5 text-xs font-medium bg-white border border-[#e9e9e8] text-[#787774] rounded-lg hover:bg-[#f7f7f5] hover:text-[#37352f] transition-all whitespace-normal break-words text-left"
+                                            >
+                                                {reply}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
-
-                            {/* Quick Replies - Only for the first message */}
-                            {msg.role === 'assistant' && index === 0 && msg.quickReplies && msg.quickReplies.length > 0 && (
-                                <div className="flex flex-wrap gap-2 mt-3 ml-1 max-w-full">
-                                    {msg.quickReplies.map((reply, idx) => (
-                                        <button
-                                            key={idx}
-                                            onClick={() => handleQuickReply(reply)}
-                                            className="max-w-full px-3 py-1.5 text-xs font-medium bg-white border border-[#e9e9e8] text-[#787774] rounded-lg hover:bg-[#f7f7f5] hover:text-[#37352f] transition-all whitespace-normal break-words text-left"
-                                        >
-                                            {reply}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
                         </div>
                     )
                 })}

@@ -492,7 +492,7 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
           xaiSystemInstruction + jsonSchemaInstruction,
           xaiMessages,
           modelName,
-          { temperature: 0.68, maxTokens: 520 }
+          { temperature: 0.68, maxTokens: 2048 }
         );
         const cleanedReply = stripCrossPersonaSpeech(
           sanitizeAssistantReply(parsed.reply || "", agentName),
@@ -516,7 +516,7 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
         systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
         responseMimeType: "application/json",
         temperature: 0.68,
-        maxOutputTokens: 1000,
+        maxOutputTokens: 2048,
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -604,8 +604,18 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
         action: sanitizeAction(parsed.action, latestUserText, nowForSanitize),
       };
     } catch {
+      let fallbackReply = text;
+      try {
+        const replyMatch = text.match(/"reply"\s*:\s*"([^]+?)(?:",\s*"action"|"\s*}$|"$|$)/);
+        if (replyMatch && replyMatch[1]) {
+          fallbackReply = replyMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+        }
+      } catch (e) {
+        // ignore extracting errors
+      }
+
       const cleanedText = stripCrossPersonaSpeech(
-        sanitizeAssistantReply(text, agentName),
+        sanitizeAssistantReply(fallbackReply, agentName),
         agentName,
         otherPersonaNames
       );
@@ -703,7 +713,7 @@ Output rules:
         systemInstruction: { parts: [{ text: systemInstruction }] },
         responseMimeType: "application/json",
         temperature: 0.55,
-        maxOutputTokens: 760,
+        maxOutputTokens: 3000,
         responseSchema: {
           type: Type.OBJECT,
           properties: {

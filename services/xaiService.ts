@@ -131,8 +131,17 @@ export const callXaiChatJSON = async (
     try {
         return JSON.parse(text);
     } catch {
-        // If JSON parsing fails, return as plain text in a wrapper
-        return { reply: text, action: { type: 'none' } };
+        // If JSON parsing fails, extract the reply string using regex
+        let fallbackReply = text;
+        try {
+            const replyMatch = text.match(/"reply"\s*:\s*"([^]+?)(?:",\s*"action"|"\s*}$|"$|$)/);
+            if (replyMatch && replyMatch[1]) {
+                fallbackReply = replyMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+            }
+        } catch (e) {
+            // parsing fallback failed, continue
+        }
+        return { reply: fallbackReply, action: { type: 'none' } };
     }
 };
 
