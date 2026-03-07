@@ -1,15 +1,121 @@
 import { supabase } from '../utils/supabase';
-import { CalendarEvent, Todo, TodoList, TodoTab, TodoStep, JournalEntry, JournalCategory, CommunityPost, AIAgent, AppSettings, ChatSession, ActivityItem, AiPost, CalendarTag } from '../types';
+import { CalendarEvent, Todo, TodoList, TodoTab, TodoStep, JournalEntry, JournalCategory, CommunityPost, AIAgent, AppSettings, ChatSession, ActivityItem, AiPost, CalendarTag, PersonaMemory } from '../types';
 
 // ─── Debounce helper ──────────────────────────────────────────────
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const scopedKey = (resource: string, userId: string) => `${resource}:${userId}`;
+const syncSnapshotKey = (resource: string, userId: string) => `${resource}:${userId}`;
+const syncSnapshots = new Map<string, Set<string>>();
 const pendingUserData = new Map<string, {
     settings?: AppSettings;
-    chatSessions?: ChatSession[];
     activityLog?: ActivityItem[];
     calendarTags?: CalendarTag[];
 }>();
+
+const getDeletedIds = (resource: string, userId: string, nextIds: string[]): string[] => {
+    const key = syncSnapshotKey(resource, userId);
+    const prev = syncSnapshots.get(key);
+    const next = new Set(nextIds);
+    syncSnapshots.set(key, next);
+    if (!prev) return [];
+    return [...prev].filter((id) => !next.has(id));
+};
+
+export const seedSyncSnapshot = (resource: string, userId: string, ids: string[]) => {
+    syncSnapshots.set(syncSnapshotKey(resource, userId), new Set(ids));
+};
+
+export const clearSyncSnapshots = (userId: string) => {
+    const suffix = `:${userId}`;
+    [...syncSnapshots.keys()].forEach((key) => {
+        if (key.endsWith(suffix)) syncSnapshots.delete(key);
+    });
+};
+
+const normalizeChatAction = (action: any) => {
+    if (!action || typeof action !== 'object') return undefined;
+    const normalized: any = {
+        type: action.type,
+        executed: Boolean(action.executed),
+    };
+
+    const data = action.data;
+    if (data && typeof data === 'object') {
+        // Keep payload small and stable for persistence.
+        if (typeof data.prompt === 'string') normalized.data = { prompt: data.prompt.slice(0, 1000) };
+        else if (typeof data.id === 'string') normalized.data = { id: data.id };
+        else if (typeof data.title === 'string') normalized.data = { title: data.title.slice(0, 240) };
+    }
+
+    return normalized;
+};
+
+const sanitizeStoredMediaUrl = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    // Data URIs easily exceed storage limits; store only fetchable URLs.
+    if (trimmed.startsWith('data:')) return null;
+    return trimmed;
+};
+
+const isMissingChatTableError = (error: any): boolean =>
+    error?.code === '42P01' || error?.code === '42703';
+
+const isMissingPersonaMemoryTableError = (error: any): boolean =>
+    error?.code === '42P01' || error?.code === '42703';
+
+const TODO_OPTIONAL_DB_COLUMNS = ['start_date', 'due_date', 'sub_tasks', 'step_id'] as const;
+type TodoOptionalDbColumn = (typeof TODO_OPTIONAL_DB_COLUMNS)[number];
+
+const getUnsupportedTodoColumns = (error: any): TodoOptionalDbColumn[] => {
+    const raw = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+    return TODO_OPTIONAL_DB_COLUMNS.filter((column) => raw.includes(column));
+};
+
+const stripTodoOptionalColumns = <T extends Record<string, any>>(value: T, columns: TodoOptionalDbColumn[]): T => {
+    if (!columns.length) return value;
+    const next = { ...value };
+    columns.forEach((column) => {
+        delete next[column];
+    });
+    return next;
+};
+
+const retryTodoUpsertWithFallback = async (
+    rows: Record<string, any>[],
+): Promise<{ error: any; rows: Record<string, any>[] }> => {
+    let payloadRows = rows.map((row) => ({ ...row }));
+    let attempt = 0;
+
+    while (attempt < TODO_OPTIONAL_DB_COLUMNS.length) {
+        const result = await supabase.from('todos').upsert(payloadRows, { onConflict: 'id' });
+        const unsupportedColumns = getUnsupportedTodoColumns(result.error);
+        if (!result.error || unsupportedColumns.length === 0) {
+            return { error: result.error, rows: payloadRows };
+        }
+        payloadRows = payloadRows.map((row) => stripTodoOptionalColumns(row, unsupportedColumns));
+        attempt += 1;
+    }
+
+    const finalResult = await supabase.from('todos').upsert(payloadRows, { onConflict: 'id' });
+    return { error: finalResult.error, rows: payloadRows };
+};
+
+const toPersistedChatSession = (session: ChatSession): ChatSession => ({
+    ...session,
+    title: (session.title || '새 대화').slice(0, 240),
+    messages: (Array.isArray(session.messages) ? session.messages : []).map((message) => ({
+        ...message,
+        content: (message.content || '').slice(0, 12000),
+        imageUrl: sanitizeStoredMediaUrl(message.imageUrl) || undefined,
+        videoUrl: sanitizeStoredMediaUrl(message.videoUrl) || undefined,
+        action: normalizeChatAction(message.action),
+        quickReplies: Array.isArray(message.quickReplies)
+            ? message.quickReplies.slice(0, 8).map((reply) => String(reply || '').slice(0, 160))
+            : undefined,
+    })),
+});
 
 let onSyncErrorCallback: (err: any) => void = () => { };
 export const setOnSyncError = (callback: (err: any) => void) => {
@@ -30,8 +136,6 @@ const debouncedSync = (key: string, fn: () => Promise<void>, delayMs = 350) => {
     }, delayMs));
 };
 
-const toInFilter = (ids: string[]) => `(${ids.map((id) => `"${id.replace(/"/g, '\\"')}"`).join(',')})`;
-
 // ─── Calendar Events ──────────────────────────────────────────────
 export const syncEvents = (userId: string, events: CalendarEvent[]) => {
     if (!userId) {
@@ -45,25 +149,27 @@ export const syncEvents = (userId: string, events: CalendarEvent[]) => {
             user_id: userId,
             title: e.title,
             start_time: e.date + (e.startTime ? `T${e.startTime}:00` : 'T00:00:00'),
-            end_time: e.date + (e.endTime ? `T${e.endTime}:00` : 'T23:59:59'),
+            end_time: (e.endDate || e.date) + (e.endTime ? `T${e.endTime}:00` : 'T23:59:59'),
             description: e.description || null,
             tags: e.type ? [e.type] : [],
         }));
-        if (rows.length === 0) {
-            console.warn(`[Sync] syncEvents: Blocked deletion of all events for user ${userId} (Potential race condition guard).`);
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('events', userId, rowIds);
+
+        if (rows.length > 0) {
+            console.log(`[Sync] Upserting ${rows.length} events for user ${userId}`);
+            const { error: upsertError } = await supabase.from('calendar_events').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        console.log(`[Sync] Upserting ${rows.length} events for user ${userId}`);
-        const { error: upsertError } = await supabase.from('calendar_events').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('calendar_events')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('calendar_events')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -86,21 +192,23 @@ export const syncTodos = (userId: string, todos: Todo[]) => {
             sub_tasks: t.subTasks || null,
             step_id: t.stepId || null,
         }));
-        if (rows.length === 0) {
-            console.warn(`[Sync] syncTodos: Blocked deletion of all todos for user ${userId} (Potential race condition guard).`);
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('todos', userId, rowIds);
+
+        if (rows.length > 0) {
+            console.log(`[Sync] Upserting ${rows.length} todos for user ${userId}`);
+            const { error: upsertError } = await retryTodoUpsertWithFallback(rows);
+            if (upsertError) throw upsertError;
         }
 
-        console.log(`[Sync] Upserting ${rows.length} todos for user ${userId}`);
-        const { error: upsertError } = await supabase.from('todos').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('todos')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('todos')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -119,21 +227,22 @@ export const syncTodoLists = (userId: string, lists: TodoList[]) => {
             due_date: l.dueDate || null,
             tab_id: l.tabId || null,
         }));
-        if (rows.length === 0) {
-            const { error } = await supabase.from('todo_lists').delete().eq('user_id', userId);
-            if (error) throw error;
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('todo_lists', userId, rowIds);
+
+        if (rows.length > 0) {
+            const { error: upsertError } = await supabase.from('todo_lists').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        const { error: upsertError } = await supabase.from('todo_lists').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('todo_lists')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('todo_lists')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -151,21 +260,22 @@ export const syncTodoTabs = (userId: string, tabs: TodoTab[]) => {
             color: t.color,
             order: t.order,
         }));
-        if (rows.length === 0) {
-            const { error } = await supabase.from('todo_tabs').delete().eq('user_id', userId);
-            if (error) throw error;
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('todo_tabs', userId, rowIds);
+
+        if (rows.length > 0) {
+            const { error: upsertError } = await supabase.from('todo_tabs').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        const { error: upsertError } = await supabase.from('todo_tabs').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('todo_tabs')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('todo_tabs')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -183,21 +293,22 @@ export const syncTodoSteps = (userId: string, steps: TodoStep[]) => {
             title: s.title,
             order: s.order,
         }));
-        if (rows.length === 0) {
-            const { error } = await supabase.from('todo_steps').delete().eq('user_id', userId);
-            if (error) throw error;
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('todo_steps', userId, rowIds);
+
+        if (rows.length > 0) {
+            const { error: upsertError } = await supabase.from('todo_steps').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        const { error: upsertError } = await supabase.from('todo_steps').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('todo_steps')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('todo_steps')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -217,21 +328,23 @@ export const syncEntries = (userId: string, entries: JournalEntry[]) => {
             mood: e.mood,
             order: e.order ?? 0,
         }));
-        if (rows.length === 0) {
-            console.warn(`[Sync] syncEntries: Blocked deletion of all journal entries for user ${userId} (Potential race condition guard).`);
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('journal_entries', userId, rowIds);
+
+        if (rows.length > 0) {
+            console.log(`[Sync] Upserting ${rows.length} journal entries for user ${userId}`);
+            const { error: upsertError } = await supabase.from('journal_entries').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        console.log(`[Sync] Upserting ${rows.length} journal entries for user ${userId}`);
-        const { error: upsertError } = await supabase.from('journal_entries').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('journal_entries')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('journal_entries')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -247,21 +360,22 @@ export const syncJournalCategories = (userId: string, categories: JournalCategor
             user_id: userId,
             name: c.name,
         }));
-        if (rows.length === 0) {
-            const { error } = await supabase.from('journal_categories').delete().eq('user_id', userId);
-            if (error) throw error;
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('journal_categories', userId, rowIds);
+
+        if (rows.length > 0) {
+            const { error: upsertError } = await supabase.from('journal_categories').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        const { error: upsertError } = await supabase.from('journal_categories').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('journal_categories')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('journal_categories')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -282,21 +396,22 @@ export const syncCommunityPosts = (userId: string, posts: CommunityPost[]) => {
             trigger: p.trigger || null,
             order: p.order ?? i,
         }));
-        if (rows.length === 0) {
-            const { error } = await supabase.from('community_posts').delete().eq('user_id', userId);
-            if (error) throw error;
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('community_posts', userId, rowIds);
+
+        if (rows.length > 0) {
+            const { error: upsertError } = await supabase.from('community_posts').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        const { error: upsertError } = await supabase.from('community_posts').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('community_posts')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('community_posts')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -312,22 +427,23 @@ export const syncAiPosts = (userId: string, posts: AiPost[]) => {
             trigger: '__ai_post__',
             order: i,
         }));
-        if (rows.length === 0) {
-            const { error } = await supabase.from('community_posts').delete().eq('user_id', userId).eq('trigger', '__ai_post__');
-            if (error) throw error;
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('ai_posts', userId, rowIds);
+
+        if (rows.length > 0) {
+            const { error: upsertError } = await supabase.from('community_posts').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        const { error: upsertError } = await supabase.from('community_posts').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('community_posts')
-            .delete()
-            .eq('user_id', userId)
-            .eq('trigger', '__ai_post__')
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('community_posts')
+                .delete()
+                .eq('user_id', userId)
+                .eq('trigger', '__ai_post__')
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
@@ -352,28 +468,175 @@ export const syncAgents = (userId: string, agents: AIAgent[]) => {
             connection_id: a.connectionId || null,
             order: i,
         }));
-        if (rows.length === 0) {
-            console.warn(`[Sync] syncAgents: Blocked deletion of all agents for user ${userId} (Potential race condition guard).`);
-            return;
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('ai_agents', userId, rowIds);
+
+        if (rows.length > 0) {
+            console.log(`[Sync] Upserting ${rows.length} agents for user ${userId}`);
+            const { error: upsertError } = await supabase.from('ai_agents').upsert(rows, { onConflict: 'id' });
+            if (upsertError) throw upsertError;
         }
 
-        console.log(`[Sync] Upserting ${rows.length} agents for user ${userId}`);
-        const { error: upsertError } = await supabase.from('ai_agents').upsert(rows, { onConflict: 'id' });
-        if (upsertError) throw upsertError;
-
-        const { error: deleteStaleError } = await supabase
-            .from('ai_agents')
-            .delete()
-            .eq('user_id', userId)
-            .not('id', 'in', toInFilter(rows.map((row) => row.id)));
-        if (deleteStaleError) throw deleteStaleError;
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('ai_agents')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) throw deleteError;
+        }
     });
 };
 
-// ─── User Data (JSONB blob: settings, chat sessions, activity) ───
+const pendingChatSessions = new Map<string, ChatSession[]>();
+
+const seedMessageSnapshot = (userId: string, sessionId: string, messageIds: string[]) => {
+    syncSnapshots.set(syncSnapshotKey(`chat_messages:${sessionId}`, userId), new Set(messageIds));
+};
+
+const clearMessageSnapshot = (userId: string, sessionId: string) => {
+    syncSnapshots.delete(syncSnapshotKey(`chat_messages:${sessionId}`, userId));
+};
+
+export const syncChatSessions = (userId: string, sessions: ChatSession[]) => {
+    if (!userId) {
+        console.error('[Sync] syncChatSessions aborted: No userId provided');
+        return;
+    }
+
+    const key = scopedKey('chat_sessions_sync', userId);
+    pendingChatSessions.set(key, sessions.map(toPersistedChatSession));
+
+    debouncedSync(key, async () => {
+        const pending = pendingChatSessions.get(key);
+        pendingChatSessions.delete(key);
+        if (!pending) return;
+
+        const sessionRows = pending.map((session) => ({
+            id: session.id,
+            user_id: userId,
+            title: session.title || '새 대화',
+            created_at: session.createdAt,
+            last_message_at: session.lastMessageAt,
+            agent_id: session.agentId || null,
+            agent_ids: Array.isArray(session.agentIds) ? session.agentIds : [],
+            updated_at: new Date().toISOString(),
+        }));
+
+        const sessionIds = sessionRows.map((row) => row.id);
+        const deletedSessionIds = getDeletedIds('chat_sessions', userId, sessionIds);
+
+        if (sessionRows.length > 0) {
+            const { error: upsertSessionError } = await supabase
+                .from('chat_sessions')
+                .upsert(sessionRows, { onConflict: 'id' });
+            if (upsertSessionError) {
+                if (isMissingChatTableError(upsertSessionError)) return;
+                throw upsertSessionError;
+            }
+        }
+
+        if (deletedSessionIds.length > 0) {
+            const { error: deleteSessionError } = await supabase
+                .from('chat_sessions')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedSessionIds);
+            if (deleteSessionError) {
+                if (isMissingChatTableError(deleteSessionError)) return;
+                throw deleteSessionError;
+            }
+            deletedSessionIds.forEach((sessionId) => clearMessageSnapshot(userId, sessionId));
+        }
+
+        for (const session of pending) {
+            const messageRows = session.messages.map((message, index) => ({
+                id: message.id,
+                session_id: session.id,
+                user_id: userId,
+                role: message.role,
+                content: message.content || '',
+                timestamp: message.timestamp,
+                agent_id: message.agentId || null,
+                provider: message.provider || null,
+                model_name: message.modelName || null,
+                connection_id: message.connectionId || null,
+                image_url: sanitizeStoredMediaUrl(message.imageUrl),
+                video_url: sanitizeStoredMediaUrl(message.videoUrl),
+                action: message.action || null,
+                quick_replies: Array.isArray(message.quickReplies) ? message.quickReplies : null,
+                order_index: index,
+                updated_at: new Date().toISOString(),
+            }));
+
+            const messageIds = messageRows.map((row) => row.id);
+            const deletedMessageIds = getDeletedIds(`chat_messages:${session.id}`, userId, messageIds);
+
+            if (messageRows.length > 0) {
+                const { error: upsertMessageError } = await supabase
+                    .from('chat_messages')
+                    .upsert(messageRows, { onConflict: 'id' });
+                if (upsertMessageError) {
+                    if (isMissingChatTableError(upsertMessageError)) return;
+                    throw upsertMessageError;
+                }
+            } else {
+                // Keep in-memory snapshot aligned for empty session message lists.
+                seedMessageSnapshot(userId, session.id, []);
+            }
+
+            if (deletedMessageIds.length > 0) {
+                const { error: deleteMessageError } = await supabase
+                    .from('chat_messages')
+                    .delete()
+                    .eq('user_id', userId)
+                    .eq('session_id', session.id)
+                    .in('id', deletedMessageIds);
+                if (deleteMessageError) {
+                    if (isMissingChatTableError(deleteMessageError)) return;
+                    throw deleteMessageError;
+                }
+            }
+        }
+    });
+};
+
+// ─── Persona Memories (per-agent long-term memory) ─────────────────
+export const syncPersonaMemories = (userId: string, memories: PersonaMemory[]) => {
+    if (!userId) {
+        console.error('[Sync] syncPersonaMemories aborted: No userId provided');
+        return;
+    }
+
+    const key = scopedKey('persona_memories', userId);
+    debouncedSync(key, async () => {
+        const rows = memories.map((memory) => ({
+            user_id: userId,
+            agent_id: memory.agentId,
+            memory_type: memory.type,
+            memory_key: memory.key,
+            content: memory.content,
+            confidence: memory.confidence,
+            observation_count: memory.observationCount,
+            first_observed_at: memory.firstObservedAt,
+            last_observed_at: memory.lastObservedAt,
+            updated_at: new Date().toISOString(),
+        }));
+
+        if (rows.length === 0) return;
+        const { error } = await supabase
+            .from('persona_memories')
+            .upsert(rows, { onConflict: 'user_id,agent_id,memory_key' });
+        if (error) {
+            if (isMissingPersonaMemoryTableError(error)) return;
+            throw error;
+        }
+    });
+};
+
+// ─── User Data (JSONB blob: settings, activity, calendar tags) ───
 export const syncUserData = (userId: string, data: {
     settings?: AppSettings;
-    chatSessions?: ChatSession[];
     activityLog?: ActivityItem[];
     calendarTags?: CalendarTag[];
 }) => {
@@ -392,7 +655,6 @@ export const syncUserData = (userId: string, data: {
 
         const payload: Record<string, any> = { user_id: userId, updated_at: new Date().toISOString() };
         if (pending.settings !== undefined) payload.settings = pending.settings;
-        if (pending.chatSessions !== undefined) payload.chat_sessions = pending.chatSessions;
         if (pending.activityLog !== undefined) payload.activity_log = pending.activityLog;
         if (pending.calendarTags !== undefined) payload.calendar_tags = pending.calendarTags;
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ApiUsageStats, TriggerContext, ChatSession, ChatMessage } from './types';
+import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType } from './types';
 import { Calendar as CalendarIcon, CheckSquare, BookOpen, MessageCircle, Sparkles, ChevronDown, Plus, Trash2, Settings2, Hash, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
@@ -7,16 +7,15 @@ import { supabase } from './utils/supabase';
 import CalendarView from './views/CalendarView';
 import TodoView from './views/TodoView';
 import JournalView from './views/JournalView';
-import CommunityBoardView from './views/CommunityBoardView';
 import { DEFAULT_AGENTS } from './data/defaultAgents';
 import SettingsView from './views/SettingsView';
 import ChatView from './views/ChatView';
 import AuthView from './views/AuthView';
-import { DEFAULT_GEMINI_MODEL, getActiveGeminiConfig, getActiveAIConfig } from './utils/aiConfig';
 import { normalizeKoreanText } from './utils/encodingFix';
-import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncUserData, setOnSyncError } from './services/syncService';
+import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncChatSessions, syncPersonaMemories, syncUserData, setOnSyncError, seedSyncSnapshot, clearSyncSnapshots } from './services/syncService';
 import { debugManualSync } from './utils/debugSync';
 import { useAuthSession } from './hooks/useAuthSession';
+import { clearChatSessionsCache, loadChatSessionsCache, saveChatSessionsCache } from './utils/chatSessionCache';
 
 type ChatObservation = {
   text: string;
@@ -27,6 +26,24 @@ const PERSONA_MEMORY_SESSION_LIMIT = 4;
 const PERSONA_MEMORY_LINE_LIMIT = 12;
 const PERSONA_MEMORY_ITEM_CHAR_LIMIT = 120;
 const PERSONA_MEMORY_TOTAL_CHAR_LIMIT = 1400;
+const PERSONA_MEMORY_FACT_LIMIT = 6;
+const PERSONA_MEMORY_PREFERENCE_LIMIT = 6;
+const PERSONA_MEMORY_GOAL_LIMIT = 6;
+const PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT = 3;
+const PERSONA_MEMORY_MAX_CONTENT_CHARS = 180;
+const PERSONA_MEMORY_DB_PER_AGENT_LIMIT = 24;
+
+type PersonaMemoryBuckets = {
+  facts: string[];
+  preferences: string[];
+  goals: string[];
+};
+
+const EMPTY_PERSONA_MEMORY_BUCKETS: PersonaMemoryBuckets = {
+  facts: [],
+  preferences: [],
+  goals: [],
+};
 
 const dedupeAgentIds = (ids: Array<string | undefined | null>): string[] =>
   Array.from(
@@ -141,10 +158,110 @@ const truncateMemoryText = (value: string, maxChars: number): string => {
   return `${text.slice(0, maxChars)}...`;
 };
 
+const memorySentenceCandidates = (text: string): string[] =>
+  (text || '')
+    .split(/[\n.!?]+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+
+const normalizeMemoryKey = (value: string): string =>
+  value.toLowerCase().replace(/\s+/g, '').replace(/[^\p{L}\p{N}]/gu, '');
+
+const collectMemorySignals = (text: string): {
+  facts: string[];
+  preferences: string[];
+  goals: string[];
+} => {
+  const facts: string[] = [];
+  const preferences: string[] = [];
+  const goals: string[] = [];
+  const sentences = memorySentenceCandidates(text);
+
+  for (const sentence of sentences) {
+    const compact = sentence.toLowerCase();
+    const normalizedSentence = truncateMemoryText(sentence, PERSONA_MEMORY_ITEM_CHAR_LIMIT);
+    if (!normalizedSentence) continue;
+
+    if (
+      /(나는|저는|전|내가|내\s|저의|직업|회사|가족|출근|퇴근|학교|거주|사는곳|사는 곳)/.test(compact)
+    ) {
+      facts.push(normalizedSentence);
+    }
+
+    if (
+      /(좋아|싫어|선호|취향|원해|원하지|불편|편해|부담|마음에)/.test(compact)
+    ) {
+      preferences.push(normalizedSentence);
+    }
+
+    if (
+      /(목표|계획|해야|해볼|해보려고|루틴|습관|줄이|늘리|이번주|이번 주|이번달|이번 달|오늘부터|내일까지|이번에는)/.test(compact)
+    ) {
+      goals.push(normalizedSentence);
+    }
+  }
+
+  return { facts, preferences, goals };
+};
+
+const dedupeMemoryItems = (items: string[], limit: number): string[] => {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const item of items) {
+    const key = normalizeMemoryKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+    if (output.length >= limit) break;
+  }
+  return output;
+};
+
+const memoryBucketKeyToType = (key: keyof PersonaMemoryBuckets): PersonaMemoryType => {
+  if (key === 'facts') return 'fact';
+  if (key === 'preferences') return 'preference';
+  return 'goal';
+};
+
+const memoryTypeToBucketKey = (type: PersonaMemoryType): keyof PersonaMemoryBuckets => {
+  if (type === 'fact') return 'facts';
+  if (type === 'preference') return 'preferences';
+  return 'goals';
+};
+
+const buildPersonaMemoryBuckets = (memories: PersonaMemory[]): Record<string, PersonaMemoryBuckets> => {
+  const output: Record<string, PersonaMemoryBuckets> = {};
+  if (!Array.isArray(memories) || memories.length === 0) return output;
+
+  const sorted = [...memories].sort((a, b) => {
+    const aTime = new Date(a.lastObservedAt || a.updatedAt || a.createdAt).getTime();
+    const bTime = new Date(b.lastObservedAt || b.updatedAt || b.createdAt).getTime();
+    return bTime - aTime;
+  });
+
+  for (const memory of sorted) {
+    if (!memory?.agentId || !memory?.content) continue;
+    if (!output[memory.agentId]) {
+      output[memory.agentId] = {
+        facts: [],
+        preferences: [],
+        goals: [],
+      };
+    }
+    const bucketKey = memoryTypeToBucketKey(memory.type);
+    const bucket = output[memory.agentId][bucketKey];
+    if (bucket.length >= PERSONA_MEMORY_DB_PER_AGENT_LIMIT) continue;
+    bucket.push(memory.content);
+  }
+
+  return output;
+};
+
 const buildPersonaMemoryContext = (
   sessions: ChatSession[],
   agentId: string,
-  activeSessionId: string | null
+  activeSessionId: string | null,
+  persistentMemory: PersonaMemoryBuckets = EMPTY_PERSONA_MEMORY_BUCKETS,
 ): string => {
   if (!agentId) return '';
 
@@ -164,25 +281,63 @@ const buildPersonaMemoryContext = (
       const bTs = new Date(b.lastMessageAt || b.createdAt).getTime();
       return bTs - aTs;
     })
-    .slice(0, PERSONA_MEMORY_SESSION_LIMIT);
+    .slice(0, Math.max(PERSONA_MEMORY_SESSION_LIMIT, 8));
 
-  if (related.length === 0) return '';
+  const factsRaw: string[] = [...(persistentMemory.facts || [])];
+  const preferencesRaw: string[] = [...(persistentMemory.preferences || [])];
+  const goalsRaw: string[] = [...(persistentMemory.goals || [])];
+  const recentLines: string[] = [];
 
-  const lines: string[] = [];
   for (const session of related) {
-    const recentMessages = session.messages.slice(-8);
+    const recentMessages = session.messages.slice(-10);
     for (const msg of recentMessages) {
       const role = msg.role === 'user' ? 'User' : 'Assistant';
       const content = truncateMemoryText(msg.content || '', PERSONA_MEMORY_ITEM_CHAR_LIMIT);
       if (!content) continue;
-      lines.push(`[${truncateMemoryText(session.title || 'Chat', 24)}] ${role}: ${content}`);
-      if (lines.length >= PERSONA_MEMORY_LINE_LIMIT) break;
+
+      if (msg.role === 'user') {
+        const signals = collectMemorySignals(content);
+        factsRaw.push(...signals.facts);
+        preferencesRaw.push(...signals.preferences);
+        goalsRaw.push(...signals.goals);
+      }
+
+      if (recentLines.length < PERSONA_MEMORY_LINE_LIMIT) {
+        recentLines.push(`[${truncateMemoryText(session.title || 'Chat', 24)}] ${role}: ${content}`);
+      }
     }
-    if (lines.length >= PERSONA_MEMORY_LINE_LIMIT) break;
   }
 
-  if (lines.length === 0) return '';
-  return truncateMemoryText(lines.join('\n'), PERSONA_MEMORY_TOTAL_CHAR_LIMIT);
+  const facts = dedupeMemoryItems(factsRaw, PERSONA_MEMORY_FACT_LIMIT);
+  const preferences = dedupeMemoryItems(preferencesRaw, PERSONA_MEMORY_PREFERENCE_LIMIT);
+  const goals = dedupeMemoryItems(goalsRaw, PERSONA_MEMORY_GOAL_LIMIT);
+
+  if (facts.length === 0 && preferences.length === 0 && goals.length === 0 && recentLines.length === 0) return '';
+
+  const blocks: string[] = [];
+  if (facts.length > 0) {
+    blocks.push(
+      '[Long-term Memory: Facts]',
+      ...facts.map((item, index) => `${index + 1}. ${item}`),
+    );
+  }
+  if (preferences.length > 0) {
+    blocks.push(
+      '[Long-term Memory: Preferences]',
+      ...preferences.map((item, index) => `${index + 1}. ${item}`),
+    );
+  }
+  if (goals.length > 0) {
+    blocks.push(
+      '[Long-term Memory: Ongoing Goals]',
+      ...goals.map((item, index) => `${index + 1}. ${item}`),
+    );
+  }
+  if (recentLines.length > 0) {
+    blocks.push('[Recent Cross-Session Context]', ...recentLines);
+  }
+
+  return truncateMemoryText(blocks.join('\n'), PERSONA_MEMORY_TOTAL_CHAR_LIMIT);
 };
 
 const normalizeCommunityPost = (post: any): CommunityPost => ({
@@ -219,18 +374,333 @@ const DEFAULT_TODO_TABS: TodoTab[] = [
   { id: 'tab_project', name: '프로젝트', color: '#9c27b0', order: 1 },
 ];
 
+const DEFAULT_TODO_LIST_ID = '00000000-0000-4000-8000-000000000001';
+const LEGACY_DEFAULT_TODO_LIST_IDS = new Set(['default', 'routine']);
+
+const normalizeTodoListId = (value?: string | null): string | undefined => {
+  if (!value) return undefined;
+  return LEGACY_DEFAULT_TODO_LIST_IDS.has(value) ? DEFAULT_TODO_LIST_ID : value;
+};
+
+const normalizeTodoLists = (lists: TodoList[]): TodoList[] => {
+  const normalized = (Array.isArray(lists) ? lists : []).map((list) => ({
+    ...list,
+    id: normalizeTodoListId(list.id) || DEFAULT_TODO_LIST_ID,
+  }));
+
+  const deduped = new Map<string, TodoList>();
+  normalized.forEach((list) => {
+    if (!deduped.has(list.id)) deduped.set(list.id, list);
+  });
+  return [...deduped.values()];
+};
+
+const TODO_OPTIONAL_DB_COLUMNS = ['start_date', 'due_date', 'sub_tasks', 'step_id'] as const;
+type TodoOptionalDbColumn = (typeof TODO_OPTIONAL_DB_COLUMNS)[number];
+
+const getUnsupportedTodoColumns = (error: any): TodoOptionalDbColumn[] => {
+  const raw = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+  return TODO_OPTIONAL_DB_COLUMNS.filter((column) => raw.includes(column));
+};
+
+const stripTodoOptionalColumns = <T extends Record<string, any>>(value: T, columns: TodoOptionalDbColumn[]): T => {
+  if (!columns.length) return value;
+  const next = { ...value };
+  columns.forEach((column) => {
+    delete next[column];
+  });
+  return next;
+};
+
+const retryTodoInsertWithFallback = async (
+  row: Record<string, any>,
+): Promise<{ error: any; payload: Record<string, any> }> => {
+  let payload = { ...row };
+  let attempt = 0;
+
+  while (attempt < TODO_OPTIONAL_DB_COLUMNS.length) {
+    const result = await supabase.from('todos').insert([payload]);
+    const unsupportedColumns = getUnsupportedTodoColumns(result.error);
+    if (!result.error || unsupportedColumns.length === 0) {
+      return { error: result.error, payload };
+    }
+    payload = stripTodoOptionalColumns(payload, unsupportedColumns);
+    attempt += 1;
+  }
+
+  const finalResult = await supabase.from('todos').insert([payload]);
+  return { error: finalResult.error, payload };
+};
+
+const retryTodoUpdateWithFallback = async (
+  id: string,
+  updates: Record<string, any>,
+): Promise<{ error: any; payload: Record<string, any> }> => {
+  let payload = { ...updates };
+  let attempt = 0;
+
+  while (attempt < TODO_OPTIONAL_DB_COLUMNS.length) {
+    const result = await supabase.from('todos').update(payload).eq('id', id);
+    const unsupportedColumns = getUnsupportedTodoColumns(result.error);
+    if (!result.error || unsupportedColumns.length === 0) {
+      return { error: result.error, payload };
+    }
+    payload = stripTodoOptionalColumns(payload, unsupportedColumns);
+    if (Object.keys(payload).length === 0) {
+      return { error: null, payload };
+    }
+    attempt += 1;
+  }
+
+  const finalResult = await supabase.from('todos').update(payload).eq('id', id);
+  return { error: finalResult.error, payload };
+};
+
 const DEFAULT_TODO_LISTS: TodoList[] = [
-  { id: 'default', title: '해야 할 일', order: 1, tabId: 'tab_todo' },
+  { id: DEFAULT_TODO_LIST_ID, title: '해야 할 일', order: 1, tabId: 'tab_todo' },
 ];
 
-const VALID_VIEWS: ViewState[] = ['dashboard', 'calendar', 'todo', 'journal', 'board', 'chat', 'settings', 'api-settings', 'personas'];
+const DEFAULT_SETTINGS: AppSettings = {
+  autoAiReactions: false,
+  chatActionConfirm: true,
+  apiConnections: [],
+  activeConnectionId: undefined,
+};
+
+const CACHE_PREFIX = 'lifesync_cache';
+const CACHE_VERSION = 'v2';
+const CACHE_KEYS = [
+  'events',
+  'todoLists',
+  'todoTabs',
+  'todos',
+  'todoSteps',
+  'entries',
+  'posts',
+  'communityPosts',
+  'aiAgents',
+  'chatSessions',
+  'personaMemories',
+  'activityLog',
+  'settings',
+  'calendarTags',
+  'journalCategories',
+] as const;
+type CacheKey = (typeof CACHE_KEYS)[number];
+
+const toScopedCacheKey = (userId: string, key: CacheKey): string =>
+  `${CACHE_PREFIX}_${CACHE_VERSION}_${userId}_${key}`;
+
+const CHAT_CACHE_MAX_SESSIONS = 12;
+const CHAT_CACHE_MIN_SESSIONS = 1;
+const CHAT_CACHE_MAX_MESSAGES_PER_SESSION = 40;
+const CHAT_CACHE_MIN_MESSAGES_PER_SESSION = 4;
+const CHAT_CACHE_MAX_MESSAGE_CHARS = 1400;
+const CHAT_CACHE_MAX_TOTAL_BYTES = 900_000;
+const CHAT_CACHE_MAX_QUICK_REPLIES = 6;
+const CHAT_CACHE_MAX_QUICK_REPLY_CHARS = 120;
+
+const NON_ESSENTIAL_CACHE_KEYS: CacheKey[] = [
+  'activityLog',
+  'communityPosts',
+  'posts',
+];
+
+const isQuotaExceededError = (error: unknown): boolean => {
+  if (!(error instanceof DOMException)) return false;
+  return (
+    error.name === 'QuotaExceededError' ||
+    error.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    error.code === 22 ||
+    error.code === 1014
+  );
+};
+
+const estimateByteSize = (value: string): number => {
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(value).length;
+  }
+  return value.length * 2;
+};
+
+const truncateText = (value: string, maxChars: number): string =>
+  value.length > maxChars ? value.slice(0, maxChars) : value;
+
+const compactChatSessionsForCache = (
+  sessions: ChatSession[],
+  maxSessions: number,
+  maxMessagesPerSession: number,
+): ChatSession[] => {
+  if (!Array.isArray(sessions) || sessions.length === 0) return [];
+
+  return [...sessions]
+    .sort((left, right) => {
+      const leftTime = new Date(left.lastMessageAt || left.createdAt).getTime();
+      const rightTime = new Date(right.lastMessageAt || right.createdAt).getTime();
+      return rightTime - leftTime;
+    })
+    .slice(0, maxSessions)
+    .map((session) => {
+      const compactMessages = (Array.isArray(session.messages) ? session.messages : [])
+        .slice(-maxMessagesPerSession)
+        .map((message) => ({
+          ...message,
+          content: truncateText(message.content || '', CHAT_CACHE_MAX_MESSAGE_CHARS),
+          quickReplies: Array.isArray(message.quickReplies)
+            ? message.quickReplies
+              .slice(0, CHAT_CACHE_MAX_QUICK_REPLIES)
+              .map((reply) => truncateText(reply || '', CHAT_CACHE_MAX_QUICK_REPLY_CHARS))
+            : undefined,
+          action: message.action
+            ? {
+              ...message.action,
+              // Runtime action payloads can be very large and are not required for cache hydration.
+              data: undefined,
+            }
+            : undefined,
+        }));
+
+      return {
+        ...session,
+        title: truncateText(session.title || '새 채팅', 200),
+        messages: compactMessages,
+      };
+    });
+};
+
+const serializeCacheValue = <T,>(key: CacheKey, value: T): string => {
+  if (key === 'settings') {
+    const settingsValue = (value as unknown as AppSettings) || DEFAULT_SETTINGS;
+    const redactedSettings: AppSettings = {
+      ...settingsValue,
+      geminiApiKey: '',
+      apiConnections: Array.isArray(settingsValue.apiConnections)
+        ? settingsValue.apiConnections.map((connection) => ({ ...connection, apiKey: '' }))
+        : [],
+    };
+    return JSON.stringify(redactedSettings);
+  }
+
+  if (key !== 'chatSessions') {
+    return JSON.stringify(value);
+  }
+
+  const sessions = Array.isArray(value) ? (value as unknown as ChatSession[]) : [];
+  let maxSessions = CHAT_CACHE_MAX_SESSIONS;
+  let maxMessagesPerSession = CHAT_CACHE_MAX_MESSAGES_PER_SESSION;
+  let compacted = compactChatSessionsForCache(sessions, maxSessions, maxMessagesPerSession);
+  let serialized = JSON.stringify(compacted);
+
+  while (
+    estimateByteSize(serialized) > CHAT_CACHE_MAX_TOTAL_BYTES &&
+    (maxMessagesPerSession > CHAT_CACHE_MIN_MESSAGES_PER_SESSION || maxSessions > CHAT_CACHE_MIN_SESSIONS)
+  ) {
+    if (maxMessagesPerSession > CHAT_CACHE_MIN_MESSAGES_PER_SESSION) {
+      maxMessagesPerSession = Math.max(
+        CHAT_CACHE_MIN_MESSAGES_PER_SESSION,
+        Math.floor(maxMessagesPerSession / 2),
+      );
+    } else {
+      maxSessions = Math.max(CHAT_CACHE_MIN_SESSIONS, maxSessions - 1);
+    }
+
+    compacted = compactChatSessionsForCache(sessions, maxSessions, maxMessagesPerSession);
+    serialized = JSON.stringify(compacted);
+  }
+
+  return serialized;
+};
+
+const recoverFromStorageQuota = (userId: string, key: CacheKey): void => {
+  // Also clean legacy unscoped cache key variants that older builds used.
+  try {
+    localStorage.removeItem(`${CACHE_PREFIX}_${key}`);
+  } catch {
+    // Ignore storage failures during quota recovery.
+  }
+
+  const evictionOrder: CacheKey[] = key === 'chatSessions'
+    ? [...NON_ESSENTIAL_CACHE_KEYS, 'entries', 'events']
+    : NON_ESSENTIAL_CACHE_KEYS;
+
+  evictionOrder.forEach((targetKey) => {
+    try {
+      localStorage.removeItem(toScopedCacheKey(userId, targetKey));
+    } catch {
+      // Ignore storage failures during quota recovery.
+    }
+  });
+};
+
+const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat', 'settings'];
+
+const normalizeView = (rawView: string | null): ViewState => {
+  if (!rawView) return 'chat';
+
+  // Backward-compat aliases from older URLs.
+  const aliased =
+    rawView === 'dashboard' || rawView === 'board' ? 'chat'
+      : rawView === 'api-settings' || rawView === 'personas' ? 'settings'
+        : rawView;
+
+  return VALID_VIEWS.includes(aliased as ViewState) ? (aliased as ViewState) : 'chat';
+};
 
 const resolveViewFromUrl = (): ViewState => {
   if (typeof window === 'undefined') return 'chat';
   const params = new URLSearchParams(window.location.search);
-  const view = params.get('view');
-  return view && VALID_VIEWS.includes(view as ViewState) ? (view as ViewState) : 'chat';
+  return normalizeView(params.get('view'));
 };
+
+type ViewErrorBoundaryProps = {
+  view: ViewState;
+  onRecover: () => void;
+  children: React.ReactNode;
+};
+
+type ViewErrorBoundaryState = {
+  hasError: boolean;
+};
+
+class ViewErrorBoundary extends React.Component<ViewErrorBoundaryProps, ViewErrorBoundaryState> {
+  state: ViewErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): ViewErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, info: React.ErrorInfo) {
+    console.error('[ViewErrorBoundary] view render failed:', this.props.view, error, info.componentStack);
+  }
+
+  componentDidUpdate(prevProps: ViewErrorBoundaryProps) {
+    if (prevProps.view !== this.props.view && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (!this.state.hasError) {
+      return this.props.children;
+    }
+
+    return (
+      <div className="h-full bg-white flex items-center justify-center p-6">
+        <div className="max-w-md text-center space-y-3">
+          <h2 className="text-lg font-semibold text-[#37352f]">화면을 불러오는 중 오류가 발생했습니다.</h2>
+          <p className="text-sm text-[#787774]">다른 섹션으로 이동하거나 채팅 화면으로 복구해 주세요.</p>
+          <button
+            type="button"
+            onClick={this.props.onRecover}
+            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#37352f] text-white text-sm font-medium hover:bg-black transition-colors"
+          >
+            채팅 화면으로 이동
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
 
 // Settings icon component
 const SettingsIcon = ({ size = 18 }: { size?: number }) => (
@@ -242,51 +712,58 @@ const SettingsIcon = ({ size = 18 }: { size?: number }) => (
 const App: React.FC = () => {
   const bootId = useRef(Math.random().toString(36).slice(2, 6)).current;
   const skipSyncRef = useRef(true); // v2.5: Block sync hooks until specifically enabled
-  const [isDataLoaded, setIsDataLoaded] = useState(true); // v2.6: Start as true to show cache immediately
+  const isFetchingRef = useRef(false);
+  const hasSuccessfulServerHydrationRef = useRef(false);
+  const fetchRetryTimerRef = useRef<number | null>(null);
+  const latestSessionUserIdRef = useRef<string | null>(null);
+  const fetchingUserIdRef = useRef<string | null>(null);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error'>('idle');
   const [currentView, setCurrentView] = useState<ViewState>(() => resolveViewFromUrl());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     console.log(`[App] v2.5 booting id=${bootId}...`);
+    // Remove legacy unscoped cache keys to prevent cross-account data bleed.
+    CACHE_KEYS.forEach((key) => {
+      try {
+        localStorage.removeItem(`${CACHE_PREFIX}_${key}`);
+      } catch {
+        // Ignore storage failures.
+      }
+    });
   }, []);
 
-  // v2.5: Initialize from LocalStorage for instant refresh UX
-  // Using <T,> syntax to avoid JSX ambiguity in .tsx files
-  const getInitialState = <T,>(key: string, fallback: T): T => {
-    try {
-      const saved = localStorage.getItem(`lifesync_cache_${key}`);
-      return saved ? JSON.parse(saved) : fallback;
-    } catch { return fallback; }
-  };
+  useEffect(() => () => {
+    if (fetchRetryTimerRef.current) {
+      window.clearTimeout(fetchRetryTimerRef.current);
+      fetchRetryTimerRef.current = null;
+    }
+  }, []);
 
   // App Data State
-  const [events, setEvents] = useState<CalendarEvent[]>(() => getInitialState('events', []));
-  const [todoLists, setTodoLists] = useState<TodoList[]>(() => getInitialState('todoLists', DEFAULT_TODO_LISTS));
-  const [todoTabs, setTodoTabs] = useState<TodoTab[]>(() => getInitialState('todoTabs', DEFAULT_TODO_TABS));
-  const [todos, setTodos] = useState<Todo[]>(() => getInitialState('todos', []));
-  const [todoSteps, setTodoSteps] = useState<TodoStep[]>(() => getInitialState('todoSteps', []));
-  const [entries, setEntries] = useState<JournalEntry[]>(() => getInitialState('entries', []));
-  const [posts, setPosts] = useState<AiPost[]>(() => getInitialState('posts', []));
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [todoLists, setTodoLists] = useState<TodoList[]>(DEFAULT_TODO_LISTS);
+  const [todoTabs, setTodoTabs] = useState<TodoTab[]>(DEFAULT_TODO_TABS);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [todoSteps, setTodoSteps] = useState<TodoStep[]>([]);
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [posts, setPosts] = useState<AiPost[]>([]);
 
   // Community Board State
-  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>(() => getInitialState('communityPosts', []));
-  const [aiAgents, setAiAgents] = useState<AIAgent[]>(() => getInitialState('aiAgents', []));
+  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([]);
+  const [aiAgents, setAiAgents] = useState<AIAgent[]>(DEFAULT_AGENTS);
 
   // Activity Log & Settings
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => getInitialState('chatSessions', []));
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [personaMemories, setPersonaMemories] = useState<PersonaMemory[]>([]);
   const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
   const [activeChatAgentIds, setActiveChatAgentIds] = useState<string[]>([]);
-  const [activityLog, setActivityLog] = useState<ActivityItem[]>(() => getInitialState('activityLog', []));
-  const [settings, setSettings] = useState<AppSettings>(() => getInitialState('settings', {
-    autoAiReactions: false,
-    chatActionConfirm: true,
-    apiConnections: [],
-    activeConnectionId: undefined
-  }));
+  const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
+  const [settings, setSettings] = useState<AppSettings>(() => ({ ...DEFAULT_SETTINGS }));
 
-  const [calendarTags, setCalendarTags] = useState<CalendarTag[]>(() => getInitialState('calendarTags', []));
-  const [journalCategories, setJournalCategories] = useState<JournalCategory[]>(() => getInitialState('journalCategories', []));
+  const [calendarTags, setCalendarTags] = useState<CalendarTag[]>(DEFAULT_TAGS);
+  const [journalCategories, setJournalCategories] = useState<JournalCategory[]>([]);
 
   const [selectedJournalId, setSelectedJournalId] = useState<string | null>(null);
   const [selectedJournalCategory, setSelectedJournalCategory] = useState<string>('메모장');
@@ -305,18 +782,13 @@ const App: React.FC = () => {
   const [editingAiAgentId, setEditingAiAgentId] = useState<string | null>(null);
   const [editingAiAgentName, setEditingAiAgentName] = useState('');
   const [activeAiAgentMenu, setActiveAiAgentMenu] = useState<string | null>(null);
-  const activeGeminiConfig = getActiveGeminiConfig(settings);
-  const activeAIConfig = getActiveAIConfig(settings);
   const primaryActiveChatAgentId = activeChatAgentIds[0] || aiAgents[0]?.id || 'ARIA';
 
 
   // Undo Toast
   const undoRef = useRef<null | (() => void)>(null);
   const [undoToast, setUndoToast] = useState<{ id: string; label: string } | null>(null);
-  const scheduledPostKeyRef = useRef<string | null>(null);
   const recentChatObservationsRef = useRef<ChatObservation[]>([]);
-  const pendingJournalAiCommentIdsRef = useRef<Set<string>>(new Set());
-  const lastSyncedProfileAIFingerprintRef = useRef<string | null>(null);
 
   const appendChatObservation = (text: string) => {
     const trimmed = text.trim();
@@ -325,6 +797,210 @@ const App: React.FC = () => {
       ...recentChatObservationsRef.current,
       { text: trimmed.slice(0, 280), timestamp: new Date().toISOString() }
     ].slice(-30);
+  };
+
+  useEffect(() => {
+    if (!settings.autoAiReactions) return;
+    setSettings(prev => (prev.autoAiReactions ? { ...prev, autoAiReactions: false } : prev));
+  }, [settings.autoAiReactions]);
+
+  const capturePersonaMemoriesFromUserMessage = (text: string, targetAgentIds: string[]) => {
+    if (!currentUser?.id) return;
+    const trimmedText = text.trim();
+    if (!trimmedText) return;
+
+    const availableAgentIdSet = new Set(aiAgents.map((agent) => agent.id));
+    const scopedAgentIds = dedupeAgentIds(targetAgentIds).filter((agentId) => availableAgentIdSet.has(agentId));
+    if (scopedAgentIds.length === 0) return;
+
+    const signals = collectMemorySignals(trimmedText);
+    const bucketCandidates: PersonaMemoryBuckets = {
+      facts: dedupeMemoryItems(signals.facts, PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT),
+      preferences: dedupeMemoryItems(signals.preferences, PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT),
+      goals: dedupeMemoryItems(signals.goals, PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT),
+    };
+    const hasAnySignal = bucketCandidates.facts.length > 0
+      || bucketCandidates.preferences.length > 0
+      || bucketCandidates.goals.length > 0;
+    if (!hasAnySignal) return;
+
+    const nowIso = new Date().toISOString();
+    setPersonaMemories((prev) => {
+      const next = [...prev];
+      const indexByCompoundKey = new Map<string, number>();
+      next.forEach((memory, idx) => {
+        indexByCompoundKey.set(`${memory.userId}:${memory.agentId}:${memory.key}`, idx);
+      });
+
+      const bucketEntries = Object.entries(bucketCandidates) as Array<[keyof PersonaMemoryBuckets, string[]]>;
+      for (const agentId of scopedAgentIds) {
+        for (const [bucketKey, items] of bucketEntries) {
+          const memoryType = memoryBucketKeyToType(bucketKey);
+          for (const sentence of items) {
+            const normalizedContent = truncateMemoryText(sentence, PERSONA_MEMORY_MAX_CONTENT_CHARS);
+            const normalizedKey = normalizeMemoryKey(normalizedContent);
+            if (!normalizedContent || !normalizedKey) continue;
+            const persistedKey = `${memoryType}:${normalizedKey}`;
+            const compoundKey = `${currentUser.id}:${agentId}:${persistedKey}`;
+            const existingIndex = indexByCompoundKey.get(compoundKey);
+
+            if (typeof existingIndex === 'number') {
+              const existing = next[existingIndex];
+              next[existingIndex] = {
+                ...existing,
+                content: normalizedContent,
+                confidence: Math.min(0.98, Math.max(existing.confidence, 0.55) + 0.03),
+                observationCount: (existing.observationCount || 0) + 1,
+                lastObservedAt: nowIso,
+                updatedAt: nowIso,
+              };
+              continue;
+            }
+
+            const created: PersonaMemory = {
+              id: crypto.randomUUID(),
+              userId: currentUser.id,
+              agentId,
+              type: memoryType,
+              key: persistedKey,
+              content: normalizedContent,
+              confidence: 0.55,
+              observationCount: 1,
+              firstObservedAt: nowIso,
+              lastObservedAt: nowIso,
+              createdAt: nowIso,
+              updatedAt: nowIso,
+            };
+            indexByCompoundKey.set(compoundKey, next.length);
+            next.push(created);
+          }
+        }
+      }
+
+      const sorted = next.sort((a, b) => {
+        const aTime = new Date(a.lastObservedAt || a.updatedAt || a.createdAt).getTime();
+        const bTime = new Date(b.lastObservedAt || b.updatedAt || b.createdAt).getTime();
+        return bTime - aTime;
+      });
+
+      // Keep bounded memory footprint per user while preserving most recent signals.
+      return sorted.slice(0, 800);
+    });
+  };
+
+  const readCacheState = <T,>(userId: string, key: CacheKey, fallback: T): T => {
+    try {
+      const scoped = localStorage.getItem(toScopedCacheKey(userId, key));
+      if (scoped) return JSON.parse(scoped) as T;
+      return fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const writeCacheState = <T,>(userId: string, key: CacheKey, value: T): void => {
+    const scopedKey = toScopedCacheKey(userId, key);
+    const serializedValue = serializeCacheValue(key, value);
+
+    try {
+      localStorage.setItem(scopedKey, serializedValue);
+      return;
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        return;
+      }
+    }
+
+    // If storage is full, evict less-critical cache slices and retry once.
+    recoverFromStorageQuota(userId, key);
+    try {
+      localStorage.setItem(scopedKey, serializedValue);
+    } catch {
+      // Ignore final quota failure.
+    }
+  };
+
+  const clearUserScopedCache = (userId: string): void => {
+    CACHE_KEYS.forEach((key) => {
+      try {
+        localStorage.removeItem(toScopedCacheKey(userId, key));
+      } catch {
+        // Ignore storage failures.
+      }
+    });
+  };
+
+  const resetAppDataState = () => {
+    setEvents([]);
+    setTodoTabs(DEFAULT_TODO_TABS);
+    setTodoLists(DEFAULT_TODO_LISTS);
+    setTodoSteps([]);
+    setTodos([]);
+    setEntries([]);
+    setPosts([]);
+    setCommunityPosts([]);
+    setAiAgents(DEFAULT_AGENTS);
+    setChatSessions([]);
+    setPersonaMemories([]);
+    setActiveChatSessionId(null);
+    setActiveChatAgentIds([]);
+    setActivityLog([]);
+    setSettings({ ...DEFAULT_SETTINGS });
+    setCalendarTags(DEFAULT_TAGS);
+    setJournalCategories([]);
+    setSelectedJournalId(null);
+    setSelectedJournalCategory('메모장');
+    setSelectedAiPostId(null);
+    setSelectedAiAgentId(DEFAULT_AGENTS[0]?.id ?? 'ARIA');
+    setUndoToast(null);
+    recentChatObservationsRef.current = [];
+  };
+
+  const hydrateFromLocalCache = (userId: string) => {
+    const cachedEvents = readCacheState<CalendarEvent[]>(userId, 'events', []);
+    const cachedTodoTabs = readCacheState<TodoTab[]>(userId, 'todoTabs', DEFAULT_TODO_TABS);
+    const cachedTodoLists = readCacheState<TodoList[]>(userId, 'todoLists', DEFAULT_TODO_LISTS);
+    const cachedTodoSteps = readCacheState<TodoStep[]>(userId, 'todoSteps', []);
+    const cachedTodos = readCacheState<Todo[]>(userId, 'todos', []);
+    const cachedEntries = readCacheState<JournalEntry[]>(userId, 'entries', []);
+    const cachedPosts = readCacheState<AiPost[]>(userId, 'posts', []);
+    const cachedCommunityPosts = readCacheState<CommunityPost[]>(userId, 'communityPosts', []);
+    const cachedAgentsRaw = readCacheState<AIAgent[]>(userId, 'aiAgents', DEFAULT_AGENTS);
+    const normalizedAgents = (cachedAgentsRaw.length > 0 ? cachedAgentsRaw : DEFAULT_AGENTS).map((agent, idx) => normalizeAIAgent(agent, idx));
+    const cachedActivityLog = readCacheState<ActivityItem[]>(userId, 'activityLog', []);
+    const cachedSettings = readCacheState<AppSettings>(userId, 'settings', DEFAULT_SETTINGS);
+    const cachedTags = readCacheState<CalendarTag[]>(userId, 'calendarTags', DEFAULT_TAGS);
+    const cachedCategories = readCacheState<JournalCategory[]>(userId, 'journalCategories', []);
+    const cachedPersonaMemories = readCacheState<PersonaMemory[]>(userId, 'personaMemories', []);
+
+    setEvents(cachedEvents);
+    setTodoTabs(cachedTodoTabs.length > 0 ? cachedTodoTabs : DEFAULT_TODO_TABS);
+    setTodoLists(normalizeTodoLists(cachedTodoLists.length > 0 ? cachedTodoLists : DEFAULT_TODO_LISTS));
+    setTodoSteps(cachedTodoSteps.map(step => ({
+      ...step,
+      listId: normalizeTodoListId(step.listId) || DEFAULT_TODO_LIST_ID,
+    })));
+    setTodos(cachedTodos.map(todo => ({
+      ...todo,
+      listId: normalizeTodoListId(todo.listId) || undefined,
+    })));
+    setEntries(cachedEntries);
+    setPosts(cachedPosts);
+    setCommunityPosts(cachedCommunityPosts);
+    setAiAgents(normalizedAgents);
+    setChatSessions([]);
+    setPersonaMemories(Array.isArray(cachedPersonaMemories) ? cachedPersonaMemories : []);
+    setActivityLog(cachedActivityLog);
+    setSettings({ ...DEFAULT_SETTINGS, ...cachedSettings });
+    setCalendarTags(cachedTags.length > 0 ? cachedTags : DEFAULT_TAGS);
+    setJournalCategories(cachedCategories);
+    setSelectedAiAgentId(prev => normalizedAgents.some(agent => agent.id === prev) ? prev : (normalizedAgents[0]?.id || 'ARIA'));
+  };
+
+  const hydrateChatSessionsFromIndexedCache = async (userId: string) => {
+    const cachedSessions = await loadChatSessionsCache(userId);
+    if (!cachedSessions || latestSessionUserIdRef.current !== userId) return;
+    setChatSessions(cachedSessions);
   };
 
   const {
@@ -343,17 +1019,52 @@ const App: React.FC = () => {
       // Profile lookups are only used for basic metadata (name, avatar, etc).
 
       if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-        // v2.6: Do NOT set isDataLoaded(false). Keep UI interactive with cached data.
-        console.log(`[App] v2.6 background fetchUserData for user: ${user.id}`);
+        const isDifferentUser = latestSessionUserIdRef.current !== user.id;
+        latestSessionUserIdRef.current = user.id;
+        skipSyncRef.current = true;
+        hasSuccessfulServerHydrationRef.current = false;
+        clearSyncSnapshots(user.id);
+        if (fetchRetryTimerRef.current) {
+          window.clearTimeout(fetchRetryTimerRef.current);
+          fetchRetryTimerRef.current = null;
+        }
+        if (isDifferentUser) {
+          setIsDataLoaded(false);
+          resetAppDataState();
+          hydrateFromLocalCache(user.id);
+          void hydrateChatSessionsFromIndexedCache(user.id);
+          setIsDataLoaded(true);
+        }
+        console.log(`[App] v2.7 background fetchUserData for user: ${user.id}`);
         fetchUserData(user.id);
       }
     },
     onSignedOut: () => {
       console.log('[App] onSignedOut event');
+      const previousUserId = latestSessionUserIdRef.current;
+      latestSessionUserIdRef.current = null;
+      skipSyncRef.current = true;
+      hasSuccessfulServerHydrationRef.current = false;
+      isFetchingRef.current = false;
+      fetchingUserIdRef.current = null;
+      if (fetchRetryTimerRef.current) {
+        window.clearTimeout(fetchRetryTimerRef.current);
+        fetchRetryTimerRef.current = null;
+      }
+      if (previousUserId) clearSyncSnapshots(previousUserId);
       setIsDataLoaded(false);
+      resetAppDataState();
     },
     onBeforeSignOut: () => {
       console.log('[App] onBeforeSignOut event');
+      skipSyncRef.current = true;
+      hasSuccessfulServerHydrationRef.current = false;
+      isFetchingRef.current = false;
+      fetchingUserIdRef.current = null;
+      if (fetchRetryTimerRef.current) {
+        window.clearTimeout(fetchRetryTimerRef.current);
+        fetchRetryTimerRef.current = null;
+      }
       setIsDataLoaded(false);
       setIsMobileMenuOpen(false);
       setActiveAiAgentMenu(null);
@@ -372,7 +1083,7 @@ const App: React.FC = () => {
   // Server sync effects
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_events', JSON.stringify(events));
+      writeCacheState(currentUser.id, 'events', events);
       if (skipSyncRef.current) return;
       syncEvents(currentUser.id, events);
     }
@@ -380,7 +1091,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_todos', JSON.stringify(todos));
+      writeCacheState(currentUser.id, 'todos', todos);
       if (skipSyncRef.current) return;
       syncTodos(currentUser.id, todos);
     }
@@ -388,7 +1099,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_entries', JSON.stringify(entries));
+      writeCacheState(currentUser.id, 'entries', entries);
       if (skipSyncRef.current) return;
       syncEntries(currentUser.id, entries);
     }
@@ -396,7 +1107,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_communityPosts', JSON.stringify(communityPosts));
+      writeCacheState(currentUser.id, 'posts', posts);
+    }
+  }, [posts, currentUser?.id, isDataLoaded]);
+
+  useEffect(() => {
+    if (currentUser && isDataLoaded) {
+      writeCacheState(currentUser.id, 'communityPosts', communityPosts);
       if (skipSyncRef.current) return;
       syncCommunityPosts(currentUser.id, communityPosts);
     }
@@ -404,7 +1121,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_aiAgents', JSON.stringify(aiAgents));
+      writeCacheState(currentUser.id, 'aiAgents', aiAgents);
       if (skipSyncRef.current) return;
       syncAgents(currentUser.id, aiAgents);
     }
@@ -412,7 +1129,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_todoLists', JSON.stringify(todoLists));
+      writeCacheState(currentUser.id, 'todoLists', todoLists);
       if (skipSyncRef.current) return;
       syncTodoLists(currentUser.id, todoLists);
     }
@@ -420,7 +1137,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_todoTabs', JSON.stringify(todoTabs));
+      writeCacheState(currentUser.id, 'todoTabs', todoTabs);
       if (skipSyncRef.current) return;
       syncTodoTabs(currentUser.id, todoTabs);
     }
@@ -428,7 +1145,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_todoSteps', JSON.stringify(todoSteps));
+      writeCacheState(currentUser.id, 'todoSteps', todoSteps);
       if (skipSyncRef.current) return;
       syncTodoSteps(currentUser.id, todoSteps);
     }
@@ -436,7 +1153,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_activityLog', JSON.stringify(activityLog));
+      writeCacheState(currentUser.id, 'activityLog', activityLog);
       if (skipSyncRef.current) return;
       syncUserData(currentUser.id, { activityLog });
     }
@@ -444,7 +1161,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_settings', JSON.stringify(settings));
+      writeCacheState(currentUser.id, 'settings', settings);
       if (skipSyncRef.current) return;
       syncUserData(currentUser.id, { settings });
     }
@@ -452,7 +1169,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_calendarTags', JSON.stringify(calendarTags));
+      writeCacheState(currentUser.id, 'calendarTags', calendarTags);
       if (skipSyncRef.current) return;
       syncUserData(currentUser.id, { calendarTags });
     }
@@ -460,7 +1177,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_journalCategories', JSON.stringify(journalCategories));
+      writeCacheState(currentUser.id, 'journalCategories', journalCategories);
       if (skipSyncRef.current) return;
       syncJournalCategories(currentUser.id, journalCategories);
     }
@@ -468,46 +1185,32 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
-      localStorage.setItem('lifesync_cache_chatSessions', JSON.stringify(chatSessions));
+      const cacheReadySessions = compactChatSessionsForCache(
+        chatSessions,
+        CHAT_CACHE_MAX_SESSIONS,
+        CHAT_CACHE_MAX_MESSAGES_PER_SESSION
+      ).map((session) => ({
+        ...session,
+        messages: (session.messages || []).map((message) => ({
+          ...message,
+          imageUrl: (message.imageUrl && !message.imageUrl.startsWith('data:')) ? message.imageUrl : undefined,
+          videoUrl: (message.videoUrl && !message.videoUrl.startsWith('data:')) ? message.videoUrl : undefined,
+        })),
+      }));
+      void saveChatSessionsCache(currentUser.id, cacheReadySessions);
       if (skipSyncRef.current) return;
-      syncUserData(currentUser.id, { chatSessions });
+      syncChatSessions(currentUser.id, chatSessions);
     }
   }, [chatSessions, currentUser?.id, isDataLoaded]);
+
   useEffect(() => {
-    if (!currentUser || !isDataLoaded) return;
+    if (currentUser && isDataLoaded) {
+      writeCacheState(currentUser.id, 'personaMemories', personaMemories);
+      if (skipSyncRef.current) return;
+      syncPersonaMemories(currentUser.id, personaMemories);
+    }
+  }, [personaMemories, currentUser?.id, isDataLoaded]);
 
-    const payload = {
-      gemini_api_key: settings.geminiApiKey ?? '',
-      auto_ai_reactions: settings.autoAiReactions,
-      active_gemini_model: activeGeminiConfig?.modelName || DEFAULT_GEMINI_MODEL,
-    };
-
-    const fingerprint = JSON.stringify(payload);
-    if (lastSyncedProfileAIFingerprintRef.current === fingerprint) return;
-    lastSyncedProfileAIFingerprintRef.current = fingerprint;
-
-    supabase
-      .from('profiles')
-      .update(payload)
-      .eq('id', currentUser.id)
-      .then(({ error }) => {
-        if (error) {
-          console.error('Failed to sync AI profile settings:', error);
-          // If DB migration is not applied yet, avoid retry loops.
-          if (error.code !== '42703' && error.code !== '42P01') {
-            lastSyncedProfileAIFingerprintRef.current = null;
-          }
-        }
-      });
-  }, [
-    currentUser?.id,
-    settings.geminiApiKey,
-    settings.autoAiReactions,
-    activeGeminiConfig?.modelName,
-  ]);
-  useEffect(() => {
-    lastSyncedProfileAIFingerprintRef.current = null;
-  }, [currentUser?.id]);
   useEffect(() => {
     const onPopState = () => {
       const next = resolveViewFromUrl();
@@ -568,6 +1271,10 @@ const App: React.FC = () => {
     });
   }, [aiAgents]);
   useEffect(() => {
+    const agentIdSet = new Set(aiAgents.map((agent) => agent.id));
+    setPersonaMemories(prev => prev.filter((memory) => agentIdSet.has(memory.agentId)));
+  }, [aiAgents]);
+  useEffect(() => {
     if (!activeChatSessionId) return;
     const activeSession = chatSessions.find(session => session.id === activeChatSessionId);
     if (!activeSession) return;
@@ -611,134 +1318,376 @@ const App: React.FC = () => {
     }
   };
 
-  const isFetchingRef = useRef(false);
+  const isFetchStale = (userId: string) => latestSessionUserIdRef.current !== userId;
+
   const fetchUserData = async (userId: string) => {
-    if (isFetchingRef.current) {
+    if (isFetchingRef.current && fetchingUserIdRef.current === userId) {
       console.log('[App] fetchUserData already in progress, skipping duplicate call.');
       return;
     }
+
+    if (fetchRetryTimerRef.current) {
+      window.clearTimeout(fetchRetryTimerRef.current);
+      fetchRetryTimerRef.current = null;
+    }
+
     isFetchingRef.current = true;
-    // v2.6: Do NOT set isDataLoaded(false) here to maintain "Instant UI" feel.
+    fetchingUserIdRef.current = userId;
+    let criticalFetchSucceeded = false;
 
-    // --- Stage 1: Critical UI Data (Settings, Todos, Events) ---
-    const fetchCritical = Promise.race([
-      Promise.all([
-        supabase.from('todo_tabs').select('*').eq('user_id', userId).order('order'),
-        supabase.from('todo_lists').select('*').eq('user_id', userId).order('order'),
-        supabase.from('todo_steps').select('*').eq('user_id', userId).order('order'),
-        supabase.from('todos').select('*').eq('user_id', userId).order('order'),
-        supabase.from('calendar_events').select('*').eq('user_id', userId),
-        supabase.from('user_data').select('*').eq('user_id', userId).maybeSingle()
-      ]),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Critical fetch timeout')), 10000))
-    ]);
-
-    let criticalResults;
     try {
-      criticalResults = await fetchCritical;
-    } catch (err: any) {
-      console.warn('[App] fetchCritical failed or timed out:', err.message);
-      isFetchingRef.current = false;
-      setIsDataLoaded(true);
-      return;
+      const fetchCritical = Promise.race([
+        Promise.all([
+          supabase.from('todo_tabs').select('*').eq('user_id', userId).order('order'),
+          supabase.from('todo_lists').select('*').eq('user_id', userId).order('order'),
+          supabase.from('todo_steps').select('*').eq('user_id', userId).order('order'),
+          supabase.from('todos').select('*').eq('user_id', userId).order('order'),
+          supabase.from('calendar_events').select('*').eq('user_id', userId),
+          supabase.from('user_data').select('*').eq('user_id', userId).maybeSingle(),
+          supabase.from('chat_sessions').select('*').eq('user_id', userId).order('last_message_at', { ascending: false }),
+          supabase.from('chat_messages').select('*').eq('user_id', userId).order('order_index', { ascending: true }).order('timestamp', { ascending: true }),
+        ]),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Critical fetch timeout')), 10000))
+      ]);
+
+      let criticalResults: any;
+      try {
+        criticalResults = await fetchCritical;
+        criticalFetchSucceeded = true;
+        setSyncStatus('syncing');
+      } catch (err: any) {
+        console.warn('[App] fetchCritical failed or timed out:', err.message);
+        setSyncStatus('error');
+        return;
+      }
+
+      if (isFetchStale(userId)) return;
+
+      const [
+        todoTabsRes,
+        todoListsRes,
+        todoStepsRes,
+        todosRes,
+        eventsRes,
+        userDataRes,
+        chatSessionsRes,
+        chatMessagesRes,
+      ] = criticalResults;
+
+      const criticalErrors = [
+        todoTabsRes?.error,
+        todoListsRes?.error,
+        todoStepsRes?.error,
+        todosRes?.error,
+        eventsRes?.error,
+        userDataRes?.error,
+      ].filter(Boolean);
+      if (criticalErrors.length > 0) {
+        console.warn('[App] fetchCritical returned errors:', criticalErrors);
+        setSyncStatus('error');
+        return;
+      }
+
+      const dbTodoTabs = todoTabsRes?.data;
+      const dbTodoLists = todoListsRes?.data;
+      const dbTodoSteps = todoStepsRes?.data;
+      const dbTodos = todosRes?.data;
+      const dbEvents = eventsRes?.data;
+      const dbUserData = userDataRes?.data;
+      const isChatTableUnavailable = (errorCode?: string) => errorCode === '42P01' || errorCode === '42703';
+      const dbChatSessions = isChatTableUnavailable(chatSessionsRes?.error?.code) ? [] : chatSessionsRes?.data;
+      const dbChatMessages = isChatTableUnavailable(chatMessagesRes?.error?.code) ? [] : chatMessagesRes?.data;
+
+      if (dbTodoTabs && dbTodoTabs.length > 0) {
+        setTodoTabs(dbTodoTabs.map((tab: any) => ({
+          id: tab.id,
+          name: normalizeKoreanText(tab.name),
+          color: tab.color,
+          order: tab.order
+        })));
+      } else if (dbTodoTabs && dbTodoTabs.length === 0) {
+        setTodoTabs(DEFAULT_TODO_TABS);
+      }
+
+      if (dbTodoLists && dbTodoLists.length > 0) {
+        setTodoLists(normalizeTodoLists(dbTodoLists.map((list: any) => ({
+          ...list,
+          title: normalizeKoreanText(list.title),
+          dueDate: list.due_date || undefined,
+          tabId: list.tab_id || (list.type === 'project' ? 'tab_project' : 'tab_todo')
+        }))));
+      } else if (dbTodoLists && dbTodoLists.length === 0) {
+        setTodoLists(DEFAULT_TODO_LISTS);
+      }
+
+      if (dbTodos) setTodos(dbTodos.map((t: any) => {
+        let parsedSubTasks: Todo['subTasks'] = undefined;
+        if (t.sub_tasks) {
+          if (typeof t.sub_tasks === 'string') {
+            try {
+              parsedSubTasks = JSON.parse(t.sub_tasks);
+            } catch {
+              parsedSubTasks = undefined;
+            }
+          } else {
+            parsedSubTasks = t.sub_tasks;
+          }
+        }
+        return {
+          id: t.id,
+          listId: normalizeTodoListId(t.list_id) || undefined,
+          text: normalizeKoreanText(t.text),
+          completed: t.completed,
+          date: typeof t.created_at === 'string' ? t.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+          startDate: t.start_date || undefined,
+          dueDate: t.due_date || undefined,
+          subTasks: parsedSubTasks,
+          stepId: t.step_id || undefined
+        } as Todo;
+      }));
+
+      if (dbTodoSteps) setTodoSteps(dbTodoSteps.map((s: any) => ({
+        id: s.id,
+        listId: normalizeTodoListId(s.list_id) || DEFAULT_TODO_LIST_ID,
+        title: normalizeKoreanText(s.title),
+        order: s.order
+      } as TodoStep)));
+
+      if (dbEvents) setEvents(dbEvents.map((e: any) => {
+        const [startDate, startTime] = e.start_time ? e.start_time.split('T') : ['', ''];
+        const [endDate, endTime] = e.end_time ? e.end_time.split('T') : ['', ''];
+        return {
+          id: e.id,
+          title: normalizeKoreanText(e.title),
+          date: startDate,
+          endDate: endDate || startDate,
+          startTime: startTime && startTime !== '00:00:00' ? startTime.substring(0, 5) : undefined,
+          endTime: endTime && endTime !== '23:59:59' ? endTime.substring(0, 5) : undefined,
+          description: e.description ? normalizeKoreanText(e.description) : undefined,
+          type: (e.tags && e.tags.length > 0) ? e.tags[0] : 'tag_1'
+        } as CalendarEvent;
+      }));
+
+      const chatSessionsFromTables: ChatSession[] = (() => {
+        if (!Array.isArray(dbChatSessions) || !Array.isArray(dbChatMessages)) return [];
+        const messagesBySession = new Map<string, ChatMessage[]>();
+
+        dbChatMessages.forEach((message: any) => {
+          const sessionId = String(message.session_id || '');
+          if (!sessionId) return;
+          const mapped: ChatMessage = {
+            id: String(message.id || crypto.randomUUID()),
+            role: message.role === 'assistant' ? 'assistant' : 'user',
+            content: typeof message.content === 'string' ? message.content : '',
+            timestamp: typeof message.timestamp === 'string' ? message.timestamp : new Date().toISOString(),
+            agentId: typeof message.agent_id === 'string' ? message.agent_id : undefined,
+            provider: message.provider || undefined,
+            modelName: message.model_name || undefined,
+            connectionId: message.connection_id || undefined,
+            imageUrl: typeof message.image_url === 'string' ? message.image_url : undefined,
+            videoUrl: typeof message.video_url === 'string' ? message.video_url : undefined,
+            action: message.action || undefined,
+            quickReplies: Array.isArray(message.quick_replies) ? message.quick_replies : undefined,
+          };
+          const bucket = messagesBySession.get(sessionId) || [];
+          bucket.push(mapped);
+          messagesBySession.set(sessionId, bucket);
+        });
+
+        return dbChatSessions.map((session: any) => ({
+          id: String(session.id),
+          title: typeof session.title === 'string' ? session.title : '새 대화',
+          messages: messagesBySession.get(String(session.id)) || [],
+          createdAt: typeof session.created_at === 'string' ? session.created_at : new Date().toISOString(),
+          lastMessageAt: typeof session.last_message_at === 'string' ? session.last_message_at : (typeof session.created_at === 'string' ? session.created_at : new Date().toISOString()),
+          agentId: typeof session.agent_id === 'string' ? session.agent_id : undefined,
+          agentIds: Array.isArray(session.agent_ids) ? session.agent_ids : undefined,
+        } as ChatSession));
+      })();
+
+      if (dbUserData) {
+        if (Array.isArray(dbUserData.activity_log)) setActivityLog(dbUserData.activity_log);
+        if (Array.isArray(dbUserData.calendar_tags) && dbUserData.calendar_tags.length > 0) setCalendarTags(dbUserData.calendar_tags);
+        if (dbUserData.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...dbUserData.settings }));
+      }
+
+      if (chatSessionsFromTables.length > 0) {
+        setChatSessions(chatSessionsFromTables);
+      } else if (Array.isArray(dbUserData?.chat_sessions)) {
+        // Backward compatibility: read legacy blob once, then migrate to normalized table on next sync.
+        setChatSessions(dbUserData.chat_sessions);
+        if (dbUserData.chat_sessions.length > 0) {
+          syncChatSessions(userId, dbUserData.chat_sessions as ChatSession[]);
+        }
+      }
+
+      if (isFetchStale(userId)) return;
+
+      let dbJournalCategories: any[] | null = null;
+      let dbJournalEntries: any[] | null = null;
+      let dbAiAgents: any[] | null = null;
+      let dbPosts: any[] | null = null;
+      let dbPersonaMemories: any[] | null = null;
+
+      try {
+        const fetchSecondary = Promise.race([
+          Promise.all([
+            supabase.from('journal_categories').select('*').eq('user_id', userId),
+            supabase.from('journal_entries').select('*').eq('user_id', userId).order('date', { ascending: false }),
+            supabase.from('ai_agents').select('*').eq('user_id', userId).order('order'),
+            supabase.from('community_posts').select('*').eq('user_id', userId).order('timestamp', { ascending: false }),
+            supabase.from('persona_memories').select('*').eq('user_id', userId).order('last_observed_at', { ascending: false })
+          ]),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Secondary fetch timeout')), 10000))
+        ]);
+
+        const secondaryResults: any = await fetchSecondary;
+        if (isFetchStale(userId)) return;
+
+        const [
+          journalCategoriesRes,
+          journalEntriesRes,
+          aiAgentsRes,
+          postsRes,
+          personaMemoriesRes
+        ] = secondaryResults;
+        const isPersonaMemoryTableUnavailable = (errorCode?: string) => errorCode === '42P01' || errorCode === '42703';
+
+        const secondaryErrors = [
+          journalCategoriesRes?.error,
+          journalEntriesRes?.error,
+          aiAgentsRes?.error,
+          postsRes?.error,
+          isPersonaMemoryTableUnavailable(personaMemoriesRes?.error?.code) ? null : personaMemoriesRes?.error,
+        ].filter(Boolean);
+        if (secondaryErrors.length > 0) {
+          console.warn('[App] fetchSecondary returned errors:', secondaryErrors);
+        }
+
+        dbJournalCategories = journalCategoriesRes?.data || null;
+        dbJournalEntries = journalEntriesRes?.data || null;
+        dbAiAgents = aiAgentsRes?.data || null;
+        dbPosts = postsRes?.data || null;
+        dbPersonaMemories = isPersonaMemoryTableUnavailable(personaMemoriesRes?.error?.code)
+          ? []
+          : (personaMemoriesRes?.data || null);
+
+        if (dbJournalCategories) setJournalCategories(dbJournalCategories.map((category: any) => ({ ...category, name: normalizeKoreanText(category.name) })));
+        if (dbJournalEntries) {
+          const catMap = new Map((dbJournalCategories || []).map((c: any) => [c.id, normalizeKoreanText(c.name)]));
+          setEntries(dbJournalEntries.map((e: any) => ({
+            id: e.id,
+            title: normalizeKoreanText(e.title || ''),
+            content: normalizeKoreanText(e.content || ''),
+            date: e.date,
+            mood: e.mood,
+            category: e.category_id ? catMap.get(e.category_id) || '메모장' : '메모장',
+            order: e.order || 0
+          } as JournalEntry)));
+        }
+        if (dbAiAgents && dbAiAgents.length > 0) {
+          setAiAgents(dbAiAgents.map((a: any, i: number) => normalizeAIAgent(a, i)));
+        }
+        if (dbPosts) {
+          setCommunityPosts((dbPosts || [])
+            .map(normalizeCommunityPost)
+            .filter(p => !!p.id)
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+        }
+        if (Array.isArray(dbPersonaMemories)) {
+          const mappedMemories: PersonaMemory[] = dbPersonaMemories
+            .filter((row: any) => row?.agent_id && row?.memory_type && row?.memory_key && row?.content)
+            .map((row: any) => ({
+              id: String(row.id || crypto.randomUUID()),
+              userId,
+              agentId: String(row.agent_id),
+              type: (row.memory_type === 'preference' || row.memory_type === 'goal') ? row.memory_type : 'fact',
+              key: String(row.memory_key),
+              content: String(row.content),
+              confidence: typeof row.confidence === 'number' ? row.confidence : 0.6,
+              observationCount: typeof row.observation_count === 'number' ? row.observation_count : 1,
+              firstObservedAt: typeof row.first_observed_at === 'string' ? row.first_observed_at : new Date().toISOString(),
+              lastObservedAt: typeof row.last_observed_at === 'string' ? row.last_observed_at : new Date().toISOString(),
+              createdAt: typeof row.created_at === 'string' ? row.created_at : new Date().toISOString(),
+              updatedAt: typeof row.updated_at === 'string' ? row.updated_at : new Date().toISOString(),
+            }))
+            .slice(0, 500);
+          setPersonaMemories(mappedMemories);
+        }
+      } catch (err: any) {
+        console.warn('[App] fetchSecondary failed or timed out:', err.message);
+      }
+
+      if (isFetchStale(userId)) return;
+
+      // Seed sync snapshots from server-loaded IDs so deletions are differential and safe.
+      seedSyncSnapshot('events', userId, (dbEvents || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('todos', userId, (dbTodos || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('todo_lists', userId, (dbTodoLists || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('todo_tabs', userId, (dbTodoTabs || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('todo_steps', userId, (dbTodoSteps || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('journal_entries', userId, (dbJournalEntries || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('journal_categories', userId, (dbJournalCategories || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('community_posts', userId, (dbPosts || []).map((row: any) => String(row.id)));
+      seedSyncSnapshot('ai_agents', userId, (dbAiAgents || []).map((row: any) => String(row.id)));
+
+      const seededChatSessions = chatSessionsFromTables.length > 0
+        ? chatSessionsFromTables
+        : (Array.isArray(dbUserData?.chat_sessions) ? dbUserData.chat_sessions : []);
+      seedSyncSnapshot('chat_sessions', userId, seededChatSessions.map((session: ChatSession) => String(session.id)));
+      seededChatSessions.forEach((session: ChatSession) => {
+        const messageIds = (Array.isArray(session.messages) ? session.messages : []).map((message: ChatMessage) => String(message.id));
+        seedSyncSnapshot(`chat_messages:${session.id}`, userId, messageIds);
+      });
+
+      hasSuccessfulServerHydrationRef.current = true;
+      setSyncStatus('idle');
+      console.log(`[App] Data load complete for user ${userId}. Enabling sync hooks.`);
+    } finally {
+      if (fetchingUserIdRef.current === userId) {
+        isFetchingRef.current = false;
+        fetchingUserIdRef.current = null;
+      }
+
+      if (latestSessionUserIdRef.current === userId) {
+        setIsDataLoaded(true);
+        if (criticalFetchSucceeded && hasSuccessfulServerHydrationRef.current) {
+          if (fetchRetryTimerRef.current) {
+            window.clearTimeout(fetchRetryTimerRef.current);
+            fetchRetryTimerRef.current = null;
+          }
+          setTimeout(() => {
+            if (latestSessionUserIdRef.current === userId && hasSuccessfulServerHydrationRef.current) {
+              skipSyncRef.current = false;
+            }
+          }, 250);
+        } else {
+          skipSyncRef.current = true;
+          if (!fetchRetryTimerRef.current) {
+            fetchRetryTimerRef.current = window.setTimeout(() => {
+              fetchRetryTimerRef.current = null;
+              if (latestSessionUserIdRef.current === userId && !isFetchingRef.current) {
+                console.log('[App] retrying fetchUserData after critical failure...');
+                fetchUserData(userId);
+              }
+            }, 5000);
+          }
+        }
+      }
     }
-
-    const [
-      { data: dbTodoTabs },
-      { data: dbTodoLists },
-      { data: dbTodoSteps },
-      { data: dbTodos },
-      { data: dbEvents },
-      { data: dbUserData }
-    ] = criticalResults;
-
-    // Apply Stage 1 data
-    if (dbTodoTabs && dbTodoTabs.length > 0) {
-      setTodoTabs(dbTodoTabs.map((tab: any) => ({
-        id: tab.id,
-        name: normalizeKoreanText(tab.name),
-        color: tab.color,
-        order: tab.order
-      })));
-    } else if (dbTodoTabs && dbTodoTabs.length === 0) {
-      // If user has NO tabs, but maybe has lists, we should provide default tabs
-      setTodoTabs(DEFAULT_TODO_TABS);
-    }
-    if (dbTodoLists) setTodoLists(dbTodoLists.map((list: any) => ({
-      ...list,
-      title: normalizeKoreanText(list.title),
-      dueDate: list.due_date || undefined,
-      tabId: list.tab_id || (list.type === 'project' ? 'tab_project' : 'tab_todo')
-    })));
-    if (dbTodos) setTodos(dbTodos.map((t: any) => ({
-      id: t.id,
-      listId: t.list_id || undefined,
-      text: normalizeKoreanText(t.text),
-      completed: t.completed,
-      date: new Date().toISOString(),
-      startDate: t.start_date || undefined,
-      dueDate: t.due_date || undefined,
-      subTasks: t.sub_tasks ? (typeof t.sub_tasks === 'string' ? JSON.parse(t.sub_tasks) : t.sub_tasks) : undefined,
-      stepId: t.step_id || undefined
-    } as Todo)));
-    if (dbTodoSteps) setTodoSteps(dbTodoSteps.map((s: any) => ({
-      id: s.id,
-      listId: s.list_id,
-      title: normalizeKoreanText(s.title),
-      order: s.order
-    } as TodoStep)));
-    if (dbEvents) setEvents(dbEvents.map((e: any) => {
-      const [startDate, startTime] = e.start_time ? e.start_time.split('T') : ['', ''];
-      const [endDate, endTime] = e.end_time ? e.end_time.split('T') : ['', ''];
-      return { id: e.id, title: normalizeKoreanText(e.title), date: startDate, startTime: startTime && startTime !== '00:00:00' ? startTime.substring(0, 5) : undefined, endTime: endTime && endTime !== '23:59:59' ? endTime.substring(0, 5) : undefined, description: e.description ? normalizeKoreanText(e.description) : undefined, type: (e.tags && e.tags.length > 0) ? e.tags[0] : 'tag_1' } as CalendarEvent;
-    }));
-    if (dbUserData) {
-      if (Array.isArray(dbUserData.chat_sessions)) setChatSessions(dbUserData.chat_sessions);
-      if (Array.isArray(dbUserData.activity_log)) setActivityLog(dbUserData.activity_log);
-      if (Array.isArray(dbUserData.calendar_tags)) setCalendarTags(dbUserData.calendar_tags);
-      if (dbUserData.settings) setSettings(prev => ({ ...prev, ...dbUserData.settings }));
-    }
-
-    // --- Stage 2: Secondary Data (Journals, Agents, Posts) ---
-    const fetchSecondary = Promise.all([
-      supabase.from('journal_categories').select('*').eq('user_id', userId),
-      supabase.from('journal_entries').select('*').eq('user_id', userId).order('date', { ascending: false }),
-      supabase.from('ai_agents').select('*').eq('user_id', userId).order('order'),
-      supabase.from('community_posts').select('*').eq('user_id', userId).order('timestamp', { ascending: false })
-    ]);
-
-    const secondaryResults = await fetchSecondary;
-    const [
-      { data: dbJournalCategories },
-      { data: dbJournalEntries },
-      { data: dbAiAgents },
-      { data: dbPosts }
-    ] = secondaryResults;
-
-    // Secondary updates
-    if (dbJournalCategories) setJournalCategories(dbJournalCategories.map((category: any) => ({ ...category, name: normalizeKoreanText(category.name) })));
-    if (dbJournalEntries) {
-      const catMap = new Map((dbJournalCategories || []).map((c: any) => [c.id, normalizeKoreanText(c.name)]));
-      setEntries(dbJournalEntries.map((e: any) => ({ id: e.id, title: normalizeKoreanText(e.title || ''), content: normalizeKoreanText(e.content || ''), date: e.date, mood: e.mood, category: e.category_id ? catMap.get(e.category_id) || '메모장' : '메모장', order: e.order || 0 } as JournalEntry)));
-    }
-    if (dbAiAgents) setAiAgents(dbAiAgents.map((a: any, i: number) => normalizeAIAgent(a, i)));
-    if (dbPosts) setCommunityPosts((dbPosts || []).map(normalizeCommunityPost).filter(p => !!p.id).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
-
-    console.log(`[App] Data load complete for user ${userId}. Enabling sync hooks.`);
-    setIsDataLoaded(true);
-    isFetchingRef.current = false;
-    // v2.5: Wait a short delay after load to ensure effects don't catch the initial state change as a user-edit
-    setTimeout(() => {
-      skipSyncRef.current = false;
-    }, 1000);
   };
 
   const handleLogout = logout;
 
   useEffect(() => {
     const listIds = new Set(todoLists.map(l => l.id));
-    const fallbackId = todoLists[0]?.id ?? 'routine';
-    setTodos(prev => prev.map(t => (t.listId && listIds.has(t.listId)) ? t : { ...t, listId: fallbackId }));
+    const fallbackId = todoLists[0]?.id ?? DEFAULT_TODO_LIST_ID;
+    setTodos(prev => prev.map(t => {
+      const normalizedListId = normalizeTodoListId(t.listId);
+      return normalizedListId && listIds.has(normalizedListId)
+        ? (normalizedListId === t.listId ? t : { ...t, listId: normalizedListId })
+        : { ...t, listId: fallbackId };
+    }));
   }, [todoLists]);
 
   // Community post handler
@@ -786,17 +1735,6 @@ const App: React.FC = () => {
     }
   };
 
-  const addJournalComment = (entryId: string, comment: Omit<Comment, 'id' | 'timestamp'>) => {
-    const newComment: Comment = {
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...comment,
-    };
-    setEntries(prev => prev.map(e =>
-      e.id === entryId ? { ...e, comments: [...(e.comments || []), newComment] } : e
-    ));
-  };
-
   const addCommunityComment = (postId: string, comment: Omit<Comment, 'id' | 'timestamp'>) => {
     const newComment: Comment = {
       id: crypto.randomUUID(),
@@ -807,110 +1745,6 @@ const App: React.FC = () => {
       p.id === postId ? { ...p, comments: [...(p.comments || []), newComment] } : p
     ));
   };
-
-  // Trigger helper
-  const triggerAI = (context: TriggerContext) => {
-    // Signed-in users use server-side queue processing to avoid duplicate calls.
-    if (currentUser) return;
-    if (!settings.autoAiReactions) return;
-    const recentChats = recentChatObservationsRef.current.slice(-8);
-
-    const enrichedContext: TriggerContext = {
-      ...context,
-      data: {
-        ...context.data,
-        pendingTodos: todos.filter(t => !t.completed).length,
-        completedTodos: todos.filter(t => t.completed).length,
-        totalEvents: events.length,
-        recentJournal: entries.slice(0, 3).map(entry => ({
-          title: entry.title || '',
-          content: (entry.content || '').slice(0, 280),
-          mood: entry.mood,
-          date: entry.date,
-        })),
-        recentChats,
-      },
-    };
-
-    const updateUsage = (stats: ApiUsageStats) => {
-      setSettings(prev => ({
-        ...prev,
-        apiUsage: {
-          totalRequests: (prev.apiUsage?.totalRequests || 0) + stats.totalRequests,
-          totalTokens: (prev.apiUsage?.totalTokens || 0) + stats.totalTokens,
-          lastRequestDate: stats.lastRequestDate,
-        }
-      }));
-    };
-
-    import('./utils/triggerEngine')
-      .then(({ generateCommunityPosts }) =>
-        generateCommunityPosts(
-          enrichedContext,
-          aiAgents,
-          addCommunityPost,
-          activeGeminiConfig?.apiKey,
-          updateUsage,
-          activeGeminiConfig?.modelName
-        )
-      )
-      .catch((error) => {
-        console.error('Failed to load triggerEngine for AI reactions:', error);
-      });
-  };
-
-  useEffect(() => {
-    // Signed-in users use server scheduler (Edge Function + queue).
-    if (currentUser) return;
-
-    const FOUR_HOURS = 4;
-    const RECENT_ACTIVITY_WINDOW_MS = FOUR_HOURS * 60 * 60 * 1000;
-
-    const getLocalBucketKey = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      const bucketHour = Math.floor(date.getHours() / FOUR_HOURS) * FOUR_HOURS;
-      const hour = String(bucketHour).padStart(2, '0');
-      return `${year}-${month}-${day}T${hour}`;
-    };
-
-    const hasRecentActivity = (now: Date): boolean => {
-      const nowMs = now.getTime();
-      return activityLog.slice(-50).some(item => {
-        const ts = new Date(item.timestamp).getTime();
-        return Number.isFinite(ts) && nowMs - ts <= RECENT_ACTIVITY_WINDOW_MS;
-      });
-    };
-
-    const maybeTriggerScheduledDigest = () => {
-      if (!settings.autoAiReactions || !activeGeminiConfig?.apiKey) return;
-
-      const now = new Date();
-      if (!hasRecentActivity(now)) return;
-
-      const key = getLocalBucketKey(now);
-      if (scheduledPostKeyRef.current === key) return;
-
-      scheduledPostKeyRef.current = key;
-
-      triggerAI({
-        trigger: 'scheduled_digest',
-        data: {
-          slot: `every_${FOUR_HOURS}_hours`,
-          date: now.toISOString(),
-        },
-      });
-    };
-
-    const tick = () => {
-      maybeTriggerScheduledDigest();
-    };
-
-    tick();
-    const intervalId = setInterval(tick, 60_000);
-    return () => clearInterval(intervalId);
-  }, [currentUser, settings.autoAiReactions, activeGeminiConfig?.apiKey, entries, events, todos, aiAgents, activityLog]);
 
   const addTodoList = async (title: string, tabId: string, dueDate?: string) => {
     const trimmed = title.trim();
@@ -978,22 +1812,27 @@ const App: React.FC = () => {
   const addTodoStep = async (title: string, listId: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    const nextOrder = Math.max(0, ...todoSteps.filter(s => s.listId === listId).map(s => s.order)) + 1;
+    const normalizedListId = normalizeTodoListId(listId) || DEFAULT_TODO_LIST_ID;
+    const nextOrder = Math.max(0, ...todoSteps.filter(s => s.listId === normalizedListId).map(s => s.order)) + 1;
     const newStep: TodoStep = {
       id: crypto.randomUUID(),
-      listId,
+      listId: normalizedListId,
       title: trimmed,
       order: nextOrder
     };
     setTodoSteps(prev => [...prev, newStep]);
     if (currentUser) {
-      await supabase.from('todo_steps').insert([{
+      const { error } = await supabase.from('todo_steps').insert([{
         id: newStep.id,
         user_id: currentUser.id,
         list_id: newStep.listId,
         title: newStep.title,
         "order": newStep.order
       }]);
+      if (error) {
+        setTodoSteps(prev => prev.filter(step => step.id !== newStep.id));
+        alert(`단계를 저장하지 못했습니다: ${error.message || '알 수 없는 오류'}`);
+      }
     }
   };
 
@@ -1200,6 +2039,7 @@ const App: React.FC = () => {
       posts,
       communityPosts,
       agents: aiAgents,
+      personaMemories,
       settings,
       activityLog,
       userName: currentUser?.name || '',
@@ -1214,7 +2054,7 @@ const App: React.FC = () => {
   };
 
   const handleClearAllData = async () => {
-    const confirmed = window.confirm('모든 기록을 삭제할까요? (일정/할 일/일기/AI 보드/활동 기록)\n이 작업은 되돌릴 수 없습니다.');
+    const confirmed = window.confirm('모든 기록을 삭제할까요? (일정/할 일/메모/채팅/레거시 AI 게시글/활동 기록)\n이 작업은 되돌릴 수 없습니다.');
     if (!confirmed) return;
 
     if (currentUser) {
@@ -1230,10 +2070,17 @@ const App: React.FC = () => {
         await Promise.all([
           safeDeleteByUser('ai_trigger_queue'),
           safeDeleteByUser('ai_agent_rotations'),
+          safeDeleteByUser('chat_messages'),
+          safeDeleteByUser('chat_sessions'),
+          safeDeleteByUser('persona_memories'),
+          safeDeleteByUser('user_data'),
           safeDeleteByUser('ai_agents'),
           safeDeleteByUser('community_posts'),
           safeDeleteByUser('calendar_events'),
+          safeDeleteByUser('journal_categories'),
           safeDeleteByUser('journal_entries'),
+          safeDeleteByUser('todo_steps'),
+          safeDeleteByUser('todo_tabs'),
           safeDeleteByUser('todos'),
           safeDeleteByUser('todo_lists'),
         ]);
@@ -1246,14 +2093,29 @@ const App: React.FC = () => {
 
     setEvents([]);
     setTodos([]);
+    setTodoTabs(DEFAULT_TODO_TABS);
     setTodoLists(DEFAULT_TODO_LISTS);
+    setTodoSteps([]);
     setEntries([]);
+    setJournalCategories([]);
     setPosts([]);
     setCommunityPosts([]);
     setAiAgents(DEFAULT_AGENTS);
+    setChatSessions([]);
+    setPersonaMemories([]);
+    setActiveChatSessionId(null);
+    setActiveChatAgentIds([]);
     setActivityLog([]);
+    setCalendarTags(DEFAULT_TAGS);
     setSelectedJournalId(null);
+    setSelectedJournalCategory('메모장');
     setSelectedAiPostId(null);
+    setSelectedAiAgentId(DEFAULT_AGENTS[0]?.id ?? 'ARIA');
+    if (currentUser) {
+      clearUserScopedCache(currentUser.id);
+      void clearChatSessionsCache(currentUser.id);
+      clearSyncSnapshots(currentUser.id);
+    }
   };
 
   const handleClearActivity = () => {
@@ -1281,6 +2143,14 @@ const App: React.FC = () => {
   const handleClearChat = () => {
     setChatSessions([]);
     setActiveChatSessionId(null);
+    if (currentUser) {
+      void clearChatSessionsCache(currentUser.id);
+      supabase.from('chat_sessions').delete().eq('user_id', currentUser.id).then(({ error }) => {
+        if (error && error.code !== '42P01') {
+          console.error('Failed to clear chat sessions:', error);
+        }
+      });
+    }
   };
 
   const handleManualSync = async () => {
@@ -1318,6 +2188,7 @@ const App: React.FC = () => {
   // Handlers with AI triggers
   const addEvent = async (event: CalendarEvent) => {
     setEvents(prev => [...prev, event]);
+    const endDate = event.endDate || event.date;
 
     if (currentUser) {
       await supabase.from('calendar_events').insert([{
@@ -1325,7 +2196,7 @@ const App: React.FC = () => {
         user_id: currentUser.id,
         title: event.title,
         start_time: event.date + (event.startTime ? `T${event.startTime}:00` : 'T00:00:00'),
-        end_time: event.date + (event.endTime ? `T${event.endTime}:00` : 'T23:59:59'),
+        end_time: endDate + (event.endTime ? `T${event.endTime}:00` : 'T23:59:59'),
         description: event.description,
         color: calendarTags.find(t => t.id === event.type)?.color || '#4c2889',
         tags: [event.type]
@@ -1348,29 +2219,18 @@ const App: React.FC = () => {
         meta: { id: event.id },
       });
     });
-    // Trigger AI community posts
-    triggerAI({
-      trigger: 'event_added',
-      data: {
-        title: event.title,
-        date: event.date,
-        weekCount: events.filter(e => {
-          const d = new Date(e.date);
-          const now = new Date();
-          return d >= now && d <= new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-        }).length + 1,
-      },
-    });
   };
 
   const updateEvent = async (event: CalendarEvent, previous: CalendarEvent) => {
     setEvents(prev => prev.map(e => e.id === event.id ? event : e));
+    const endDate = event.endDate || event.date;
+    const previousEndDate = previous.endDate || previous.date;
 
     if (currentUser) {
       await supabase.from('calendar_events').update({
         title: event.title,
         start_time: event.date + (event.startTime ? `T${event.startTime}:00` : 'T00:00:00'),
-        end_time: event.date + (event.endTime ? `T${event.endTime}:00` : 'T23:59:59'),
+        end_time: endDate + (event.endTime ? `T${event.endTime}:00` : 'T23:59:59'),
         description: event.description,
         color: calendarTags.find(t => t.id === event.type)?.color || '#4c2889',
         tags: [event.type]
@@ -1388,7 +2248,7 @@ const App: React.FC = () => {
         await supabase.from('calendar_events').update({
           title: previous.title,
           start_time: previous.date + (previous.startTime ? `T${previous.startTime}:00` : 'T00:00:00'),
-          end_time: previous.date + (previous.endTime ? `T${previous.endTime}:00` : 'T23:59:59'),
+          end_time: previousEndDate + (previous.endTime ? `T${previous.endTime}:00` : 'T23:59:59'),
           description: previous.description,
           tags: [previous.type]
         }).eq('id', previous.id);
@@ -1404,6 +2264,7 @@ const App: React.FC = () => {
   const deleteEvent = async (id: string) => {
     const removed = events.find(e => e.id === id);
     if (!removed) return;
+    const removedEndDate = removed.endDate || removed.date;
 
     setEvents(prev => prev.filter(e => e.id !== id));
 
@@ -1424,7 +2285,7 @@ const App: React.FC = () => {
           user_id: currentUser.id,
           title: removed.title,
           start_time: removed.date + (removed.startTime ? `T${removed.startTime}:00` : 'T00:00:00'),
-          end_time: removed.date + (removed.endTime ? `T${removed.endTime}:00` : 'T23:59:59'),
+          end_time: removedEndDate + (removed.endTime ? `T${removed.endTime}:00` : 'T23:59:59'),
           description: removed.description,
           tags: [removed.type]
         }]);
@@ -1438,13 +2299,13 @@ const App: React.FC = () => {
   };
 
   const addTodo = async (text: string, listId?: string, dueDate?: string, stepId?: string, category: Todo['category'] = 'personal') => {
-    const targetListId = listId || todoLists[0]?.id || 'routine';
+    const targetListId = normalizeTodoListId(listId) || todoLists[0]?.id || DEFAULT_TODO_LIST_ID;
     const listLabel = todoLists.find(l => l.id === targetListId)?.title || '목록';
     const newTodo: Todo = {
       id: crypto.randomUUID(),
       text,
       completed: false,
-      date: new Date().toISOString(),
+      date: new Date().toISOString().slice(0, 10),
       category,
       listId: targetListId,
       stepId,
@@ -1455,7 +2316,7 @@ const App: React.FC = () => {
     setTodos(prev => [...prev, newTodo]);
 
     if (currentUser) {
-      await supabase.from('todos').insert([{
+      const todoRow = {
         id: newTodo.id,
         user_id: currentUser.id,
         list_id: targetListId,
@@ -1465,7 +2326,15 @@ const App: React.FC = () => {
         "order": todos.length,
         due_date: newTodo.dueDate || null,
         sub_tasks: newTodo.subTasks || null
-      }]);
+      };
+
+      const { error } = await retryTodoInsertWithFallback(todoRow);
+
+      if (error) {
+        setTodos(prev => prev.filter(t => t.id !== newTodo.id));
+        alert(`할 일을 저장하지 못했습니다: ${error.message || '알 수 없는 오류'}`);
+        return;
+      }
     }
 
     logActivity({
@@ -1484,16 +2353,6 @@ const App: React.FC = () => {
         meta: { id: newTodo.id },
       });
     });
-
-    // Trigger AI
-    triggerAI({
-      trigger: 'todo_added',
-      data: {
-        text,
-        total: todos.length + 1,
-        pending: todos.filter(t => !t.completed).length + 1,
-      },
-    });
   };
 
   const updateTodo = async (id: string, updates: Partial<Todo>) => {
@@ -1508,7 +2367,10 @@ const App: React.FC = () => {
       if (updates.subTasks !== undefined) dbUpdates.sub_tasks = updates.subTasks || null;
 
       if (Object.keys(dbUpdates).length > 0) {
-        await supabase.from('todos').update(dbUpdates).eq('id', id);
+        const { error } = await retryTodoUpdateWithFallback(id, dbUpdates);
+        if (error) {
+          alert(`할 일을 수정하지 못했습니다: ${error.message || '알 수 없는 오류'}`);
+        }
       }
     }
   };
@@ -1543,17 +2405,6 @@ const App: React.FC = () => {
           meta: { id: todo.id },
         });
       });
-
-      triggerAI({
-        trigger: 'todo_completed',
-        data: {
-          text: todo.text,
-          completed: todos.filter(t => t.completed).length + 1,
-          pending: todos.filter(t => !t.completed).length - 1,
-          completionRate: Math.round(((todos.filter(t => t.completed).length + 1) / todos.length) * 100),
-          nextTodo: todos.find(t => !t.completed && t.id !== id)?.text || '없음',
-        },
-      });
     }
   };
 
@@ -1575,16 +2426,21 @@ const App: React.FC = () => {
     showUndo('할 일이 삭제됨', async () => {
       setTodos(prev => [removed, ...prev]);
       if (currentUser) {
-        await supabase.from('todos').insert([{
+        const restoreRow = {
           id: removed.id,
           user_id: currentUser.id,
-          list_id: removed.listId,
+          list_id: normalizeTodoListId(removed.listId) || DEFAULT_TODO_LIST_ID,
+          step_id: removed.stepId || null,
           text: removed.text,
           completed: removed.completed,
           "order": todos.length,
           due_date: removed.dueDate || null,
           sub_tasks: removed.subTasks || null
-        }]);
+        };
+        const { error } = await retryTodoInsertWithFallback(restoreRow);
+        if (error) {
+          alert(`할 일을 복원하지 못했습니다: ${error.message || '알 수 없는 오류'}`);
+        }
       }
       logActivity({
         type: 'todo_added',
@@ -1592,42 +2448,6 @@ const App: React.FC = () => {
         meta: { id: removed.id },
       });
     });
-  };
-
-  const requestAiCommentForEntry = (entry: Pick<JournalEntry, 'id' | 'title' | 'content' | 'mood'>) => {
-    if (!settings.autoAiReactions || !activeGeminiConfig?.apiKey) return;
-    if (pendingJournalAiCommentIdsRef.current.has(entry.id)) return;
-
-    const existingEntry = entries.find(e => e.id === entry.id);
-    if (existingEntry?.comments && existingEntry.comments.length > 0) return;
-
-    pendingJournalAiCommentIdsRef.current.add(entry.id);
-    import('./utils/triggerEngine')
-      .then(({ generateJournalComment }) =>
-        generateJournalComment(
-          { title: entry.title, content: entry.content, mood: entry.mood },
-          events,
-          todos,
-          aiAgents,
-          (comment) => addJournalComment(entry.id, comment),
-          activeGeminiConfig.apiKey,
-          (stats) => setSettings(prev => ({
-            ...prev,
-            apiUsage: {
-              totalRequests: (prev.apiUsage?.totalRequests || 0) + stats.totalRequests,
-              totalTokens: (prev.apiUsage?.totalTokens || 0) + stats.totalTokens,
-              lastRequestDate: stats.lastRequestDate,
-            }
-          })),
-          activeGeminiConfig.modelName
-        )
-      )
-      .catch((error) => {
-        console.error('Failed to load triggerEngine for AI comment:', error);
-      })
-      .finally(() => {
-        pendingJournalAiCommentIdsRef.current.delete(entry.id);
-      });
   };
 
   const addEntry = async (title: string, content: string, category: string = '메모장', mood: string = 'neutral') => {
@@ -1664,22 +2484,6 @@ const App: React.FC = () => {
         label: `일기 취소(Undo)`,
         meta: { id: newEntry.id },
       });
-    });
-
-    // AI 트리거 (비차단형으로 실행)
-    triggerAI({
-      trigger: 'journal_added',
-      data: {
-        mood: mood === 'good' ? '좋음' : mood === 'bad' ? '나쁨' : '보통',
-      },
-    });
-
-    // AI 댓글 요청 (상태 업데이트 전 데이터 직접 전달)
-    requestAiCommentForEntry({
-      id: newEntry.id,
-      title: newEntry.title,
-      content: newEntry.content,
-      mood: newEntry.mood,
     });
 
     // DB 저장은 비동기로 처리 (UI와 AI 반응을 방해하지 않음)
@@ -1755,17 +2559,6 @@ const App: React.FC = () => {
     }
   }
 
-  const handleRequestAiComment = (entryId: string) => {
-    const entry = entries.find(e => e.id === entryId);
-    if (!entry) return;
-    requestAiCommentForEntry({
-      id: entry.id,
-      title: entry.title,
-      content: entry.content,
-      mood: entry.mood,
-    });
-  };
-
   const addPost = (post: AiPost) => setPosts(prev => [post, ...prev]);
   const deletePost = (id: string) => setPosts(prev => prev.filter(p => p.id !== id));
 
@@ -1812,7 +2605,6 @@ const App: React.FC = () => {
 
   const navItems: { id: ViewState; label: string; icon: React.ElementType }[] = [
     { id: 'chat', label: '새 채팅', icon: MessageCircle },
-    { id: 'board', label: 'AI 일기장', icon: Sparkles },
     { id: 'calendar', label: '캘린더', icon: CalendarIcon },
     { id: 'todo', label: '할 일', icon: CheckSquare },
     { id: 'journal', label: '메모장', icon: BookOpen },
@@ -1872,24 +2664,6 @@ const App: React.FC = () => {
             onUpdateEntry={updateEntry}
             onDeleteEntry={deleteEntry}
             onAddCategory={addJournalCategory}
-            onAddComment={addJournalComment}
-            onRequestAiComment={handleRequestAiComment}
-            agents={aiAgents}
-          />
-        );
-      case 'board':
-        return (
-          <CommunityBoardView
-            agents={aiAgents}
-            posts={communityPosts}
-            selectedId={selectedAiPostId}
-            onSelectId={setSelectedAiPostId}
-            selectedAgentId={selectedAiAgentId}
-            onUpdatePost={updateCommunityPost}
-            onDeletePost={deleteCommunityPost}
-            onAddComment={addCommunityComment}
-            onUpdateOrder={(newPosts) => setCommunityPosts(newPosts)}
-            onSelectAgent={setSelectedAiAgentId}
           />
         );
       case 'settings':
@@ -1924,8 +2698,14 @@ const App: React.FC = () => {
         const selectedChatAgents = sessionAgentIds
           .map(id => aiAgents.find(agent => agent.id === id))
           .filter(Boolean) as AIAgent[];
+        const personaMemoryBucketsByAgent = buildPersonaMemoryBuckets(personaMemories);
         const personaMemoryContextByAgent = sessionAgentIds.reduce((acc, agentId) => {
-          const memory = buildPersonaMemoryContext(chatSessions, agentId, activeChatSessionId);
+          const memory = buildPersonaMemoryContext(
+            chatSessions,
+            agentId,
+            activeChatSessionId,
+            personaMemoryBucketsByAgent[agentId] || EMPTY_PERSONA_MEMORY_BUCKETS,
+          );
           if (memory) acc[agentId] = memory;
           return acc;
         }, {} as Record<string, string>);
@@ -1963,10 +2743,12 @@ const App: React.FC = () => {
               }
             }}
             onUpdateAgent={updateAiAgent}
-            onUserMessage={(text) => {
+            onUserMessage={(text, context) => {
               const nextAgentIds = sessionAgentIds.length > 0
                 ? sessionAgentIds
                 : (aiAgents[0]?.id ? [aiAgents[0].id] : []);
+              const addressedAgentIds = dedupeAgentIds(context?.addressedAgentIds || []);
+              const memoryTargetIds = addressedAgentIds.length > 0 ? addressedAgentIds : nextAgentIds;
               if (!activeChatSessionId) {
                 const newId = crypto.randomUUID();
                 const newSession: ChatSession = {
@@ -1988,6 +2770,7 @@ const App: React.FC = () => {
                 ));
               }
               appendChatObservation(text);
+              capturePersonaMemoriesFromUserMessage(text, memoryTargetIds);
             }}
             initialMessages={activeSession?.messages}
             currentSessionId={activeChatSessionId}
@@ -2601,9 +3384,11 @@ const App: React.FC = () => {
         </header>
 
         {/* Scrollable View Content */}
-        <div className={`flex-1 relative scroll-smooth ${['todo', 'journal', 'board', 'calendar'].includes(currentView) ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-          <div className={`h-full mx-auto ${['todo', 'journal', 'board', 'calendar'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1200px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
-            {renderView()}
+        <div className={`flex-1 relative scroll-smooth ${['todo', 'journal', 'calendar'].includes(currentView) ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+          <div className={`h-full mx-auto ${['todo', 'journal', 'calendar'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1200px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
+            <ViewErrorBoundary view={currentView} onRecover={() => setCurrentView('chat')}>
+              {renderView()}
+            </ViewErrorBoundary>
           </div>
         </div>
 

@@ -26,6 +26,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
   // Form State
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
   const [isAllDay, setIsAllDay] = useState(false);
@@ -65,9 +66,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(monthStart);
   const startDate = startOfWeek(monthStart);
-  const endDate = endOfWeek(monthEnd);
+  const calendarEndDate = endOfWeek(monthEnd);
 
-  const calendarDays = eachDayOfInterval({ start: startDate, end: endDate });
+  const calendarDays = eachDayOfInterval({ start: startDate, end: calendarEndDate });
 
   const handlePrevMonth = () => setCurrentDate(subMonths(currentDate, 1));
   const handleNextMonth = () => setCurrentDate(addMonths(currentDate, 1));
@@ -99,7 +100,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
     setEditId(null);
     setEditingEvent(null);
     setTitle('');
-    setDate(initialDate ? format(initialDate, 'yyyy-MM-dd') : (selectedDate ? format(selectedDate, 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd')));
+    const initialDateValue = initialDate ? format(initialDate, 'yyyy-MM-dd') : (selectedDate ? format(selectedDate, 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
+    setDate(initialDateValue);
+    setEndDate(initialDateValue);
     setStartTime('');
     setEndTime('');
     setIsAllDay(false);
@@ -118,6 +121,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
     setEditingEvent(event);
     setTitle(event.title);
     setDate(event.date);
+    setEndDate(event.endDate || event.date);
     setStartTime(event.startTime || '');
     setEndTime(event.endTime || '');
     setIsAllDay(event.isAllDay || false);
@@ -132,11 +136,23 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
   const handleSave = () => {
     if (!title.trim() || !date) return;
+    const resolvedEndDate = endDate || date;
+
+    if (resolvedEndDate < date) {
+      alert('종료일은 시작일보다 빠를 수 없습니다.');
+      return;
+    }
+
+    if (!isAllDay && startTime && endTime && resolvedEndDate === date && endTime < startTime) {
+      alert('같은 날 일정이면 종료 시간은 시작 시간보다 늦어야 합니다.');
+      return;
+    }
 
     const eventData: CalendarEvent = {
       id: isEditing && editId ? editId : crypto.randomUUID(),
       title,
       date,
+      endDate: resolvedEndDate,
       startTime: !isAllDay ? (startTime || undefined) : undefined,
       endTime: !isAllDay ? (endTime || undefined) : undefined,
       isAllDay,
@@ -213,7 +229,11 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                   {week.map((day) => {
                     const dayEvents = (events || []).filter(e => {
                       try {
-                        return e.date && isSameDay(parseISO(e.date), day);
+                        if (!e.date) return false;
+                        const eventStart = parseISO(e.date);
+                        const eventEnd = parseISO(e.endDate || e.date);
+                        const dayTime = day.getTime();
+                        return eventStart.getTime() <= dayTime && eventEnd.getTime() >= dayTime;
                       } catch (e) {
                         console.error("Error parsing event date:", e);
                         return false;
@@ -279,7 +299,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                 shadow-sm leading-tight
                               `}
                               >
-                                {!ev.isAllDay && ev.startTime && <span className="mr-1.5 opacity-80 font-normal text-[11px]">{ev.startTime}</span>}
+                                {!ev.isAllDay && ev.startTime && isSameDay(parseISO(ev.date), day) && <span className="mr-1.5 opacity-80 font-normal text-[11px]">{ev.startTime}</span>}
                                 {ev.title}
                               </div>
                             );
@@ -350,7 +370,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                     {/* Date */}
                     <div className="flex items-center group">
                       <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
-                        <CalendarIcon size={16} className="text-[#9b9a97]" /> 날짜
+                        <CalendarIcon size={16} className="text-[#9b9a97]" /> 시작일
                       </div>
                       <div className="flex-1 min-h-[36px] flex items-center">
                         <input
@@ -358,6 +378,21 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                           className="w-fit bg-transparent border-none focus:ring-0 p-1.5 -ml-1.5 text-[#37352f] text-[14px] cursor-pointer hover:bg-[#f1f1f0] rounded-lg transition-colors font-medium"
                           value={date}
                           onChange={(e) => setDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center group">
+                      <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
+                        <CalendarIcon size={16} className="text-[#9b9a97]" /> 종료일
+                      </div>
+                      <div className="flex-1 min-h-[36px] flex items-center">
+                        <input
+                          type="date"
+                          className="w-fit bg-transparent border-none focus:ring-0 p-1.5 -ml-1.5 text-[#37352f] text-[14px] cursor-pointer hover:bg-[#f1f1f0] rounded-lg transition-colors font-medium"
+                          value={endDate}
+                          min={date}
+                          onChange={(e) => setEndDate(e.target.value)}
                         />
                       </div>
                     </div>

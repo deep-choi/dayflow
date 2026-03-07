@@ -23,6 +23,7 @@ export const debugManualSync = async (
     }
 ): Promise<SyncDebugResult> => {
     const logs: string[] = [];
+    const errors: string[] = [];
     logs.push(`Starting manual sync for user: ${userId}`);
 
     // 1. Events
@@ -35,7 +36,7 @@ export const debugManualSync = async (
                 user_id: userId,
                 title: e.title,
                 start_time: e.date + (e.startTime ? `T${e.startTime}:00` : 'T00:00:00'),
-                end_time: e.date + (e.endTime ? `T${e.endTime}:00` : 'T23:59:59'),
+                end_time: (e.endDate || e.date) + (e.endTime ? `T${e.endTime}:00` : 'T23:59:59'),
                 description: e.description || null,
                 tags: e.type ? [e.type] : [],
             }));
@@ -44,7 +45,9 @@ export const debugManualSync = async (
         }
         logs.push('Events synced successfully (UPSERT).');
     } catch (e: any) {
-        logs.push(`[ERROR] Events sync failed: ${e.message}`);
+        const message = e?.message || 'unknown error';
+        logs.push(`[ERROR] Events sync failed: ${message}`);
+        errors.push(`events: ${message}`);
     }
 
     // 2. Todos
@@ -64,7 +67,9 @@ export const debugManualSync = async (
         }
         logs.push('Todos synced successfully (UPSERT).');
     } catch (e: any) {
-        logs.push(`[ERROR] Todos sync failed: ${e.message}`);
+        const message = e?.message || 'unknown error';
+        logs.push(`[ERROR] Todos sync failed: ${message}`);
+        errors.push(`todos: ${message}`);
     }
 
     // 3. User Data
@@ -81,7 +86,9 @@ export const debugManualSync = async (
         if (userDataErr) throw new Error(`UserData Upsert Failed: ${userDataErr.message}`);
         logs.push('User Data synced successfully.');
     } catch (e: any) {
-        logs.push(`[ERROR] UserData sync failed: ${e.message}`);
+        const message = e?.message || 'unknown error';
+        logs.push(`[ERROR] UserData sync failed: ${message}`);
+        errors.push(`user_data: ${message}`);
     }
 
     // 4. AI Agents
@@ -106,8 +113,14 @@ export const debugManualSync = async (
         }
         logs.push('AI Agents synced successfully (UPSERT).');
     } catch (e: any) {
-        logs.push(`[ERROR] Agents sync failed: ${e.message}`);
+        const message = e?.message || 'unknown error';
+        logs.push(`[ERROR] Agents sync failed: ${message}`);
+        errors.push(`ai_agents: ${message}`);
     }
 
-    return { success: true, logs, error: undefined };
+    return {
+        success: errors.length === 0,
+        logs,
+        error: errors.length > 0 ? errors.join(' | ') : undefined
+    };
 };

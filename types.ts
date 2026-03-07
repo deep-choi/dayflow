@@ -66,6 +66,7 @@ export interface CalendarEvent {
   id: string;
   title: string;
   date: string; // ISO date string YYYY-MM-DD
+  endDate?: string; // ISO date string YYYY-MM-DD
   startTime?: string; // HH:mm
   endTime?: string; // HH:mm
   isAllDay?: boolean;
@@ -191,6 +192,23 @@ export interface ChatSession {
   lastMessageAt: string;
   agentId?: string; // ID of the AI agent for this session
   agentIds?: string[]; // selected AI agent ids for this session (group chat)
+}
+
+export type PersonaMemoryType = 'fact' | 'preference' | 'goal';
+
+export interface PersonaMemory {
+  id: string;
+  userId: string;
+  agentId: string;
+  type: PersonaMemoryType;
+  key: string;
+  content: string;
+  confidence: number;
+  observationCount: number;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type ChatMode = 'basic' | 'learning';
