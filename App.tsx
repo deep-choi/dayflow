@@ -2450,7 +2450,6 @@ const App: React.FC = () => {
       });
 
       // Automatically add to calendar when completed
-      // Use todo.dueDate if available, otherwise use LOCAL today date
       const eventDate = todo.dueDate || format(new Date(), 'yyyy-MM-dd');
       const newEvent: CalendarEvent = {
         id: crypto.randomUUID(),
@@ -2458,10 +2457,9 @@ const App: React.FC = () => {
         date: eventDate,
         isAllDay: true,
         type: calendarTags.find(t => t.id === 'tag_2') ? 'tag_2' : (calendarTags[0]?.id || 'tag_1'),
-        description: '할 일을 완료하여 자동으로 추가된 일정입니다.'
+        description: `할 일을 완료하여 자동으로 추가된 일정입니다. [TODO_LINK:${todo.id}]`
       };
       
-      // Update local state. The syncEvents useEffect will handle DB persistence.
       setEvents(prev => [...prev, newEvent]);
 
       logActivity({
@@ -2476,21 +2474,27 @@ const App: React.FC = () => {
           await supabase.from('todos').update({ completed: false }).eq('id', id);
         }
         
-        // Remove the automatically added event from local state
         setEvents(prev => prev.filter(e => e.id !== newEvent.id));
-        // The syncEvents useEffect will handle the deletion from DB (via getDeletedIds logic)
 
         logActivity({
           type: 'todo_uncompleted',
           label: `완료 취소(Undo): ${todo.text}`,
           meta: { id: todo.id },
         });
-        logActivity({
-          type: 'event_deleted',
-          label: `일정 자동 추가 취소: ${newEvent.title}`,
-          meta: { id: newEvent.id },
-        });
       });
+    } else {
+      // If unchecked, remove any automatically added calendar events for this todo
+      const linkTag = `[TODO_LINK:${todo.id}]`;
+      const eventsToRemove = events.filter(e => e.description?.includes(linkTag));
+      
+      if (eventsToRemove.length > 0) {
+        setEvents(prev => prev.filter(e => !e.description?.includes(linkTag)));
+        logActivity({
+          type: 'todo_uncompleted',
+          label: `할 일 완료 취소: ${todo.text}`,
+          meta: { id: todo.id },
+        });
+      }
     }
   };
 
