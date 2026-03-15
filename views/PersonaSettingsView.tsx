@@ -165,43 +165,6 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
           </div>
         ))}
       </div>
-
-      <div className="bg-white border border-[#e9e9e8] rounded-xl p-5 mb-8">
-        <h3 className="text-lg text-[#37352f] mb-3">동작 옵션</h3>
-        <label className="flex items-center justify-between gap-4 py-3 cursor-pointer border-b border-[#f2f2f0] last:border-0 relative">
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-[#37352f] truncate">AI 자동 반응</div>
-            <div className="text-xs text-[#9b9a97] mt-0.5 leading-relaxed break-keep">일기, 할 일, 일정 이벤트에 AI가 반응을 자동 생성합니다.</div>
-          </div>
-          <div className="relative inline-flex items-center shrink-0">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={settings.autoAiReactions}
-              onChange={(e) => onUpdateSettings({ ...settings, autoAiReactions: e.target.checked })}
-            />
-            <div className="w-11 h-6 bg-[#d9d9d7] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-[#d9d9d7] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#37352f] shadow-inner"></div>
-          </div>
-        </label>
-        <label className="flex items-center justify-between gap-4 py-3 cursor-pointer border-b border-[#f2f2f0] last:border-0 relative">
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-[#37352f] truncate">채팅 실행 전 확인</div>
-            <div className="text-xs text-[#9b9a97] mt-0.5 leading-relaxed break-keep">채팅에서 일정/할 일 생성 전에 추가 확인 단계를 거칩니다.</div>
-          </div>
-          <div className="relative inline-flex items-center shrink-0">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={settings.chatActionConfirm}
-              onChange={(e) => onUpdateSettings({ ...settings, chatActionConfirm: e.target.checked })}
-            />
-            <div className="w-11 h-6 bg-[#d9d9d7] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-[#d9d9d7] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#37352f] shadow-inner"></div>
-          </div>
-        </label>
-      </div>
-
-
-
       {editingId && draft && (
         <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4 overflow-hidden">
           <div className="w-full h-full sm:h-auto sm:max-w-xl bg-white sm:rounded-2xl border-x sm:border border-[#e9e9e8] shadow-2xl max-h-none sm:max-h-[85vh] flex flex-col overflow-hidden">

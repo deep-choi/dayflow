@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "check:encoding": "node scripts/check-encoding.cjs",
+    "typecheck": "tsc --noEmit",
     "build": "npm run check:encoding && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist"

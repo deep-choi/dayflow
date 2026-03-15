@@ -48,6 +48,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                         id: data.user.id,
                         email: data.user.email,
                         name: profile?.name || data.user.email?.split('@')[0],
+                        avatar: profile?.avatar_url || data.user.user_metadata?.avatar_url || '',
                         geminiApiKey: profile?.gemini_api_key || ''
                     };
                     onLogin(userData);

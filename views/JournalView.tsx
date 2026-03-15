@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { JournalEntry, JournalCategory, Comment, AIAgent } from '../types';
+import { JournalEntry, JournalCategory } from '../types';
 import {
   Trash2,
   Plus,
@@ -14,16 +14,13 @@ import {
   Hash,
   Layout,
   ChevronRight,
-  Filter,
-  MessageSquare,
-  Sparkles
+  Filter
 } from 'lucide-react';
 import { format, parseISO, isValid } from 'date-fns';
 import { ko } from 'date-fns/locale';
 
 interface JournalViewProps {
   entries: JournalEntry[];
-  agents: AIAgent[];
   categories: JournalCategory[];
   selectedId: string | null;
   selectedCategory: string | 'all';
@@ -35,13 +32,10 @@ interface JournalViewProps {
   onUpdateEntry: (id: string, updates: Partial<JournalEntry>) => void;
   onDeleteEntry: (id: string) => void;
   onAddCategory: (name: string) => void;
-  onAddComment: (entryId: string, comment: Omit<Comment, 'id' | 'timestamp'>) => void;
-  onRequestAiComment: (id: string) => void;
 }
 
 const JournalView: React.FC<JournalViewProps> = ({
   entries = [],
-  agents = [],
   categories = [],
   selectedId,
   selectedCategory,
@@ -52,9 +46,7 @@ const JournalView: React.FC<JournalViewProps> = ({
   onAddEntry,
   onUpdateEntry,
   onDeleteEntry,
-  onAddCategory,
-  onAddComment,
-  onRequestAiComment
+  onAddCategory
 }) => {
   const [isWriting, setIsWriting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -62,7 +54,6 @@ const JournalView: React.FC<JournalViewProps> = ({
   const [isListOpen, setIsListOpen] = useState(true);
   const [visibleRows, setVisibleRows] = useState(5);
   const actionMenuRef = useRef<HTMLDivElement>(null);
-  const triedAiRef = useRef<Set<string>>(new Set());
 
   // Write Form State
   const [newTitle, setNewTitle] = useState('');
@@ -100,16 +91,7 @@ const JournalView: React.FC<JournalViewProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Fail-safe: Auto-request AI comment if missing
   const selectedEntry = (entries || []).find(e => e.id === selectedId);
-  useEffect(() => {
-    if (selectedEntry && (!selectedEntry.comments || selectedEntry.comments.length === 0)) {
-      if (!triedAiRef.current.has(selectedEntry.id)) {
-        onRequestAiComment(selectedEntry.id);
-        triedAiRef.current.add(selectedEntry.id);
-      }
-    }
-  }, [selectedId, selectedEntry, onRequestAiComment]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -167,6 +149,17 @@ const JournalView: React.FC<JournalViewProps> = ({
       return format(date, 'yyyy년 M월 d일 HH:mm', { locale: ko });
     } catch (e) {
       return '날짜 정보가 없습니다';
+    }
+  };
+
+  const safeFormatDate = (dateStr: string | undefined, pattern: string, fallback = '날짜 정보가 없습니다') => {
+    if (!dateStr) return fallback;
+    try {
+      const parsed = parseISO(dateStr);
+      if (!isValid(parsed)) return fallback;
+      return format(parsed, pattern, { locale: ko });
+    } catch {
+      return fallback;
     }
   };
 
@@ -229,7 +222,7 @@ const JournalView: React.FC<JournalViewProps> = ({
                             </span>
                           </div>
                           <div className="w-32 flex-shrink-0 text-right text-[#9b9a97] text-[13px] tabular-nums">
-                            {format(parseISO(entry.date), 'yyyy. M. d.', { locale: ko })}
+                            {safeFormatDate(entry.date, 'yyyy. M. d.', '-')}
                           </div>
                         </button>
                       ))
@@ -360,63 +353,8 @@ const JournalView: React.FC<JournalViewProps> = ({
                   </div>
                 </div>
 
-                <div className="space-y-16">
-                  <div className="text-[16px] leading-[1.8] text-[#37352f] whitespace-pre-wrap min-h-[100px] prose prose-slate max-w-none">
-                    {selectedEntry.content}
-                  </div>
-
-                  {/* AI Comment Section */}
-                  <div className="pt-16 border-t border-[#f1f1f0] space-y-10">
-                    <div className="flex items-center gap-2.5">
-                      <MessageSquare size={20} className="text-[#37352f]" />
-                      <h3 className="text-lg font-medium tracking-tight">AI의 반응 ({selectedEntry.comments?.length || 0})</h3>
-                    </div>
-                    {(!selectedEntry.comments || selectedEntry.comments.length === 0) && (
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#9b9a97] bg-[#f7f7f5] rounded-lg animate-pulse">
-                        <Sparkles size={12} />
-                        AI가 분석하고 있습니다...
-                      </div>
-                    )}
-
-                    {selectedEntry.comments && selectedEntry.comments.length > 0 ? (
-                      <div className="space-y-8">
-                        {selectedEntry.comments.map(comment => {
-                          const agent = (agents || []).find(a => a.id === comment.authorId);
-                          const avatar = agent?.avatar;
-                          const emoji = agent?.emoji || comment.authorEmoji;
-
-                          return (
-                            <div key={comment.id} className="flex gap-4">
-                              <div className="w-10 h-10 rounded-full bg-[#f7f7f5] flex items-center justify-center text-lg flex-shrink-0 overflow-hidden border border-[#e9e9e8]">
-                                {(agent?.avatar) ? (
-                                  <img src={agent.avatar} alt={comment.authorName} className="w-full h-full object-cover" />
-                                ) : (
-                                  comment.authorEmoji || agent?.emoji || '🤖'
-                                )}
-                              </div>
-                              <div className="flex-1 space-y-1.5">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-bold text-[#37352f]">{agent?.name || comment.authorName}</span>
-                                  <span className="text-[11px] text-[#9b9a97]">{formatFullDate(comment.timestamp)}</span>
-                                </div>
-                                <p className="text-[15px] leading-relaxed text-[#37352f] bg-[#fbfbfa] p-3 rounded-tr-xl rounded-br-xl rounded-bl-xl border border-[#f1f1f0]">
-                                  {comment.content}
-                                </p>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <div className="text-center py-10 bg-[#fbfbfa] rounded-xl border border-dashed border-[#e9e9e8]">
-                        <p className="text-sm text-[#9b9a97] mb-3">AI가 곧 반응을 남길 거예요.</p>
-                        <div className="inline-flex items-center gap-2 px-4 py-2 text-[#9b9a97] text-sm font-medium">
-                          <Sparkles size={14} className="text-[#f59e0b] animate-pulse" />
-                          분석 중...
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                <div className="text-[16px] leading-[1.8] text-[#37352f] whitespace-pre-wrap min-h-[100px] prose prose-slate max-w-none">
+                  {selectedEntry.content}
                 </div>
               </div>
             </div>

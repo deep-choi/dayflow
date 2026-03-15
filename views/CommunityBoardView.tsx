@@ -120,6 +120,17 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
         }
     };
 
+    const safeFormatTimestamp = (dateStr: string | undefined, pattern: string, fallback = '날짜 정보가 없습니다') => {
+        if (!dateStr) return fallback;
+        try {
+            const parsed = parseISO(dateStr);
+            if (!isValid(parsed)) return fallback;
+            return format(parsed, pattern, { locale: ko });
+        } catch {
+            return fallback;
+        }
+    };
+
     const selectedPost = (posts || []).find(p => p.id === selectedId);
     const selectedAgent = agents.find(a => a.id === selectedAgentId);
 
@@ -170,7 +181,8 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                                         .slice(0, visibleRows)
                                         .map(post => {
-                                            const lines = post.content.split('\n');
+                                            const content = typeof post.content === 'string' ? post.content : '';
+                                            const lines = content.split('\n');
                                             const firstLine = lines[0] || '';
                                             const hasExplicitTitle = firstLine.startsWith('제목:');
                                             const displayTitle = hasExplicitTitle
@@ -195,7 +207,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                         </div>
                                                     </div>
                                                     <div className="w-32 flex-shrink-0 text-right text-[#9b9a97] text-[13px] tabular-nums">
-                                                        {format(parseISO(post.timestamp), 'yyyy. M. d.', { locale: ko })}
+                                                        {safeFormatTimestamp(post.timestamp, 'yyyy. M. d.', '-')}
                                                     </div>
                                                 </button>
                                             );
@@ -233,7 +245,8 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                 const isEditingThis = isEditing && isCurrent;
 
                                 // Extract Title and Body
-                                const lines = post.content.split('\n');
+                                const content = typeof post.content === 'string' ? post.content : '';
+                                const lines = content.split('\n');
                                 const firstLine = lines[0] || '';
                                 const hasExplicitTitle = firstLine.startsWith('제목:');
                                 const displayTitle = hasExplicitTitle
@@ -241,7 +254,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                     : (firstLine.replace(/#+\s*/, '') || '제목 없음');
                                 const displayBody = lines.slice(1).join('\n').trim();
 
-                                const formattedDate = format(parseISO(post.timestamp), 'yyyy년 M월 d일 HH:mm', { locale: ko });
+                                const formattedDate = safeFormatTimestamp(post.timestamp, 'yyyy년 M월 d일 HH:mm');
 
                                 return (
                                     <article
@@ -333,7 +346,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                                         <div className="flex-1 space-y-1">
                                                                             <div className="flex items-center gap-2">
                                                                                 <span className="text-xs font-bold text-[#37352f]">{comment.authorName}</span>
-                                                                                <span className="text-[10px] text-[#9b9a97]">{format(parseISO(comment.timestamp), 'MM.dd HH:mm', { locale: ko })}</span>
+                                                                                <span className="text-[10px] text-[#9b9a97]">{safeFormatTimestamp(comment.timestamp, 'MM.dd HH:mm', '-')}</span>
                                                                             </div>
                                                                             <p className="text-sm text-[#37352f] bg-[#f7f7f5]/50 p-3 rounded-2xl border border-[#f1f1f0] inline-block">
                                                                                 {comment.content}

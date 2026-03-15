@@ -4,6 +4,7 @@
 create table profiles (
   id uuid references auth.users on delete cascade primary key,
   name text,
+  avatar_url text,
   gemini_api_key text,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
@@ -87,6 +88,7 @@ alter table community_posts enable row level security;
 
 -- RLS Policies: 사용자는 본인의 데이터만 관리할 수 있음
 create policy "Users can view own profile" on profiles for select using (auth.uid() = id);
+create policy "Users can insert own profile" on profiles for insert with check (auth.uid() = id);
 create policy "Users can update own profile" on profiles for update using (auth.uid() = id);
 
 create policy "Users can manage own todo lists" on todo_lists for all using (auth.uid() = user_id);

@@ -28,5 +28,10 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "dist",
+    "dev-dist",
+    "supabase/functions"
+  ]
 }

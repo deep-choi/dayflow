@@ -23,4 +23,13 @@ View your app in AI Studio: https://ai.studio/apps/drive/1Duckm0yaNKJzyW14PA3wGB
 
 For AI diary generation while the browser is closed, see:
 
-- `docs/SERVER_AI_AUTOMATION.md`
+- [docs/SERVER_AI_AUTOMATION.md](docs/SERVER_AI_AUTOMATION.md)
+
+## Deployment (Default)
+
+- Primary deploy target: Firebase Hosting (`life-a01e2`)
+- Build: `npm run build`
+- Deploy: `npx firebase deploy --only hosting`
+- Hosting URL: `https://life-a01e2.web.app`
+
+Note: `npm run deploy` currently publishes to `gh-pages`. Firebase is the default operational deploy target.

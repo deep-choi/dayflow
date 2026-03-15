@@ -32,7 +32,7 @@ export const callGeminiAPI = async (
     options?: GeminiCallOptions
 ): Promise<string> => {
     if (!apiKey) {
-        throw new Error('API Key揶쎛 ?袁⑹뒄??몃빍??');
+        throw new Error('API Key가 필요합니다.');
     }
 
     const normalizedModelName = normalizeGeminiModelName(modelName);
@@ -59,7 +59,7 @@ export const callGeminiAPI = async (
 
         if (!response.ok) {
             const errorData = await response.json();
-            throw new Error(errorData.error?.message || 'API ?紐꾪뀱 餓???살첒揶쎛 獄쏆뮇源??됰뮸??덈뼄.');
+            throw new Error(errorData.error?.message || 'API 요청 중 오류가 발생했습니다.');
         }
 
         const data: GeminiResponse = await response.json();
@@ -70,7 +70,7 @@ export const callGeminiAPI = async (
             .trim();
 
         if (!text) {
-            throw new Error('?臾먮뼗 ?怨쀬뵠?怨? ???뼓??????곷뮸??덈뼄.');
+            throw new Error('응답이 비어 있습니다.');
         }
 
         // Update usage stats if callback provided

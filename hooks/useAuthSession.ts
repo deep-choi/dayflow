@@ -21,7 +21,7 @@ const mapSupabaseUser = (sessionUser: any, profile: any): User => ({
   id: sessionUser.id,
   email: sessionUser.email || '',
   name: profile?.name || sessionUser.user_metadata?.full_name || sessionUser.email?.split('@')[0] || 'User',
-  avatar: sessionUser.user_metadata?.avatar_url || '',
+  avatar: profile?.avatar_url || sessionUser.user_metadata?.avatar_url || '',
   geminiApiKey: profile?.gemini_api_key || '',
 });
 

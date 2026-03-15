@@ -89,7 +89,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         // Keep ALL connections isActive:true — activeConnectionId tracks the global default
         const normalized = normalizedConnections.map(c => ({ ...c, isActive: true }));
         const activeGemini = normalized.find(c => c.id === resolvedId && c.provider === 'gemini') || normalized.find(c => c.provider === 'gemini');
-        onUpdateSettings({ ...settings, apiConnections: normalized, activeConnectionId: resolvedId, geminiApiKey: activeGemini?.apiKey || settings.geminiApiKey });
+        onUpdateSettings({ ...settings, apiConnections: normalized, activeConnectionId: resolvedId, geminiApiKey: activeGemini?.apiKey || '' });
     };
     const updateConnectionModel = (connectionId: string, modelName: string) => {
         const updated = connections.map(conn => {
@@ -331,7 +331,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl p-6">
                             <h3 className="font-bold mb-1 text-[#37352f]">보안 안내</h3>
-                            <p className="text-sm text-[#787774] leading-relaxed">API Key는 서버로 전송되지 않고 브라우저 로컬 스토리지에만 저장됩니다.</p>
+                            <p className="text-sm text-[#787774] leading-relaxed">API Key는 브라우저와 앱 데이터 동기화 저장소에 보관될 수 있습니다. 개인용 키 사용을 권장합니다.</p>
                         </div>
                         <div className="bg-white border border-[#e9e9e8] rounded-xl p-6">
                             <h3 className="font-bold mb-1 text-[#37352f]">사용량 안내</h3>
@@ -412,7 +412,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     <div className="bg-white border border-[#e9e9e8] rounded-xl p-5 space-y-1">
                         <h3 className="text-lg text-[#37352f] mb-3">개별 초기화</h3>
                         {[
-                            { label: 'AI 일기장', desc: 'AI가 작성한 일기 게시글을 모두 삭제합니다.', action: onClearPosts },
+                            { label: '레거시 AI 게시글', desc: '이전 버전에서 생성된 AI 게시글 데이터를 정리합니다.', action: onClearPosts },
                             { label: '캘린더', desc: '저장된 일정 데이터를 모두 삭제합니다.', action: onClearEvents },
                             { label: '할 일', desc: '할 일 목록과 항목을 모두 삭제합니다.', action: onClearTodos },
                             { label: '메모장', desc: '작성한 메모/일기를 모두 삭제합니다.', action: onClearEntries },

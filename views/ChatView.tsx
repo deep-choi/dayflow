@@ -2,9 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { CalendarEvent, Todo, JournalEntry, AiPost, TodoList, AppSettings, AIAgent, ChatMessage, ChatMode } from '../types';
 import { generateLifeInsight, generateChatResponse, ChatActionResult, callGeminiImageGeneration } from '../services/geminiService';
 import { Sparkles, ChevronRight, Plus } from '../components/Icons';
-import { format, parseISO, isSameDay } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale';
-import { getAgentAIConfig, isChatSupportedProvider, isImageGenerationModel, isVideoGenerationModel, findMediaConnection } from '../utils/aiConfig';
+import { getAgentAIConfig, isChatSupportedProvider, isImageGenerationModel, isVideoGenerationModel, findMediaConnectionForProvider } from '../utils/aiConfig';
 import { callXaiImageGeneration, callXaiVideoGeneration } from '../services/xaiService';
 import { ApiUsageStats } from '../types';
 
@@ -28,7 +28,10 @@ interface ChatViewProps {
     selectedAgents?: AIAgent[];
     onSelectAgents?: (ids: string[]) => void;
     onUpdateAgent?: (agentId: string, updates: Partial<AIAgent>) => void;
-    onUserMessage?: (text: string) => void;
+    onUserMessage?: (
+        text: string,
+        context?: { activeAgentIds: string[]; addressedAgentIds: string[] }
+    ) => void;
     initialMessages?: ChatMessage[];
     onUpdateMessages?: (sessionId: string, messages: ChatMessage[]) => void;
     currentSessionId?: string | null;
@@ -169,29 +172,6 @@ const getTimeBasedGreeting = (): string => {
     return '늦은 밤이네요. 오늘도 수고하셨어요 🌃';
 };
 
-// Helper: Get today's summary
-const getTodaySummary = (events: CalendarEvent[], todos: Todo[]): string => {
-    const pendingTodos = todos.filter(t => !t.completed).length;
-    const today = new Date();
-    const todayEvents = events.filter(e => {
-        if (!e.date) return false;
-        try {
-            return isSameDay(parseISO(e.date), today);
-        } catch {
-            return false;
-        }
-    }).length;
-
-    if (todayEvents === 0 && pendingTodos === 0) {
-        return '오늘은 예정된 일정이나 할 일이 없어요. 여유로운 하루를 보내세요!';
-    }
-
-    let summary = '';
-    if (todayEvents > 0) summary += `오늘 **${todayEvents}개의 일정**이 있고, `;
-    if (pendingTodos > 0) summary += `**${pendingTodos}개의 할 일**이 남아있어요.`;
-    return summary.replace(/, $/, '.');
-};
-
 const ChatView: React.FC<ChatViewProps> = ({
     events,
     todos,
@@ -241,10 +221,10 @@ const ChatView: React.FC<ChatViewProps> = ({
         return {
             id: 'welcome',
             role: 'assistant',
-            content: `주인님, ${getTimeBasedGreeting()}\n\n${getTodaySummary(events, todos)}\n\n무엇을 도와드릴까요?`,
+            content: `주인님, ${getTimeBasedGreeting()}\n\n이번 채팅에서는 사용자가 직접 말해준 내용만 기준으로 대화할게요.\n무엇을 도와드릴까요?`,
             timestamp: new Date().toISOString(),
             agentId: agent?.id,
-            quickReplies: ['오늘 일정 알려줘', '할 일 추가', '오늘 기분 기록', '주간 분석해줘'],
+            quickReplies: ['요즘 고민 얘기하기', '이미지 만들어줘', '아이디어 정리해줘', '그냥 대화하기'],
         };
     };
 
@@ -579,13 +559,13 @@ const ChatView: React.FC<ChatViewProps> = ({
             if (action.data?.step === 1) {
                 return {
                     content: `주인님, 반가워요! 🎉\n\n저와 어떤 이야기를 나누고 싶으세요?\n\n편하게 선택해주시거나, 자유롭게 말씀해주세요!`,
-                    quickReplies: ['일정 관리가 필요해', '할 일을 정리하고 싶어', '오늘 기분을 기록하고 싶어', '그냥 이야기하고 싶어'],
+                    quickReplies: ['그냥 이야기하고 싶어', '아이디어를 정리하고 싶어', '이미지를 만들고 싶어', '고민 상담을 받고 싶어'],
                 };
             }
             if (action.data?.step === 2) {
                 return {
                     content: `좋아요! 이제 준비가 됐어요. ✨\n\n주인님의 하루를 더 나은 방향으로 이끌어 드릴게요.\n\n그럼 바로 시작해볼까요? 무엇이든 편하게 말씀해주세요!`,
-                    quickReplies: ['오늘 일정 알려줘', '할 일 추가', '오늘 기분 기록'],
+                    quickReplies: ['오늘 기분 이야기', '아이디어 정리', '이미지 만들어줘'],
                 };
             }
         }
@@ -598,13 +578,13 @@ const ChatView: React.FC<ChatViewProps> = ({
             if (userText.length < 10 && !userText.includes('?')) {
                 return {
                     content: `네, 주인님! 더 말씀해주세요. 듣고 있어요. 😊`,
-                    quickReplies: ['일정 추가하고 싶어', '할 일 정리해줘', '오늘 하루 어땠는지 기록할래'],
+                    quickReplies: ['계속 이야기할게', '아이디어 더 말할게', '이미지도 부탁할게'],
                 };
             }
 
             return {
                 content: `음, 요청을 정확히 이해하지 못했어요. 😅\n\n혹시 이런 걸 원하셨나요?`,
-                quickReplies: ['일정 추가', '할 일 추가', '오늘 기분 기록', '분석해줘'],
+                quickReplies: ['대화 이어가기', '아이디어 정리', '이미지 생성', '다르게 말해볼게'],
             };
         }
 
@@ -729,17 +709,93 @@ const ChatView: React.FC<ChatViewProps> = ({
         };
     };
 
-    const buildHistoryForAgent = (allMessages: ChatMessage[], targetAgent?: AIAgent, allowUntypedAssistant = false) => {
+    const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const normalizeMentionText = (value: string): string =>
+        (value || '')
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(/[.,!?~`"'“”‘’_\-:/\\|()[\]{}<>]/g, '');
+
+    const resolveDirectAddressedAgentIds = (text: string, candidates: AIAgent[]): string[] => {
+        if (!text.trim() || candidates.length === 0) return [];
+
+        const lowered = text.toLowerCase();
+        const normalized = normalizeMentionText(text);
+        const mentionsAll = /(?:^|\s)@all\b|모두|다들|전체|everyone|all of you/i.test(text);
+        if (mentionsAll) return candidates.map((candidate) => candidate.id);
+
+        const matchedIds = new Set<string>();
+        for (const candidate of candidates) {
+            const name = (candidate.name || '').trim();
+            if (!name) continue;
+
+            const loweredName = name.toLowerCase();
+            const normalizedName = normalizeMentionText(name);
+            const atMention = new RegExp(`@\\s*${escapeRegExp(loweredName)}(?:\\b|님)?`, 'i');
+
+            if (atMention.test(lowered)) {
+                matchedIds.add(candidate.id);
+                continue;
+            }
+
+            if (normalizedName.length >= 2 && normalized.includes(normalizedName)) {
+                matchedIds.add(candidate.id);
+            }
+        }
+
+        return Array.from(matchedIds);
+    };
+
+    const collectRecentAgentReplies = (
+        allMessages: ChatMessage[],
+        agentId?: string,
+        limit: number = 2
+    ): string[] => {
+        if (!agentId) return [];
         return allMessages
-            .filter((message) => {
-                if (message.role === 'user') return true;
-                if (message.role !== 'assistant') return false;
-                if (!targetAgent?.id) return false;
-                if (message.agentId === targetAgent.id) return true;
-                return allowUntypedAssistant && !message.agentId;
-            })
-            .map((message) => ({ role: message.role, content: message.content }))
-            .slice(-CHAT_HISTORY_LIMIT);
+            .filter((message) => message.role === 'assistant' && message.agentId === agentId && Boolean(message.content?.trim()))
+            .slice(-limit)
+            .map((message) => message.content.trim());
+    };
+
+    const buildHistoryForAgent = (
+        allMessages: ChatMessage[],
+        targetAgent?: AIAgent,
+        options: { allowUntypedAssistant?: boolean; includePeerPersonaContext?: boolean } = {}
+    ) => {
+        const allowUntypedAssistant = options.allowUntypedAssistant ?? false;
+        const includePeerPersonaContext = options.includePeerPersonaContext ?? false;
+        const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+
+        for (const message of allMessages) {
+            const content = (message.content || '').trim();
+            if (!content) continue;
+
+            if (message.role === 'user') {
+                history.push({ role: 'user', content });
+                continue;
+            }
+
+            if (message.role !== 'assistant') continue;
+            if (!targetAgent?.id) continue;
+
+            const isSelfMessage = message.agentId === targetAgent.id || (allowUntypedAssistant && !message.agentId);
+            if (isSelfMessage) {
+                history.push({ role: 'assistant', content });
+                continue;
+            }
+
+            if (includePeerPersonaContext && message.agentId) {
+                const peerName = availableAgents.find((availableAgent) => availableAgent.id === message.agentId)?.name || '다른 페르소나';
+                history.push({
+                    role: 'user',
+                    content: `[${peerName}의 발화] ${content}`,
+                });
+            }
+        }
+
+        return history.slice(-CHAT_HISTORY_LIMIT);
     };
 
     const handleSend = async (text?: string) => {
@@ -747,6 +803,7 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (!messageText.trim() || isProcessing) return;
 
         const trimmedMessage = messageText.trim();
+        const addressedAgentIdsForInput = resolveDirectAddressedAgentIds(trimmedMessage, activeAgents);
         const normalizedMessage = trimmedMessage.toLowerCase().replace(/[.!?]/g, '');
         const confirmKeywords = ['실행', '확인', '네', '응', '좋아', '그래', 'ㅇㅋ', 'ok', '오케이'];
         const cancelKeywords = ['취소', '아니', '그만', '나중에', 'no'];
@@ -758,7 +815,10 @@ const ChatView: React.FC<ChatViewProps> = ({
                 pendingSessionHydrationRef.current = true;
             }
             try {
-                onUserMessage?.(trimmedMessage);
+                onUserMessage?.(trimmedMessage, {
+                    activeAgentIds: activeAgents.map((activeAgent) => activeAgent.id),
+                    addressedAgentIds: addressedAgentIdsForInput,
+                });
             } catch (error) {
                 pendingSessionHydrationRef.current = false;
                 console.error('onUserMessage callback failed:', error);
@@ -853,12 +913,29 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (hasAnyAgentConfig) {
             try {
                 if (activeAgents.length > 1) {
-                    for (let index = 0; index < activeAgents.length; index += 1) {
-                        const currentAgent = activeAgents[index];
+                    const addressedAgentIds = addressedAgentIdsForInput;
+                    const hasDirectAddress = addressedAgentIds.length > 0 && addressedAgentIds.length < activeAgents.length;
+                    const respondingAgents = hasDirectAddress
+                        ? activeAgents.filter((candidate) => addressedAgentIds.includes(candidate.id))
+                        : activeAgents;
+                    const addressedPersonaNames = hasDirectAddress
+                        ? activeAgents
+                            .filter((candidate) => addressedAgentIds.includes(candidate.id))
+                            .map((candidate) => candidate.name)
+                            .filter((name) => Boolean(name && name.trim()))
+                        : [];
+
+                    let rollingTimeline = [...messageTimeline];
+                    const turnReplies: Array<{ agentId: string; name: string; content: string }> = [];
+
+                    for (let index = 0; index < respondingAgents.length; index += 1) {
+                        const currentAgent = respondingAgents[index];
                         const currentMemory =
                             personaMemoryContextByAgent?.[currentAgent.id]
                             || (currentAgent.id === primaryAgent?.id ? personaMemoryContext : '');
-                        const agentHistory = buildHistoryForAgent(messageTimeline, currentAgent, false);
+                        const agentHistory = buildHistoryForAgent(rollingTimeline, currentAgent, {
+                            includePeerPersonaContext: true,
+                        });
                         const otherPersonaNames = activeAgents
                             .filter((activeAgent) => activeAgent.id !== currentAgent.id)
                             .map((activeAgent) => activeAgent.name)
@@ -951,14 +1028,29 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 chatMode,
                                 currentMemory,
                                 agentConfig.provider,
-                                otherPersonaNames
+                                {
+                                    otherPersonaNames,
+                                    addressedPersonaNames,
+                                    peerTurnReplies: turnReplies
+                                        .filter((turnReply) => turnReply.agentId !== currentAgent.id)
+                                        .map((turnReply) => ({
+                                            name: turnReply.name,
+                                            content: turnReply.content,
+                                        })),
+                                    recentSelfReplies: collectRecentAgentReplies(rollingTimeline, currentAgent.id, 2),
+                                }
                             );
 
                             const fallbackAction = mapGeminiActionToChatAction(result.action);
 
                             if (fallbackAction?.type === 'generate_image' || fallbackAction?.type === 'generate_video') {
                                 const mediaType = fallbackAction.type === 'generate_image' ? 'image' : 'video';
-                                const mediaConfig = findMediaConnection(settings, mediaType);
+                                const mediaConfig = findMediaConnectionForProvider(
+                                    settings,
+                                    mediaType,
+                                    agentConfig.provider,
+                                    agentConfig.connectionId
+                                );
                                 const prompt = fallbackAction.data?.prompt || messageText;
 
                                 assistantMessage = {
@@ -985,7 +1077,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                         assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `생성 실패: ${(err as Error).message}`;
                                     }
                                 } else {
-                                    assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `연결된 ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델이 없어 생성할 수 없어요.`;
+                                    assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `${agentConfig.provider.toUpperCase()} ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델 연결이 없어 생성할 수 없어요.`;
                                 }
                             } else if (index === 0) {
                                 if (!fallbackAction && result.action?.type === 'delete_event') {
@@ -1045,8 +1137,14 @@ const ChatView: React.FC<ChatViewProps> = ({
 
                         const assistantMessageWithMeta = withConfigMeta(assistantMessage, agentConfig);
                         setMessages((prev) => [...prev, assistantMessageWithMeta]);
+                        rollingTimeline = [...rollingTimeline, assistantMessageWithMeta];
+                        turnReplies.push({
+                            agentId: currentAgent.id,
+                            name: currentAgent.name,
+                            content: assistantMessageWithMeta.content,
+                        });
 
-                        if (index < activeAgents.length - 1) {
+                        if (index < respondingAgents.length - 1) {
                             await new Promise((resolve) => setTimeout(resolve, 180));
                         }
                     }
@@ -1055,7 +1153,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                     const singlePersonaMemory = singleAgent
                         ? (personaMemoryContextByAgent?.[singleAgent.id] || personaMemoryContext || '')
                         : (personaMemoryContext || '');
-                    const singleHistory = buildHistoryForAgent(messageTimeline, singleAgent, true);
+                    const singleHistory = buildHistoryForAgent(messageTimeline, singleAgent, { allowUntypedAssistant: true });
 
                     const singleAgentConfig = resolveAgentConfig(singleAgent);
                     if (!singleAgentConfig?.apiKey) {
@@ -1144,7 +1242,10 @@ const ChatView: React.FC<ChatViewProps> = ({
                             chatMode,
                             singlePersonaMemory,
                             singleAgentConfig.provider,
-                            []
+                            {
+                                otherPersonaNames: [],
+                                recentSelfReplies: collectRecentAgentReplies(messageTimeline, singleAgent?.id, 2),
+                            }
                         );
 
                         const fallbackAction = mapGeminiActionToChatAction(result.action);
@@ -1160,7 +1261,12 @@ const ChatView: React.FC<ChatViewProps> = ({
                         // Dynamic Media Generation Check
                         if (fallbackAction?.type === 'generate_image' || fallbackAction?.type === 'generate_video') {
                             const mediaType = fallbackAction.type === 'generate_image' ? 'image' : 'video';
-                            const mediaConfig = findMediaConnection(settings, mediaType);
+                            const mediaConfig = findMediaConnectionForProvider(
+                                settings,
+                                mediaType,
+                                singleAgentConfig.provider,
+                                singleAgentConfig.connectionId
+                            );
                             const prompt = fallbackAction.data?.prompt || messageText;
 
                             if (mediaConfig) {
@@ -1194,7 +1300,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                     assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `생성 실패: ${(err as Error).message}`;
                                 }
                             } else {
-                                assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `연결된 ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델이 없어 생성할 수 없어요.`;
+                                assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `${singleAgentConfig.provider.toUpperCase()} ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델 연결이 없어 생성할 수 없어요.`;
                             }
                             setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
                         } else {

@@ -15,6 +15,17 @@ ADD COLUMN IF NOT EXISTS step_id uuid REFERENCES public.todo_steps(id) ON DELETE
 -- Enable RLS for todo_steps
 ALTER TABLE public.todo_steps ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can manage own todo steps" 
-ON public.todo_steps FOR ALL 
-USING (auth.uid() = user_id);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'todo_steps'
+      AND policyname = 'Users can manage own todo steps'
+  ) THEN
+    CREATE POLICY "Users can manage own todo steps"
+    ON public.todo_steps FOR ALL
+    USING (auth.uid() = user_id);
+  END IF;
+END $$;

@@ -32,8 +32,11 @@ export const XAI_MODEL_OPTIONS: XaiModelOption[] = [
 export const GEMINI_MODEL_OPTIONS: GeminiModelOption[] = [
     { id: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' },
     { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
+    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite Preview' },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
+    { id: 'gemini-2.5-flash-lite-preview-09-2025', label: 'Gemini 2.5 Flash-Lite Preview (09-2025)' },
     { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
     { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite' },
     { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
@@ -47,6 +50,10 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
     'gemini-3.0-flash': 'gemini-3-flash-preview',
     'gemini-3-pro': 'gemini-3-pro-preview',
     'gemini-3-flash': 'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-flashlite': 'gemini-3.1-flash-lite-preview',
+    'gemini-2.5-flashlite': 'gemini-2.5-flash-lite',
+    'gemini-2.5-flash-lite-preview': 'gemini-2.5-flash-lite',
 };
 
 export const normalizeGeminiModelName = (modelName?: string): string => {
@@ -217,6 +224,51 @@ export const findMediaConnection = (settings: AppSettings, type: 'image' | 'vide
             provider: found.provider,
             apiKey: found.apiKey,
             modelName: found.provider === 'gemini' ? normalizeGeminiModelName(found.modelName) : found.modelName,
+        };
+    }
+
+    return null;
+};
+
+export const findMediaConnectionForProvider = (
+    settings: AppSettings,
+    type: 'image' | 'video',
+    provider: ApiConnection['provider'],
+    preferredConnectionId?: string
+): ActiveAIConfig | null => {
+    const connections = settings.apiConnections || [];
+    const checkFunc = type === 'image' ? isImageGenerationModel : isVideoGenerationModel;
+
+    if (preferredConnectionId) {
+        const preferred = connections.find((connection) =>
+            connection.id === preferredConnectionId &&
+            connection.provider === provider &&
+            connection.isActive &&
+            hasUsableKey(connection) &&
+            checkFunc(connection.modelName)
+        );
+        if (preferred) {
+            return {
+                connectionId: preferred.id,
+                provider: preferred.provider,
+                apiKey: preferred.apiKey,
+                modelName: preferred.provider === 'gemini' ? normalizeGeminiModelName(preferred.modelName) : preferred.modelName,
+            };
+        }
+    }
+
+    const providerMedia = connections.find((connection) =>
+        connection.provider === provider &&
+        connection.isActive &&
+        hasUsableKey(connection) &&
+        checkFunc(connection.modelName)
+    );
+    if (providerMedia) {
+        return {
+            connectionId: providerMedia.id,
+            provider: providerMedia.provider,
+            apiKey: providerMedia.apiKey,
+            modelName: providerMedia.provider === 'gemini' ? normalizeGeminiModelName(providerMedia.modelName) : providerMedia.modelName,
         };
     }
 

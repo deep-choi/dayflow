@@ -5,6 +5,11 @@ import { callXaiChatJSON } from "./xaiService";
 
 const CHAT_HISTORY_LIMIT = 12;
 const MODEL_MESSAGE_CHAR_LIMIT = 600;
+const PERSONA_MEMORY_CHAR_LIMIT = 1000;
+const PEER_REPLY_CHAR_LIMIT = 180;
+const SELF_REPLY_CHAR_LIMIT = 120;
+const CHAT_MAX_OUTPUT_TOKENS = 2048;
+const GROUP_CHAT_MAX_OUTPUT_TOKENS = 3000;
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
@@ -305,6 +310,13 @@ export interface GroupChatResult {
   responses: GroupChatAgentResult[];
 }
 
+export interface ChatGenerationOptions {
+  otherPersonaNames?: string[];
+  addressedPersonaNames?: string[];
+  peerTurnReplies?: Array<{ name: string; content: string }>;
+  recentSelfReplies?: string[];
+}
+
 const sanitizeAction = (
   rawAction: ChatActionResult["action"] | undefined,
   latestUserText: string,
@@ -312,48 +324,6 @@ const sanitizeAction = (
 ): ChatActionResult["action"] => {
   if (!rawAction || typeof rawAction.type !== "string") return { type: "none" };
   const actionType = rawAction.type;
-
-  if (actionType === "add_event") {
-    const event = rawAction.event;
-    const title = typeof event?.title === "string" && event.title.trim()
-      ? event.title.trim()
-      : (latestUserText.trim().slice(0, 60) || "New event");
-    const date = normalizeDateString(event?.date, baseDate) ?? inferDateFromText(latestUserText, baseDate) ?? toDateOnly(baseDate);
-    const startTime = normalizeTimeString(event?.startTime) ?? inferTimeFromText(latestUserText);
-    const endTime = normalizeTimeString(event?.endTime);
-    const type = typeof event?.type === "string" && event.type.trim() ? event.type.trim() : "tag_1";
-    return { type: "add_event", event: { title, date, startTime, endTime, type } };
-  }
-
-  if (actionType === "delete_event") {
-    const target = rawAction.deleteEvent;
-    const id = typeof target?.id === "string" && target.id.trim() ? target.id.trim() : undefined;
-    const title = typeof target?.title === "string" && target.title.trim() ? target.title.trim() : undefined;
-    const date = normalizeDateString(target?.date, baseDate) ?? inferDateFromText(latestUserText, baseDate);
-    const startTime = normalizeTimeString(target?.startTime) ?? inferTimeFromText(latestUserText);
-    if (!id && !title && !date) return { type: "none" };
-    return { type: "delete_event", deleteEvent: { id, title, date, startTime } };
-  }
-
-  if (actionType === "add_todo") {
-    const todo = rawAction.todo;
-    if (!todo?.text || typeof todo.text !== "string") return { type: "none" };
-    const category = TODO_CATEGORIES.has(todo.category || "") ? todo.category : "personal";
-    const dueDate = normalizeDateString(todo.dueDate, baseDate);
-    return { type: "add_todo", todo: { text: todo.text.trim(), category, dueDate } };
-  }
-
-  if (actionType === "add_journal") {
-    const journal = rawAction.journal;
-    if (!journal?.content || typeof journal.content !== "string") return { type: "none" };
-    const title = typeof journal.title === "string" && journal.title.trim()
-      ? journal.title.trim()
-      : journal.content.trim().slice(0, 24) || "Chat memo";
-    const mood = JOURNAL_MOODS.has(journal.mood || "") ? journal.mood : "neutral";
-    return { type: "add_journal", journal: { title, content: journal.content.trim(), mood } };
-  }
-
-  if (actionType === "generate_insight") return { type: "generate_insight" };
   if (actionType === "generate_image") {
     return { type: "generate_image", prompt: typeof rawAction.prompt === "string" ? rawAction.prompt.trim() : latestUserText.trim() };
   }
@@ -366,32 +336,30 @@ const sanitizeAction = (
 export const generateChatResponse = async (
   apiKey: string,
   messageHistory: { role: "user" | "assistant"; content: string }[],
-  events: CalendarEvent[],
-  todos: Todo[],
-  journalEntries: JournalEntry[],
+  _events: CalendarEvent[],
+  _todos: Todo[],
+  _journalEntries: JournalEntry[],
   userName: string,
   modelName: string = DEFAULT_GEMINI_MODEL,
   agent?: AIAgent,
   mode: ChatMode = "basic",
   personaMemoryContext: string = "",
   provider: ApiConnection['provider'] = 'gemini',
-  otherPersonaNames: string[] = []
+  options: ChatGenerationOptions = {}
 ): Promise<ChatActionResult> => {
   if (!apiKey) throw new Error("API Key is required.");
+
+  const {
+    otherPersonaNames = [],
+    addressedPersonaNames = [],
+    peerTurnReplies = [],
+    recentSelfReplies = [],
+  } = options;
 
   const ai = new GoogleGenAI({ apiKey });
   const today = new Date().toISOString().split("T")[0];
   const now = new Date();
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-
-  const contextData = {
-    date: today,
-    currentTime,
-    userName,
-    upcomingEvents: events.filter((e) => e.date >= today).slice(0, 5),
-    pendingTasks: todos.filter((t) => !t.completed).slice(0, 5),
-    recentJournal: journalEntries.slice(0, 3),
-  };
 
   const agentName = agent?.name || "LifeSync AI";
   const agentRole = agent?.role || "AI assistant";
@@ -404,10 +372,25 @@ export const generateChatResponse = async (
       : "Keep answers practical and direct.";
 
   const memoryInstruction = personaMemoryContext
-    ? `[Long-term memory from previous chat sessions]\n${truncateForModel(personaMemoryContext, 1000)}\n\n`
+    ? `[Long-term memory from previous chat sessions]\n${truncateForModel(personaMemoryContext, PERSONA_MEMORY_CHAR_LIMIT)}\n\n`
     : "";
   const otherPersonaInstruction = otherPersonaNames.length > 0
     ? `Other persona names currently in this chat: ${otherPersonaNames.join(", ")}.\nNever output lines or dialogue prefixed with those names.`
+    : "";
+  const directAddressInstruction = addressedPersonaNames.length > 0
+    ? `The user's latest message is directly addressed to: ${addressedPersonaNames.join(", ")}.\nIf your name is not listed there, respond only when it adds clear value.`
+    : "The user's latest message is addressed to the whole chat unless the text explicitly targets someone.";
+  const peerReplyInstruction = peerTurnReplies.length > 0
+    ? `Replies already given by other personas in this same turn:\n${peerTurnReplies
+      .slice(-3)
+      .map((item, index) => `${index + 1}. ${item.name}: ${truncateForModel(item.content, PEER_REPLY_CHAR_LIMIT)}`)
+      .join("\n")}\nBuild on these naturally instead of ignoring them.`
+    : "";
+  const antiRepetitionInstruction = recentSelfReplies.length > 0
+    ? `Avoid reusing these recent phrases from your own prior replies:\n${recentSelfReplies
+      .slice(-3)
+      .map((reply, index) => `${index + 1}. ${truncateForModel(reply, SELF_REPLY_CHAR_LIMIT)}`)
+      .join("\n")}`
     : "";
 
   const geminiSystemInstruction = `
@@ -418,9 +401,7 @@ Persona profile: ${agentPersonality}
 Conversation context:
 - Date: ${today}
 - Time: ${currentTime}
-- Upcoming events: ${JSON.stringify(contextData.upcomingEvents)}
-- Pending todos: ${JSON.stringify(contextData.pendingTasks)}
-- Recent journal: ${JSON.stringify(contextData.recentJournal)}
+- User name: ${userName || "unknown"}
 
 Persona guidance:
 - Follow this tone: ${agentTone}.
@@ -428,11 +409,14 @@ Persona guidance:
 - Speak like a real person, not a scripted assistant.
 - Vary sentence rhythm and wording each turn. Avoid fixed opening/ending patterns.
 - Keep the voice specific to this persona's role/personality.
-- Use calendar/todo/journal context only when directly relevant to the user's current request.
+- Do not claim to have checked the user's memo, todo list, calendar, diary, or any hidden app data unless the user pasted that information directly in chat.
 - Use bullets only when the user asks for structured output.
 - Match the user's language naturally.
 - If the user asks to "draw", "generate an image", or "create video", set the action type to "generate_image" or "generate_video" and provide a detailed prompt in English (e.g. "A futuristic city in cyberpunk style") even if the user spoke Korean.
 - ${otherPersonaInstruction || "No other persona constraint provided."}
+- ${directAddressInstruction}
+- ${peerReplyInstruction || "No peer reply context provided for this turn."}
+- ${antiRepetitionInstruction || "No recent-self repetition guard provided."}
 `;
 
   const xaiSystemInstruction = `
@@ -443,9 +427,7 @@ Persona profile: ${agentPersonality}
 Conversation context:
 - Date: ${today}
 - Time: ${currentTime}
-- Upcoming events: ${JSON.stringify(contextData.upcomingEvents)}
-- Pending todos: ${JSON.stringify(contextData.pendingTasks)}
-- Recent journal: ${JSON.stringify(contextData.recentJournal)}
+- User name: ${userName || "unknown"}
 
 Persona guidance:
 - Apply this tone strongly: ${agentTone}.
@@ -453,11 +435,14 @@ Persona guidance:
 - 한국어는 원어민처럼 자연스럽게 작성해. 어색한 직역투, 번역체 문장, 부자연스러운 조사/어미를 피해.
 - 같은 문장 끝 패턴을 반복하지 말고, 답변마다 리듬과 어감을 조금씩 바꿔.
 - 사람처럼 대화하듯 답하고, 템플릿처럼 기계적으로 쓰지 마.
-- 달력/할일/메모 맥락은 현재 요청과 직접 관련 있을 때만 사용해.
+- 사용자가 채팅에 직접 적지 않은 메모장, 할 일, 캘린더, 일기 내용은 본 적 없는 정보로 취급해.
 - 구조화된 출력을 요청받지 않으면 목록형 문장을 남발하지 마.
 - Use vivid wording unique to this persona's role.
 - If the user asks to "draw", "generate an image", or "create video", set the action type to "generate_image" or "generate_video" and provide a detailed prompt in English (e.g. "A majestic mountain landscape at sunset, cinematic lighting") even if the user spoke Korean.
 - ${otherPersonaInstruction || "No other persona constraint provided."}
+- ${directAddressInstruction}
+- ${peerReplyInstruction || "No peer reply context provided for this turn."}
+- ${antiRepetitionInstruction || "No recent-self repetition guard provided."}
 `;
 
   try {
@@ -469,12 +454,8 @@ Persona guidance:
 
 IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
 - "reply": string (your conversational response)
-- "action": object with key "type" (one of: "add_event", "delete_event", "add_todo", "add_journal", "generate_insight", "generate_image", "generate_video", "none")
+- "action": object with key "type" (one of: "generate_image", "generate_video", "none")
   - If type is "generate_image" or "generate_video", include "prompt": string (a descriptive prompt in English for the generation model)
-  - If type is "add_event", include "event": { "title": string, "date": string (YYYY-MM-DD), "startTime"?: string (HH:mm), "endTime"?: string (HH:mm), "type"?: string }
-  - If type is "delete_event", include "deleteEvent": { "id"?: string, "title"?: string, "date"?: string, "startTime"?: string }
-  - If type is "add_todo", include "todo": { "text": string, "category"?: string, "dueDate"?: string }
-  - If type is "add_journal", include "journal": { "title": string, "content": string, "mood"?: string }
   - If type is "none", no additional fields needed.
 `;
 
@@ -492,7 +473,7 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
           xaiSystemInstruction + jsonSchemaInstruction,
           xaiMessages,
           modelName,
-          { temperature: 0.68, maxTokens: 2048 }
+          { temperature: 0.68, maxTokens: CHAT_MAX_OUTPUT_TOKENS }
         );
         const cleanedReply = stripCrossPersonaSpeech(
           sanitizeAssistantReply(parsed.reply || "", agentName),
@@ -516,7 +497,7 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
         systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
         responseMimeType: "application/json",
         temperature: 0.68,
-        maxOutputTokens: 2048,
+        maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -525,45 +506,6 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
               type: Type.OBJECT,
               properties: {
                 type: { type: Type.STRING },
-                event: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    date: { type: Type.STRING },
-                    startTime: { type: Type.STRING, nullable: true },
-                    endTime: { type: Type.STRING, nullable: true },
-                    type: { type: Type.STRING, nullable: true },
-                  },
-                  nullable: true,
-                },
-                deleteEvent: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING, nullable: true },
-                    title: { type: Type.STRING, nullable: true },
-                    date: { type: Type.STRING, nullable: true },
-                    startTime: { type: Type.STRING, nullable: true },
-                  },
-                  nullable: true,
-                },
-                todo: {
-                  type: Type.OBJECT,
-                  properties: {
-                    text: { type: Type.STRING },
-                    category: { type: Type.STRING, nullable: true },
-                    dueDate: { type: Type.STRING, nullable: true },
-                  },
-                  nullable: true,
-                },
-                journal: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    content: { type: Type.STRING },
-                    mood: { type: Type.STRING, nullable: true },
-                  },
-                  nullable: true,
-                },
                 prompt: { type: Type.STRING, nullable: true },
               },
               required: ["type"],
@@ -630,9 +572,9 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
 export const generateGroupChatResponses = async (
   apiKey: string,
   messageHistory: { role: "user" | "assistant"; content: string }[],
-  events: CalendarEvent[],
-  todos: Todo[],
-  journalEntries: JournalEntry[],
+  _events: CalendarEvent[],
+  _todos: Todo[],
+  _journalEntries: JournalEntry[],
   userName: string,
   agents: AIAgent[],
   modelName: string = DEFAULT_GEMINI_MODEL,
@@ -649,15 +591,6 @@ export const generateGroupChatResponses = async (
   const now = new Date();
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
-  const contextData = {
-    date: today,
-    currentTime,
-    userName,
-    upcomingEvents: events.filter((e) => e.date >= today).slice(0, 5),
-    pendingTasks: todos.filter((t) => !t.completed).slice(0, 5),
-    recentJournal: journalEntries.slice(0, 3),
-  };
-
   const modeInstruction =
     mode === "learning"
       ? "Explain clearly and teach step by step when useful."
@@ -666,7 +599,7 @@ export const generateGroupChatResponses = async (
   const personaBlock = selectedAgents
     .map((persona, index) => {
       const memory = personaMemoryByAgent[persona.id]
-        ? truncateForModel(personaMemoryByAgent[persona.id], 520)
+        ? truncateForModel(personaMemoryByAgent[persona.id], 220)
         : "";
       return [
         `Persona ${index + 1}:`,
@@ -687,9 +620,7 @@ Generate exactly one reply for each listed persona id.
 Conversation context:
 - Date: ${today}
 - Time: ${currentTime}
-- Upcoming events: ${JSON.stringify(contextData.upcomingEvents)}
-- Pending todos: ${JSON.stringify(contextData.pendingTasks)}
-- Recent journal: ${JSON.stringify(contextData.recentJournal)}
+- User name: ${userName || "unknown"}
 
 Mode rule: ${modeInstruction}
 
@@ -701,7 +632,8 @@ Output rules:
 2. "responses" must include all listed persona ids exactly once.
 3. Each reply should be readable with line breaks when useful.
 4. Keep each reply concise unless the user asked for depth.
-5. Only the first persona may set an app action (add_event, delete_event, add_todo, add_journal, generate_insight). All other personas must use action.type = "none".
+5. Do not claim to have checked the user's memo, todo list, calendar, or diary unless the user pasted that data directly into the chat.
+6. Only use action.type values "generate_image", "generate_video", or "none".
 `;
 
   try {
@@ -713,7 +645,7 @@ Output rules:
         systemInstruction: { parts: [{ text: systemInstruction }] },
         responseMimeType: "application/json",
         temperature: 0.55,
-        maxOutputTokens: 3000,
+        maxOutputTokens: GROUP_CHAT_MAX_OUTPUT_TOKENS,
         responseSchema: {
           type: Type.OBJECT,
           properties: {
@@ -728,45 +660,7 @@ Output rules:
                     type: Type.OBJECT,
                     properties: {
                       type: { type: Type.STRING },
-                      event: {
-                        type: Type.OBJECT,
-                        properties: {
-                          title: { type: Type.STRING },
-                          date: { type: Type.STRING },
-                          startTime: { type: Type.STRING, nullable: true },
-                          endTime: { type: Type.STRING, nullable: true },
-                          type: { type: Type.STRING, nullable: true },
-                        },
-                        nullable: true,
-                      },
-                      deleteEvent: {
-                        type: Type.OBJECT,
-                        properties: {
-                          id: { type: Type.STRING, nullable: true },
-                          title: { type: Type.STRING, nullable: true },
-                          date: { type: Type.STRING, nullable: true },
-                          startTime: { type: Type.STRING, nullable: true },
-                        },
-                        nullable: true,
-                      },
-                      todo: {
-                        type: Type.OBJECT,
-                        properties: {
-                          text: { type: Type.STRING },
-                          category: { type: Type.STRING, nullable: true },
-                          dueDate: { type: Type.STRING, nullable: true },
-                        },
-                        nullable: true,
-                      },
-                      journal: {
-                        type: Type.OBJECT,
-                        properties: {
-                          title: { type: Type.STRING },
-                          content: { type: Type.STRING },
-                          mood: { type: Type.STRING, nullable: true },
-                        },
-                        nullable: true,
-                      },
+                      prompt: { type: Type.STRING, nullable: true },
                     },
                     required: ["type"],
                   },

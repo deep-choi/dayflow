@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Todo, TodoList, TodoTab, TodoStep } from '../types';
 import { Check, ChevronRight, MoreVertical, CalendarIcon, Trash2, Plus, GripVertical, AlertCircle, X, Maximize2, CheckSquare, Layout, Edit3 } from '../components/Icons';
-import { format, isToday, isTomorrow, parseISO } from 'date-fns';
+import { format, isToday, isTomorrow, isValid, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import {
   DndContext,
@@ -67,6 +67,17 @@ const Checkbox = ({ checked, onClick }: { checked: boolean; onClick: (e: React.M
     {checked && <Check size={10} className="text-white stroke-[3px]" />}
   </button>
 );
+
+const formatShortDate = (dateStr?: string) => {
+  if (!dateStr) return null;
+  const parsed = parseISO(dateStr);
+  if (!isValid(parsed)) return null;
+  try {
+    return format(parsed, 'M.d');
+  } catch {
+    return null;
+  }
+};
 
 // --- List Settings Modal (Date & Tab) ---
 const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddList }: any) => {
@@ -399,6 +410,7 @@ const SortableTodoItem = ({
   getDueLabel,
   onUpdateTodo,
   hideBadge,
+  isMobile,
 }: any) => {
   const {
     attributes,
@@ -413,13 +425,14 @@ const SortableTodoItem = ({
       type: 'Todo',
       todo,
     },
-    disabled: isEditing,
+    disabled: isEditing || isMobile,
   });
 
   const style = {
     transform: CSS.Translate.toString(transform),
     transition,
-    touchAction: 'none',
+    touchAction: isMobile ? 'auto' : 'none',
+    cursor: isMobile ? 'pointer' : (isDragging ? 'grabbing' : 'grab'),
   };
 
   const dueLabel = getDueLabel(todo.dueDate);
@@ -577,6 +590,7 @@ const TodoSectionRenderer = ({
   setDraft,
   handleAdd,
   hideBadge,
+  isMobile,
 }: any) => {
   return (
     <div className={`${stepId ? 'min-h-[20px]' : 'min-h-0'} transition-colors ${isOver && (stepId || sectionTodos.length > 0) ? 'bg-blue-50/50 ring-2 ring-blue-100 rounded-lg' : ''}`} ref={setNodeRef}>
@@ -600,6 +614,7 @@ const TodoSectionRenderer = ({
             getDueLabel={getDueLabel}
             onUpdateTodo={onUpdateTodo}
             hideBadge={hideBadge}
+            isMobile={isMobile}
           />
         ))}
       </SortableContext>
@@ -643,6 +658,7 @@ const DroppableSection = ({
   draft,
   setDraft,
   handleAdd,
+  isMobile,
 }: any) => {
   const { isOver, setNodeRef } = useDroppable({
     id: stepId || `list-${listId}-general`,
@@ -650,7 +666,8 @@ const DroppableSection = ({
       type: stepId ? 'Step' : 'ListGeneral',
       stepId,
       listId
-    }
+    },
+    disabled: isMobile,
   });
 
   return (
@@ -680,6 +697,7 @@ const DroppableSection = ({
       setDraft={setDraft}
       handleAdd={handleAdd}
       hideBadge={!!stepId}
+      isMobile={isMobile}
     />
   );
 };
@@ -714,6 +732,7 @@ const SortableList = ({
   onAddStep,
   onUpdateStep,
   onDeleteStep,
+  isMobile,
 }: any) => {
   const {
     attributes,
@@ -728,7 +747,7 @@ const SortableList = ({
       type: 'List',
       list,
     },
-    disabled: editingListId === list.id,
+    disabled: editingListId === list.id || isMobile,
   });
 
   const { isOver: isOverList, setNodeRef: setDroppableListRef } = useDroppable({
@@ -736,13 +755,14 @@ const SortableList = ({
     data: {
       type: 'List',
       listId: list.id,
-    }
+    },
+    disabled: isMobile,
   });
 
   const style = {
     transform: CSS.Translate.toString(transform),
     transition,
-    touchAction: 'none',
+    touchAction: isMobile ? 'auto' : 'none',
   };
 
   const listTodos = todos.filter((t: Todo) => t.listId === list.id);
@@ -774,6 +794,7 @@ const SortableList = ({
     draft,
     setDraft,
     handleAdd,
+    isMobile,
   };
 
   if (isDragging) {
@@ -794,7 +815,7 @@ const SortableList = ({
     >
       {/* Column Header - Drag Handle */}
       <div
-        className="flex items-center justify-between px-4 py-3 pt-4 flex-shrink-0 cursor-grab active:cursor-grabbing"
+        className={`flex items-center justify-between px-4 py-3 pt-4 flex-shrink-0 ${isMobile ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
         {...attributes}
         {...listeners}
       >
@@ -835,7 +856,7 @@ const SortableList = ({
             {list.dueDate && (
               <div className="text-[11.5px] text-[#2c7a7b] bg-[#e6fffa] px-1.5 py-0.5 rounded border border-[#b2f5ea] mt-1 font-medium w-fit flex items-center gap-1">
                 <CalendarIcon size={10} />
-                마감: {format(parseISO(list.dueDate), 'M.d')}
+                마감: {formatShortDate(list.dueDate) || '-'}
               </div>
             )}
           </div>
@@ -910,8 +931,16 @@ const SortableList = ({
 
                   <div className="flex items-center opacity-0 group-hover/step:opacity-100 transition-opacity">
                     <button
+                      onClick={() => setDraft({ text: ' ', stepId: step.id })}
+                      className="p-1 hover:bg-blue-50 text-blue-500 rounded transition-colors mr-0.5"
+                      title="이 단계에 할 일 추가"
+                    >
+                      <Plus size={14} />
+                    </button>
+                    <button
                       onClick={() => onDeleteStep(step.id)}
                       className="p-1 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded transition-colors"
+                      title="단계 삭제"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -924,7 +953,7 @@ const SortableList = ({
         })}
 
         {/* Global Add Todo (No Step) */}
-        {!draft.stepId && draft.text === '' ? (
+        {!draft.stepId && draft.text === '' && (
           <div className="flex flex-col gap-1 mt-2">
             <button
               onClick={() => setDraft({ text: ' ', stepId: null })}
@@ -940,21 +969,6 @@ const SortableList = ({
               <Layout size={14} />
               단계 추가
             </button>
-          </div>
-        ) : !draft.stepId && (
-          <div className="mt-2 mx-1 mb-2 bg-white rounded-lg shadow-sm border border-gray-200">
-            <input
-              autoFocus
-              value={draft.text}
-              onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleAdd(null);
-                if (e.key === 'Escape') setDraft({ text: '', stepId: null });
-              }}
-              placeholder="할 일 추가"
-              className="w-full px-3 py-3 text-sm focus:outline-none bg-transparent"
-              onPointerDown={e => e.stopPropagation()}
-            />
           </div>
         )}
 
@@ -1049,6 +1063,17 @@ const TodoView: React.FC<TodoViewProps> = ({
   const [newListModal, setNewListModal] = useState(false);
   const [tabSettingsModal, setTabSettingsModal] = useState<string | null>(null);
   const [newTabModal, setNewTabModal] = useState(false);
+
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   const filteredTodos = todos.filter(t => {
     if (filterMode === 'all') return true;
@@ -1176,9 +1201,14 @@ const TodoView: React.FC<TodoViewProps> = ({
   const getDueLabel = (dueDate?: string) => {
     if (!dueDate) return null;
     const d = parseISO(dueDate);
+    if (!isValid(d)) return null;
     if (isToday(d)) return '오늘';
     if (isTomorrow(d)) return '내일';
-    return format(d, 'M월 d일 (E)', { locale: ko });
+    try {
+      return format(d, 'M월 d일 (E)', { locale: ko });
+    } catch {
+      return null;
+    }
   };
 
   // DnD Handlers
@@ -1378,6 +1408,7 @@ const TodoView: React.FC<TodoViewProps> = ({
                   onAddStep={onAddStep}
                   onUpdateStep={onUpdateStep}
                   onDeleteStep={onDeleteStep}
+                  isMobile={isMobile}
                 />
               ))}
 
