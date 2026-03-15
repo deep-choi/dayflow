@@ -149,6 +149,7 @@ export interface AppSettings {
   apiConnections: ApiConnection[];
   activeConnectionId?: string;
   apiUsage?: ApiUsageStats;
+  lastRoutineResetDate?: string; // YYYY-MM-DD
 }
 
 export interface User {

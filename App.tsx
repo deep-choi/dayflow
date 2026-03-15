@@ -372,9 +372,11 @@ const DEFAULT_TAGS: CalendarTag[] = [
 const DEFAULT_TODO_TABS: TodoTab[] = [
   { id: 'tab_todo', name: '할 일', color: '#1a73e8', order: 0 },
   { id: 'tab_project', name: '프로젝트', color: '#9c27b0', order: 1 },
+  { id: 'tab_routine', name: '루틴', color: '#34a853', order: 2 },
 ];
 
 const DEFAULT_TODO_LIST_ID = '00000000-0000-4000-8000-000000000001';
+const DEFAULT_ROUTINE_LIST_ID = '00000000-0000-4000-8000-000000000002';
 const LEGACY_DEFAULT_TODO_LIST_IDS = new Set(['default', 'routine']);
 
 const normalizeTodoListId = (value?: string | null): string | undefined => {
@@ -458,6 +460,7 @@ const retryTodoUpdateWithFallback = async (
 
 const DEFAULT_TODO_LISTS: TodoList[] = [
   { id: DEFAULT_TODO_LIST_ID, title: '해야 할 일', order: 1, tabId: 'tab_todo' },
+  { id: DEFAULT_ROUTINE_LIST_ID, title: '루틴 목록', order: 2, tabId: 'tab_routine' },
 ];
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -465,6 +468,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   chatActionConfirm: true,
   apiConnections: [],
   activeConnectionId: undefined,
+  lastRoutineResetDate: undefined,
 };
 
 const CACHE_PREFIX = 'lifesync_cache';
@@ -1034,6 +1038,7 @@ const App: React.FC = () => {
           hydrateFromLocalCache(user.id);
           void hydrateChatSessionsFromIndexedCache(user.id);
           setIsDataLoaded(true);
+          resetRoutineCompletedStatus();
         }
         console.log(`[App] v2.7 background fetchUserData for user: ${user.id}`);
         fetchUserData(user.id);
@@ -1651,6 +1656,7 @@ const App: React.FC = () => {
 
       if (latestSessionUserIdRef.current === userId) {
         setIsDataLoaded(true);
+        resetRoutineCompletedStatus();
         if (criticalFetchSucceeded && hasSuccessfulServerHydrationRef.current) {
           if (fetchRetryTimerRef.current) {
             window.clearTimeout(fetchRetryTimerRef.current);
@@ -1689,6 +1695,20 @@ const App: React.FC = () => {
         : { ...t, listId: fallbackId };
     }));
   }, [todoLists]);
+
+  useEffect(() => {
+    if (!isDataLoaded || !currentUser) return;
+    
+    // Initial check
+    resetRoutineCompletedStatus();
+
+    // Periodic check every minute to handle date change while app is open
+    const intervalId = setInterval(() => {
+      resetRoutineCompletedStatus();
+    }, 60000);
+
+    return () => clearInterval(intervalId);
+  }, [isDataLoaded, currentUser?.id, settings.lastRoutineResetDate]);
 
   // Community post handler
   // Community post handler
@@ -2372,6 +2392,40 @@ const App: React.FC = () => {
           alert(`할 일을 수정하지 못했습니다: ${error.message || '알 수 없는 오류'}`);
         }
       }
+    }
+  };
+
+  const resetRoutineCompletedStatus = () => {
+    const today = format(new Date(), 'yyyy-MM-dd');
+    if (settings.lastRoutineResetDate === today) return;
+
+    // Find all lists belonging to the 'Routine' tab
+    const routineListIds = new Set(todoLists.filter(l => l.tabId === 'tab_routine').map(l => l.id));
+    if (routineListIds.size === 0) return;
+
+    // Find todos in those lists that are completed
+    const routinesToReset = todos.filter(t => t.completed && t.listId && routineListIds.has(t.listId));
+    if (routinesToReset.length === 0) {
+      // Still update the date even if no routines were reset, so we don't keep checking today
+      setSettings(prev => ({ ...prev, lastRoutineResetDate: today }));
+      return;
+    }
+
+    console.log(`[Routine] Resetting ${routinesToReset.length} routines for ${today}`);
+    
+    setTodos(prev => prev.map(t => {
+      if (t.completed && t.listId && routineListIds.has(t.listId)) {
+        return { ...t, completed: false };
+      }
+      return t;
+    }));
+
+    setSettings(prev => ({ ...prev, lastRoutineResetDate: today }));
+
+    // Update DB
+    if (currentUser) {
+      const resetIds = routinesToReset.map(t => t.id);
+      supabase.from('todos').update({ completed: false }).in('id', resetIds).then();
     }
   };
 
