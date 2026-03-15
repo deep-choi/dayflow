@@ -2865,6 +2865,7 @@ const App: React.FC = () => {
             }}
             initialMessages={activeSession?.messages}
             currentSessionId={activeChatSessionId}
+            chatSessions={chatSessions}
             personaMemoryContextByAgent={personaMemoryContextByAgent}
             defaultUserName={currentUser?.name || ''}
             onUpdateMessages={(sessionId: string, messages: ChatMessage[]) => {
@@ -2929,7 +2930,9 @@ const App: React.FC = () => {
   const headerLabel =
     mobileNavItems.find(i => i.id === currentView)?.label ||
     (currentView === 'settings' ? '설정' : 'Dashboard');
-  const historySessions = chatSessions.filter((session: ChatSession) => hasUserChatMessage(session));
+  const historySessions = chatSessions
+    .filter((session: ChatSession) => hasUserChatMessage(session))
+    .sort((a, b) => new Date(b.lastMessageAt || b.createdAt).getTime() - new Date(a.lastMessageAt || a.createdAt).getTime());
 
   const handleNewChat = () => {
     setActiveChatSessionId(null);
@@ -3017,7 +3020,7 @@ const App: React.FC = () => {
                     </div>
                   ) : (
                     historySessions
-                      .slice(0, 5)
+                      .slice(0, 10)
                       .map(session => (
                         <div key={session.id} className="group relative">
                           <div
@@ -3025,15 +3028,6 @@ const App: React.FC = () => {
                               const resolvedAgentIds = resolveSessionAgentIds(session, aiAgents, activeChatAgentIds);
                               setActiveChatSessionId(session.id);
                               setActiveChatAgentIds(resolvedAgentIds);
-                              const normalizedSessionIds = dedupeAgentIds([
-                                ...(Array.isArray(session.agentIds) ? session.agentIds : []),
-                                session.agentId,
-                              ]);
-                              if (session.agentId !== resolvedAgentIds[0] || !isSameAgentIdList(normalizedSessionIds, resolvedAgentIds)) {
-                                setChatSessions(prev => prev.map(s => s.id === session.id
-                                  ? { ...s, agentId: resolvedAgentIds[0], agentIds: resolvedAgentIds }
-                                  : s));
-                              }
                             }}
                             className={`w-full text-left px-3 py-1.5 rounded-[4px] cursor-pointer transition-colors text-sm group ${activeChatSessionId === session.id
                               ? 'bg-[#efefef] text-[#37352f] font-medium'
@@ -3046,15 +3040,6 @@ const App: React.FC = () => {
                                 const resolvedAgentIds = resolveSessionAgentIds(session, aiAgents, activeChatAgentIds);
                                 setActiveChatSessionId(session.id);
                                 setActiveChatAgentIds(resolvedAgentIds);
-                                const normalizedSessionIds = dedupeAgentIds([
-                                  ...(Array.isArray(session.agentIds) ? session.agentIds : []),
-                                  session.agentId,
-                                ]);
-                                if (session.agentId !== resolvedAgentIds[0] || !isSameAgentIdList(normalizedSessionIds, resolvedAgentIds)) {
-                                  setChatSessions(prev => prev.map(s => s.id === session.id
-                                    ? { ...s, agentId: resolvedAgentIds[0], agentIds: resolvedAgentIds }
-                                    : s));
-                                }
                               }
                             }}
                           >
@@ -3566,15 +3551,6 @@ const App: React.FC = () => {
                               const resolvedAgentIds = resolveSessionAgentIds(session, aiAgents, activeChatAgentIds);
                               setActiveChatSessionId(session.id);
                               setActiveChatAgentIds(resolvedAgentIds);
-                              const normalizedSessionIds = dedupeAgentIds([
-                                ...(Array.isArray(session.agentIds) ? session.agentIds : []),
-                                session.agentId,
-                              ]);
-                              if (session.agentId !== resolvedAgentIds[0] || !isSameAgentIdList(normalizedSessionIds, resolvedAgentIds)) {
-                                setChatSessions(prev => prev.map(s => s.id === session.id
-                                  ? { ...s, agentId: resolvedAgentIds[0], agentIds: resolvedAgentIds }
-                                  : s));
-                              }
                               setCurrentView('chat');
                               setIsMobileMenuOpen(false);
                             }}

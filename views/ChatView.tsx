@@ -34,6 +34,7 @@ interface ChatViewProps {
     ) => void;
     initialMessages?: ChatMessage[];
     onUpdateMessages?: (sessionId: string, messages: ChatMessage[]) => void;
+    chatSessions?: ChatSession[];
     currentSessionId?: string | null;
     personaMemoryContext?: string;
     personaMemoryContextByAgent?: Record<string, string>;
@@ -195,6 +196,7 @@ const ChatView: React.FC<ChatViewProps> = ({
     onUserMessage,
     initialMessages,
     onUpdateMessages,
+    chatSessions = [],
     currentSessionId,
     personaMemoryContext,
     personaMemoryContextByAgent = {},
@@ -294,14 +296,19 @@ const ChatView: React.FC<ChatViewProps> = ({
                     return initialMessages;
                 });
             } else {
-                // New empty session should start from a fresh welcome message.
-                setMessages(prev => {
-                    const isAlreadyWelcome =
-                        prev.length === 1 &&
-                        prev[0].role === 'assistant' &&
-                        (prev[0].id === 'welcome' || prev[0].id === 'onboarding-1');
-                    return isAlreadyWelcome ? prev : [getWelcomeMessage()];
-                });
+                // If it's an existing session ID but no messages yet, it might be loading.
+                // Only reset if we are sure it's meant to be an empty new session.
+                const isNewSession = !chatSessions.find(s => s.id === currentSessionId);
+                
+                if (isNewSession) {
+                    setMessages(prev => {
+                        const isAlreadyWelcome =
+                            prev.length === 1 &&
+                            prev[0].role === 'assistant' &&
+                            (prev[0].id === 'welcome' || prev[0].id === 'onboarding-1');
+                        return isAlreadyWelcome ? prev : [getWelcomeMessage()];
+                    });
+                }
             }
         } else {
             // No session - reset to welcome

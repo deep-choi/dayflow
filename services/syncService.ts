@@ -504,6 +504,13 @@ export const syncChatSessions = (userId: string, sessions: ChatSession[]) => {
         return;
     }
 
+    // Critical: If sessions is empty, it's likely a hydration race condition. 
+    // Skip sync to avoid wiping out server-side data accidentally.
+    if (sessions.length === 0) {
+        console.log('[Sync] syncChatSessions: Sessions list is empty, skipping sync to protect data.');
+        return;
+    }
+
     const key = scopedKey('chat_sessions_sync', userId);
     pendingChatSessions.set(key, sessions.map(toPersistedChatSession));
 
