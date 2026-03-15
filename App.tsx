@@ -2457,7 +2457,7 @@ const App: React.FC = () => {
         date: eventDate,
         isAllDay: true,
         type: calendarTags.find(t => t.id === 'tag_2') ? 'tag_2' : (calendarTags[0]?.id || 'tag_1'),
-        description: `할 일을 완료하여 자동으로 추가된 일정입니다. [TODO_LINK:${todo.id}]`
+        description: `할 일을 완료하여 자동으로 추가된 일정입니다. [TODO_LINK:${todo.id}:${eventDate}]`
       };
       
       setEvents(prev => [...prev, newEvent]);
@@ -2483,8 +2483,9 @@ const App: React.FC = () => {
         });
       });
     } else {
-      // If unchecked, remove any automatically added calendar events for this todo
-      const linkTag = `[TODO_LINK:${todo.id}]`;
+      // If unchecked, remove any automatically added calendar events for this todo ON THE SPECIFIC DATE
+      const eventDate = todo.dueDate || format(new Date(), 'yyyy-MM-dd');
+      const linkTag = `[TODO_LINK:${todo.id}:${eventDate}]`;
       const eventsToRemove = events.filter(e => e.description?.includes(linkTag));
       
       if (eventsToRemove.length > 0) {
