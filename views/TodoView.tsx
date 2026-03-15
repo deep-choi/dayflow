@@ -769,7 +769,7 @@ const SortableList = ({
   const listSteps = steps.filter((s: TodoStep) => s.listId === list.id).sort((a: any, b: any) => a.order - b.order);
   const listTab = tabs?.find((t: any) => t.id === list.tabId);
   const [draft, setDraft] = useState<{ text: string; stepId?: string | null }>({ text: '', stepId: null });
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(true);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [editingStepTitle, setEditingStepTitle] = useState('');
 
