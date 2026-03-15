@@ -236,6 +236,11 @@ const JournalView: React.FC<JournalViewProps> = ({
                         setEditingId(null);
                         setNewTitle('');
                         setNewContent('');
+                        if (selectedCategory !== 'all') {
+                          setNewCategory(selectedCategory);
+                        } else {
+                          setNewCategory(categories[0]?.name || '메모장');
+                        }
                         setIsWriting(true);
                       }}
                       className="flex items-center gap-1.5 text-xs font-medium text-white bg-[#37352f] hover:bg-black px-4 py-2 rounded-full transition-all shadow-sm"
@@ -372,6 +377,11 @@ const JournalView: React.FC<JournalViewProps> = ({
                   setEditingId(null);
                   setNewTitle('');
                   setNewContent('');
+                  if (selectedCategory !== 'all') {
+                    setNewCategory(selectedCategory);
+                  } else {
+                    setNewCategory(categories[0]?.name || '메모장');
+                  }
                   setIsWriting(true);
                 }}
                 className="px-10 py-4 bg-[#37352f] text-white font-medium rounded-full hover:bg-black transition-all shadow-xl"
