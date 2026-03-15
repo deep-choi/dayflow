@@ -2400,7 +2400,7 @@ const App: React.FC = () => {
       const eventDate = todo.dueDate || format(new Date(), 'yyyy-MM-dd');
       const newEvent: CalendarEvent = {
         id: crypto.randomUUID(),
-        title: `✅ ${todo.text}`,
+        title: todo.text,
         date: eventDate,
         isAllDay: true,
         type: calendarTags.find(t => t.id === 'tag_2') ? 'tag_2' : (calendarTags[0]?.id || 'tag_1'),
