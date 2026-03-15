@@ -2396,31 +2396,20 @@ const App: React.FC = () => {
       });
 
       // Automatically add to calendar when completed
-      // Use todo.dueDate if available, otherwise today
-      const eventDate = todo.dueDate || new Date().toISOString().split('T')[0];
+      // Use todo.dueDate if available, otherwise use LOCAL today date
+      const eventDate = todo.dueDate || format(new Date(), 'yyyy-MM-dd');
       const newEvent: CalendarEvent = {
         id: crypto.randomUUID(),
         title: `✅ ${todo.text}`,
         date: eventDate,
         isAllDay: true,
-        type: 'tag_2', // 'Tasks' tag
+        type: calendarTags.find(t => t.id === 'tag_2') ? 'tag_2' : (calendarTags[0]?.id || 'tag_1'),
         description: '할 일을 완료하여 자동으로 추가된 일정입니다.'
       };
       
-      // Inline addEvent logic to avoid double showUndo
+      // Update local state. The syncEvents useEffect will handle DB persistence.
       setEvents(prev => [...prev, newEvent]);
-      if (currentUser) {
-        supabase.from('calendar_events').insert([{
-          id: newEvent.id,
-          user_id: currentUser.id,
-          title: newEvent.title,
-          start_time: newEvent.date + 'T00:00:00',
-          end_time: newEvent.date + 'T23:59:59',
-          description: newEvent.description,
-          color: calendarTags.find(t => t.id === newEvent.type)?.color || '#4c2889',
-          tags: [newEvent.type]
-        }]).then();
-      }
+
       logActivity({
         type: 'event_added',
         label: `일정 자동 추가: ${newEvent.title}`,
@@ -2433,11 +2422,9 @@ const App: React.FC = () => {
           await supabase.from('todos').update({ completed: false }).eq('id', id);
         }
         
-        // Remove the automatically added event
+        // Remove the automatically added event from local state
         setEvents(prev => prev.filter(e => e.id !== newEvent.id));
-        if (currentUser) {
-          await supabase.from('calendar_events').delete().eq('id', newEvent.id);
-        }
+        // The syncEvents useEffect will handle the deletion from DB (via getDeletedIds logic)
 
         logActivity({
           type: 'todo_uncompleted',
