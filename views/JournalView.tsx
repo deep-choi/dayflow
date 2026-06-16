@@ -263,7 +263,7 @@ const JournalView: React.FC<JournalViewProps> = ({
                 }}
                 className={`w-full border-b border-l-2 border-b-[#e9e9e8] p-4 text-left transition-colors sm:p-5 ${
                   isSelected
-                    ? 'border-l-[#d4d4d4] bg-white'
+                    ? 'border-l-[var(--color-primary)] bg-white'
                     : 'border-l-transparent border-t-transparent border-r-transparent hover:bg-white/50'
                 }`}
               >
