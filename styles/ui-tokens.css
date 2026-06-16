@@ -1,18 +1,22 @@
-/* Google Calendar / Notion Inspired Clean UI Tokens */
+/* OpenAI-inspired clean UI tokens */
 :root {
-  --color-text-primary: #37352f;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-light: #eff6ff;
+  --color-text-primary: #171717;
   --color-text-secondary: #787774;
+  --color-text-muted: #9b9a97;
   --color-bg-page: #ffffff;
-  --color-bg-sidebar: #f7f7f5;
+  --color-bg-sidebar: #ffffff;
+  --color-bg-hover: #f7f7f7;
   --color-border: #e9e9e8;
-  --color-hover: #efefef;
   
-  --font-sans: 'Inter', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
+  --font-sans: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "Apple Color Emoji", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol";
 }
 
 body {
   color: var(--color-text-primary);
-  /* background-color: var(--color-bg-page); Note: App.tsx handles main bg, but we can refine */
+  background-color: var(--color-bg-page);
 }
 
 /* Custom Scrollbar like Notion */

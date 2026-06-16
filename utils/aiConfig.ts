@@ -1,7 +1,7 @@
 import { AppSettings, ApiConnection } from '../types';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
-export const DEFAULT_XAI_MODEL = 'grok-4-1-fast-reasoning';
+export const DEFAULT_XAI_MODEL = 'grok-4-1-fast-non-reasoning';
 
 export interface GeminiModelOption {
     id: string;
@@ -23,10 +23,6 @@ export const XAI_MODEL_OPTIONS: XaiModelOption[] = [
     { id: 'grok-3-mini', label: 'Grok 3 Mini' },
     { id: 'grok-3', label: 'Grok 3' },
     { id: 'grok-2-vision-1212', label: 'Grok 2 Vision (1212)' },
-    { id: 'grok-imagine-image-pro', label: 'Grok Imagine Image Pro' },
-    { id: 'grok-imagine-image', label: 'Grok Imagine Image' },
-    { id: 'grok-2-image-1212', label: 'Grok 2 Image (1212)' },
-    { id: 'grok-imagine-video', label: 'Grok Imagine Video' },
 ];
 
 export const GEMINI_MODEL_OPTIONS: GeminiModelOption[] = [
@@ -41,8 +37,6 @@ export const GEMINI_MODEL_OPTIONS: GeminiModelOption[] = [
     { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite' },
     { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
     { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
-    { id: 'gemini-3-pro-image-preview', label: 'Gemini 3 Pro Image Preview' },
-    { id: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image' },
 ];
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
@@ -56,10 +50,22 @@ const GEMINI_MODEL_ALIASES: Record<string, string> = {
     'gemini-2.5-flash-lite-preview': 'gemini-2.5-flash-lite',
 };
 
+const isMediaGenerationModelName = (modelName?: string): boolean => {
+    const id = (modelName || '').toLowerCase();
+    return id.includes('image') || id.includes('video') || id.includes('imagine');
+};
+
 export const normalizeGeminiModelName = (modelName?: string): string => {
     const normalized = (modelName || '').trim().toLowerCase();
     if (!normalized) return DEFAULT_GEMINI_MODEL;
-    return GEMINI_MODEL_ALIASES[normalized] || normalized;
+    const aliased = GEMINI_MODEL_ALIASES[normalized] || normalized;
+    return isMediaGenerationModelName(aliased) ? DEFAULT_GEMINI_MODEL : aliased;
+};
+
+const normalizeConnectionModelName = (connection: ApiConnection): string => {
+    if (connection.provider === 'gemini') return normalizeGeminiModelName(connection.modelName);
+    if (connection.provider === 'xai' && isMediaGenerationModelName(connection.modelName)) return DEFAULT_XAI_MODEL;
+    return connection.modelName;
 };
 
 export interface ActiveGeminiConfig {
@@ -75,7 +81,7 @@ export interface ActiveAIConfig {
     modelName: string;
 }
 
-const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'xai'];
+const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini'];
 
 export const isChatSupportedProvider = (provider: ApiConnection['provider']): boolean => {
     return CHAT_SUPPORTED_PROVIDERS.includes(provider);
@@ -97,28 +103,22 @@ export const getActiveAIConfig = (settings: AppSettings): ActiveAIConfig | null 
     );
 
     if (selected) {
-        const modelName = selected.provider === 'gemini'
-            ? normalizeGeminiModelName(selected.modelName)
-            : selected.modelName;
         return {
             connectionId: selected.id,
             provider: selected.provider,
             apiKey: selected.apiKey,
-            modelName,
+            modelName: normalizeConnectionModelName(selected),
         };
     }
 
     // 2. Fallback to first active connection
     const firstActive = connections.find(c => c.isActive && hasUsableKey(c));
     if (firstActive) {
-        const modelName = firstActive.provider === 'gemini'
-            ? normalizeGeminiModelName(firstActive.modelName)
-            : firstActive.modelName;
         return {
             connectionId: firstActive.id,
             provider: firstActive.provider,
             apiKey: firstActive.apiKey,
-            modelName,
+            modelName: normalizeConnectionModelName(firstActive),
         };
     }
 
@@ -158,14 +158,11 @@ export const getAgentAIConfig = (settings: AppSettings, agentConnectionId?: stri
             return null;
         }
         console.log('[aiConfig] Found specific connection for agent:', agentConnection.modelName);
-        const modelName = agentConnection.provider === 'gemini'
-            ? normalizeGeminiModelName(agentConnection.modelName)
-            : agentConnection.modelName;
         return {
             connectionId: agentConnection.id,
             provider: agentConnection.provider,
             apiKey: agentConnection.apiKey,
-            modelName,
+            modelName: normalizeConnectionModelName(agentConnection),
         };
     }
 
@@ -190,87 +187,5 @@ export const getActiveGeminiConfig = (settings: AppSettings): ActiveGeminiConfig
     if (typeof settings.geminiApiKey === 'string' && settings.geminiApiKey.trim().length > 0) {
         return { apiKey: settings.geminiApiKey, modelName: DEFAULT_GEMINI_MODEL };
     }
-    return null;
-};
-
-export const isImageGenerationModel = (modelId: string): boolean => {
-    const id = modelId.toLowerCase();
-    return (
-        id.includes('imagine') ||
-        id.includes('image') ||
-        id === 'grok-2' || // Grok-2 is multimodal often
-        id === 'grok-3'
-    );
-};
-
-export const isVideoGenerationModel = (modelId: string): boolean => {
-    const id = modelId.toLowerCase();
-    return id.includes('video');
-};
-
-export const findMediaConnection = (settings: AppSettings, type: 'image' | 'video'): ActiveAIConfig | null => {
-    const connections = settings.apiConnections || [];
-    const checkFunc = type === 'image' ? isImageGenerationModel : isVideoGenerationModel;
-
-    // First try active connection
-    const active = getActiveAIConfig(settings);
-    if (active && checkFunc(active.modelName)) return active;
-
-    // Then try any active connection that matches
-    const found = connections.find(c => c.isActive && hasUsableKey(c) && checkFunc(c.modelName));
-    if (found) {
-        return {
-            connectionId: found.id,
-            provider: found.provider,
-            apiKey: found.apiKey,
-            modelName: found.provider === 'gemini' ? normalizeGeminiModelName(found.modelName) : found.modelName,
-        };
-    }
-
-    return null;
-};
-
-export const findMediaConnectionForProvider = (
-    settings: AppSettings,
-    type: 'image' | 'video',
-    provider: ApiConnection['provider'],
-    preferredConnectionId?: string
-): ActiveAIConfig | null => {
-    const connections = settings.apiConnections || [];
-    const checkFunc = type === 'image' ? isImageGenerationModel : isVideoGenerationModel;
-
-    if (preferredConnectionId) {
-        const preferred = connections.find((connection) =>
-            connection.id === preferredConnectionId &&
-            connection.provider === provider &&
-            connection.isActive &&
-            hasUsableKey(connection) &&
-            checkFunc(connection.modelName)
-        );
-        if (preferred) {
-            return {
-                connectionId: preferred.id,
-                provider: preferred.provider,
-                apiKey: preferred.apiKey,
-                modelName: preferred.provider === 'gemini' ? normalizeGeminiModelName(preferred.modelName) : preferred.modelName,
-            };
-        }
-    }
-
-    const providerMedia = connections.find((connection) =>
-        connection.provider === provider &&
-        connection.isActive &&
-        hasUsableKey(connection) &&
-        checkFunc(connection.modelName)
-    );
-    if (providerMedia) {
-        return {
-            connectionId: providerMedia.id,
-            provider: providerMedia.provider,
-            apiKey: providerMedia.apiKey,
-            modelName: providerMedia.provider === 'gemini' ? normalizeGeminiModelName(providerMedia.modelName) : providerMedia.modelName,
-        };
-    }
-
     return null;
 };

@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType } from './types';
-import { Calendar as CalendarIcon, CheckSquare, BookOpen, MessageCircle, Sparkles, ChevronDown, Plus, Trash2, Settings2, Hash, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
 import { supabase } from './utils/supabase';
+import { useRegisterSW } from 'virtual:pwa-register/react';
 import CalendarView from './views/CalendarView';
 import TodoView from './views/TodoView';
 import JournalView from './views/JournalView';
@@ -12,10 +13,12 @@ import SettingsView from './views/SettingsView';
 import ChatView from './views/ChatView';
 import AuthView from './views/AuthView';
 import { normalizeKoreanText } from './utils/encodingFix';
-import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncChatSessions, syncPersonaMemories, syncUserData, setOnSyncError, seedSyncSnapshot, clearSyncSnapshots } from './services/syncService';
+import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncChatSessions, syncPersonaMemories, syncUserData, setOnSyncError, seedSyncSnapshot, clearUserSyncState } from './services/syncService';
 import { debugManualSync } from './utils/debugSync';
 import { useAuthSession } from './hooks/useAuthSession';
 import { clearChatSessionsCache, loadChatSessionsCache, saveChatSessionsCache } from './utils/chatSessionCache';
+import { normalizePersistedImageSource } from './utils/imageAsset';
+import { getAvatarImageStyle, sanitizeAvatarFrame } from './utils/avatarFrame';
 
 type ChatObservation = {
   text: string;
@@ -26,6 +29,7 @@ const PERSONA_MEMORY_SESSION_LIMIT = 4;
 const PERSONA_MEMORY_LINE_LIMIT = 12;
 const PERSONA_MEMORY_ITEM_CHAR_LIMIT = 120;
 const PERSONA_MEMORY_TOTAL_CHAR_LIMIT = 1400;
+const PERSONA_MEMORY_INSTRUCTION_LIMIT = 8;
 const PERSONA_MEMORY_FACT_LIMIT = 6;
 const PERSONA_MEMORY_PREFERENCE_LIMIT = 6;
 const PERSONA_MEMORY_GOAL_LIMIT = 6;
@@ -34,12 +38,18 @@ const PERSONA_MEMORY_MAX_CONTENT_CHARS = 180;
 const PERSONA_MEMORY_DB_PER_AGENT_LIMIT = 24;
 
 type PersonaMemoryBuckets = {
+  pinned: string[];
+  instructions: string[];
   facts: string[];
   preferences: string[];
   goals: string[];
 };
 
+type ManagedPersonaMemoryBucketKey = Exclude<keyof PersonaMemoryBuckets, 'pinned'>;
+
 const EMPTY_PERSONA_MEMORY_BUCKETS: PersonaMemoryBuckets = {
+  pinned: [],
+  instructions: [],
   facts: [],
   preferences: [],
   goals: [],
@@ -84,19 +94,25 @@ const resolveSessionAgentIds = (
   agents: AIAgent[],
   fallbackIds: string[] = []
 ): string[] => {
-  const fromSession = dedupeAgentIds([
-    ...(Array.isArray(session.agentIds) ? session.agentIds : []),
-    session.agentId,
-  ]);
-  if (fromSession.length > 0) return fromSession;
+  const availableAgentIds = new Set(agents.map(agent => agent.id));
+  const keepAvailableIds = (ids: string[]) =>
+    ids.filter(id => availableAgentIds.size === 0 || availableAgentIds.has(id));
 
-  const fromMessages = extractAssistantAgentIds(session.messages || []);
+  const explicitAgentIds = keepAvailableIds(
+    dedupeAgentIds(Array.isArray(session.agentIds) ? session.agentIds : [])
+  );
+  if (explicitAgentIds.length > 0) return explicitAgentIds;
+
+  const primaryAgentIds = keepAvailableIds(dedupeAgentIds([session.agentId]));
+  if (primaryAgentIds.length > 0) return primaryAgentIds;
+
+  const fromMessages = keepAvailableIds(extractAssistantAgentIds(session.messages || []));
   if (fromMessages.length > 0) return fromMessages;
 
   const inferred = inferAgentIdFromMessages(session.messages || [], agents);
   if (inferred) return [inferred];
 
-  const fallback = dedupeAgentIds(fallbackIds);
+  const fallback = keepAvailableIds(dedupeAgentIds(fallbackIds));
   if (fallback.length > 0) return fallback;
 
   return agents[0]?.id ? [agents[0].id] : [];
@@ -109,6 +125,21 @@ const isSameAgentIdList = (a: string[], b: string[]): boolean => {
 
 const hasUserChatMessage = (session: ChatSession): boolean =>
   Array.isArray(session.messages) && session.messages.some((m: ChatMessage) => m.role === 'user');
+
+const parseTimestampMs = (value?: string): number => {
+  const timestamp = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const getChatSessionActivityTime = (session: ChatSession): number => {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const lastMessage = messages[messages.length - 1];
+  return Math.max(
+    parseTimestampMs(session.lastMessageAt),
+    parseTimestampMs(lastMessage?.timestamp),
+    parseTimestampMs(session.createdAt),
+  );
+};
 
 const isSameChatMessageList = (a: ChatMessage[], b: ChatMessage[]): boolean => {
   if (a === b) return true;
@@ -123,7 +154,12 @@ const isSameChatMessageList = (a: ChatMessage[], b: ChatMessage[]): boolean => {
       left.role !== right.role ||
       left.content !== right.content ||
       left.timestamp !== right.timestamp ||
-      left.agentId !== right.agentId
+      left.agentId !== right.agentId ||
+      left.imageUrl !== right.imageUrl ||
+      left.videoUrl !== right.videoUrl ||
+      left.provider !== right.provider ||
+      left.modelName !== right.modelName ||
+      left.connectionId !== right.connectionId
     ) {
       return false;
     }
@@ -167,11 +203,46 @@ const memorySentenceCandidates = (text: string): string[] =>
 const normalizeMemoryKey = (value: string): string =>
   value.toLowerCase().replace(/\s+/g, '').replace(/[^\p{L}\p{N}]/gu, '');
 
+const normalizePersonaMemory = (memory: any, fallbackUserId?: string): PersonaMemory | null => {
+  if (!memory?.agentId && !memory?.agent_id) return null;
+  const content = truncateMemoryText(String(memory.content || ''), PERSONA_MEMORY_MAX_CONTENT_CHARS);
+  if (!content) return null;
+  const typeValue = memory.type || memory.memory_type;
+  const now = new Date().toISOString();
+
+  return {
+    id: String(memory.id || crypto.randomUUID()),
+    userId: String(memory.userId || memory.user_id || fallbackUserId || ''),
+    agentId: String(memory.agentId || memory.agent_id),
+    type: (typeValue === 'preference' || typeValue === 'goal') ? typeValue : 'fact',
+    key: String(memory.key || memory.memory_key || normalizeMemoryKey(content) || crypto.randomUUID()),
+    content,
+    confidence: typeof memory.confidence === 'number' ? memory.confidence : 0.6,
+    observationCount: typeof memory.observationCount === 'number'
+      ? memory.observationCount
+      : (typeof memory.observation_count === 'number' ? memory.observation_count : 1),
+    firstObservedAt: typeof memory.firstObservedAt === 'string'
+      ? memory.firstObservedAt
+      : (typeof memory.first_observed_at === 'string' ? memory.first_observed_at : now),
+    lastObservedAt: typeof memory.lastObservedAt === 'string'
+      ? memory.lastObservedAt
+      : (typeof memory.last_observed_at === 'string' ? memory.last_observed_at : now),
+    createdAt: typeof memory.createdAt === 'string'
+      ? memory.createdAt
+      : (typeof memory.created_at === 'string' ? memory.created_at : now),
+    updatedAt: typeof memory.updatedAt === 'string'
+      ? memory.updatedAt
+      : (typeof memory.updated_at === 'string' ? memory.updated_at : now),
+  };
+};
+
 const collectMemorySignals = (text: string): {
+  instructions: string[];
   facts: string[];
   preferences: string[];
   goals: string[];
 } => {
+  const instructions: string[] = [];
   const facts: string[] = [];
   const preferences: string[] = [];
   const goals: string[] = [];
@@ -181,6 +252,12 @@ const collectMemorySignals = (text: string): {
     const compact = sentence.toLowerCase();
     const normalizedSentence = truncateMemoryText(sentence, PERSONA_MEMORY_ITEM_CHAR_LIMIT);
     if (!normalizedSentence) continue;
+
+    if (
+      /(말투|호칭|부르|답변\s*길이|짧게|길게|문단|문장|줄바꿈|이모지|하트|마침표|쉼표|존댓말|반말|기억|지침|규칙|프롬프트|이렇게\s*(말|답|대답)|하지\s*마|하지\s*말|하지\s*말아|쓰지\s*마|써줘|말해줘|답해줘|불러줘|유지해|따라줘)/.test(compact)
+    ) {
+      instructions.push(normalizedSentence);
+    }
 
     if (
       /(나는|저는|전|내가|내\s|저의|직업|회사|가족|출근|퇴근|학교|거주|사는곳|사는 곳)/.test(compact)
@@ -201,7 +278,28 @@ const collectMemorySignals = (text: string): {
     }
   }
 
-  return { facts, preferences, goals };
+  return { instructions, facts, preferences, goals };
+};
+
+const extractExplicitMemoryText = (text: string): string => {
+  const normalized = (text || '').trim();
+  if (!normalized) return '';
+
+  const suffixMatch = normalized.match(/^(.+?)\s*(?:이거|이건|이 내용|이 말)?\s*(?:기억해줘|기억해|메모해줘|메모해|저장해줘|저장해|잊지\s*마|잊지\s*말아줘)\.?$/i);
+  if (suffixMatch?.[1]?.trim()) return suffixMatch[1].trim();
+
+  const prefixMatch = normalized.match(/^(?:이거|이건|이 내용|이 말)?\s*(?:기억해줘|기억해|메모해줘|메모해|저장해줘|저장해)[:：,\s]+(.+)$/i);
+  if (prefixMatch?.[1]?.trim()) return prefixMatch[1].trim();
+
+  return '';
+};
+
+const inferMemoryBucketForText = (text: string): ManagedPersonaMemoryBucketKey => {
+  const signals = collectMemorySignals(text);
+  if (signals.instructions.length > 0) return 'instructions';
+  if (signals.preferences.length > 0) return 'preferences';
+  if (signals.goals.length > 0) return 'goals';
+  return 'facts';
 };
 
 const dedupeMemoryItems = (items: string[], limit: number): string[] => {
@@ -217,19 +315,23 @@ const dedupeMemoryItems = (items: string[], limit: number): string[] => {
   return output;
 };
 
-const memoryBucketKeyToType = (key: keyof PersonaMemoryBuckets): PersonaMemoryType => {
+const memoryBucketKeyToType = (key: ManagedPersonaMemoryBucketKey): PersonaMemoryType => {
   if (key === 'facts') return 'fact';
-  if (key === 'preferences') return 'preference';
+  if (key === 'preferences' || key === 'instructions') return 'preference';
   return 'goal';
 };
 
-const memoryTypeToBucketKey = (type: PersonaMemoryType): keyof PersonaMemoryBuckets => {
+const memoryTypeToBucketKey = (type: PersonaMemoryType, key: string = ''): ManagedPersonaMemoryBucketKey => {
+  if (key.startsWith('instruction:')) return 'instructions';
   if (type === 'fact') return 'facts';
   if (type === 'preference') return 'preferences';
   return 'goals';
 };
 
-const buildPersonaMemoryBuckets = (memories: PersonaMemory[]): Record<string, PersonaMemoryBuckets> => {
+const buildPersonaMemoryBuckets = (
+  memories: PersonaMemory[],
+  pinnedMemoryIds: Set<string> = new Set()
+): Record<string, PersonaMemoryBuckets> => {
   const output: Record<string, PersonaMemoryBuckets> = {};
   if (!Array.isArray(memories) || memories.length === 0) return output;
 
@@ -243,12 +345,20 @@ const buildPersonaMemoryBuckets = (memories: PersonaMemory[]): Record<string, Pe
     if (!memory?.agentId || !memory?.content) continue;
     if (!output[memory.agentId]) {
       output[memory.agentId] = {
+        pinned: [],
+        instructions: [],
         facts: [],
         preferences: [],
         goals: [],
       };
     }
-    const bucketKey = memoryTypeToBucketKey(memory.type);
+    if (pinnedMemoryIds.has(memory.id)) {
+      if (output[memory.agentId].pinned.length < 6) {
+        output[memory.agentId].pinned.push(memory.content);
+      }
+      continue;
+    }
+    const bucketKey = memoryTypeToBucketKey(memory.type, memory.key);
     const bucket = output[memory.agentId][bucketKey];
     if (bucket.length >= PERSONA_MEMORY_DB_PER_AGENT_LIMIT) continue;
     bucket.push(memory.content);
@@ -264,57 +374,30 @@ const buildPersonaMemoryContext = (
   persistentMemory: PersonaMemoryBuckets = EMPTY_PERSONA_MEMORY_BUCKETS,
 ): string => {
   if (!agentId) return '';
+  void sessions;
+  void activeSessionId;
 
-  const related = sessions
-    .filter(session => {
-      if (session.id === activeSessionId) return false;
-      if (!Array.isArray(session.messages) || session.messages.length === 0) return false;
-      const sessionAgentIds = dedupeAgentIds([
-        ...(Array.isArray(session.agentIds) ? session.agentIds : []),
-        session.agentId,
-        ...extractAssistantAgentIds(session.messages),
-      ]);
-      return sessionAgentIds.includes(agentId);
-    })
-    .sort((a, b) => {
-      const aTs = new Date(a.lastMessageAt || a.createdAt).getTime();
-      const bTs = new Date(b.lastMessageAt || b.createdAt).getTime();
-      return bTs - aTs;
-    })
-    .slice(0, Math.max(PERSONA_MEMORY_SESSION_LIMIT, 8));
+  const pinned = dedupeMemoryItems(persistentMemory.pinned || [], 6);
+  const instructions = dedupeMemoryItems(persistentMemory.instructions || [], PERSONA_MEMORY_INSTRUCTION_LIMIT);
+  const facts = dedupeMemoryItems(persistentMemory.facts || [], PERSONA_MEMORY_FACT_LIMIT);
+  const preferences = dedupeMemoryItems(persistentMemory.preferences || [], PERSONA_MEMORY_PREFERENCE_LIMIT);
+  const goals = dedupeMemoryItems(persistentMemory.goals || [], PERSONA_MEMORY_GOAL_LIMIT);
 
-  const factsRaw: string[] = [...(persistentMemory.facts || [])];
-  const preferencesRaw: string[] = [...(persistentMemory.preferences || [])];
-  const goalsRaw: string[] = [...(persistentMemory.goals || [])];
-  const recentLines: string[] = [];
-
-  for (const session of related) {
-    const recentMessages = session.messages.slice(-10);
-    for (const msg of recentMessages) {
-      const role = msg.role === 'user' ? 'User' : 'Assistant';
-      const content = truncateMemoryText(msg.content || '', PERSONA_MEMORY_ITEM_CHAR_LIMIT);
-      if (!content) continue;
-
-      if (msg.role === 'user') {
-        const signals = collectMemorySignals(content);
-        factsRaw.push(...signals.facts);
-        preferencesRaw.push(...signals.preferences);
-        goalsRaw.push(...signals.goals);
-      }
-
-      if (recentLines.length < PERSONA_MEMORY_LINE_LIMIT) {
-        recentLines.push(`[${truncateMemoryText(session.title || 'Chat', 24)}] ${role}: ${content}`);
-      }
-    }
-  }
-
-  const facts = dedupeMemoryItems(factsRaw, PERSONA_MEMORY_FACT_LIMIT);
-  const preferences = dedupeMemoryItems(preferencesRaw, PERSONA_MEMORY_PREFERENCE_LIMIT);
-  const goals = dedupeMemoryItems(goalsRaw, PERSONA_MEMORY_GOAL_LIMIT);
-
-  if (facts.length === 0 && preferences.length === 0 && goals.length === 0 && recentLines.length === 0) return '';
+  if (pinned.length === 0 && instructions.length === 0 && facts.length === 0 && preferences.length === 0 && goals.length === 0) return '';
 
   const blocks: string[] = [];
+  if (pinned.length > 0) {
+    blocks.push(
+      '[Pinned Memory: Highest Priority]',
+      ...pinned.map((item, index) => `${index + 1}. ${item}`),
+    );
+  }
+  if (instructions.length > 0) {
+    blocks.push(
+      '[Standing Instructions: Follow These]',
+      ...instructions.map((item, index) => `${index + 1}. ${item}`),
+    );
+  }
   if (facts.length > 0) {
     blocks.push(
       '[Long-term Memory: Facts]',
@@ -333,9 +416,6 @@ const buildPersonaMemoryContext = (
       ...goals.map((item, index) => `${index + 1}. ${item}`),
     );
   }
-  if (recentLines.length > 0) {
-    blocks.push('[Recent Cross-Session Context]', ...recentLines);
-  }
 
   return truncateMemoryText(blocks.join('\n'), PERSONA_MEMORY_TOTAL_CHAR_LIMIT);
 };
@@ -351,21 +431,98 @@ const normalizeCommunityPost = (post: any): CommunityPost => ({
   comments: Array.isArray(post.comments) ? post.comments : undefined,
 });
 
-const normalizeAIAgent = (agent: any, fallbackOrder: number = 0): AIAgent => ({
-  id: String(agent?.id || crypto.randomUUID()),
-  name: normalizeKoreanText(String(agent?.name || `Persona ${fallbackOrder + 1}`)),
-  emoji: String(agent?.emoji || ':)'),
-  role: normalizeKoreanText(String(agent?.role || 'AI Assistant')),
-  personality: normalizeKoreanText(String(agent?.personality || 'Helpful and practical assistant persona.')),
-  tone: normalizeKoreanText(String(agent?.tone || 'Warm and clear.')),
-  color: String(agent?.color || '#37352f'),
-  avatar: typeof agent?.avatar === 'string' ? agent.avatar : undefined,
-  connectionId: typeof agent?.connection_id === 'string' ? agent.connection_id : (typeof agent?.connectionId === 'string' ? agent.connectionId : undefined),
+const parseStoredTimestampParts = (value: unknown): { date: string; time: string } => {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return { date: '', time: '' };
+
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}:\d{2})/);
+  if (match) {
+    return {
+      date: match[1],
+      time: match[2],
+    };
+  }
+
+  const [datePart = '', timePart = ''] = raw.split('T');
+  return {
+    date: datePart,
+    time: timePart.replace(/([+-]\d{2}:\d{2}|Z)$/i, '').slice(0, 8),
+  };
+};
+
+const normalizeCachedCalendarEvent = (event: CalendarEvent): CalendarEvent => {
+  const hasExplicitStartTime = Boolean(event.startTime && event.startTime !== '00:00');
+  const hasExplicitEndTime = Boolean(event.endTime && event.endTime !== '23:59');
+  const inferredAllDay =
+    Boolean(event.isAllDay) ||
+    Boolean(event.description?.includes('[TODO_LINK:')) ||
+    (!hasExplicitStartTime && !hasExplicitEndTime);
+
+  if (!inferredAllDay) return event;
+
+  return {
+    ...event,
+    startTime: undefined,
+    endTime: undefined,
+    isAllDay: true,
+  };
+};
+
+const normalizeAIAgent = (agent: any, fallbackOrder: number = 0): AIAgent => {
+  const avatar = typeof agent?.avatar === 'string' ? agent.avatar : undefined;
+  const normalizeTone = (value: unknown): string => {
+    if (typeof value !== 'string') return '';
+    const normalized = normalizeKoreanText(value);
+    return normalized.trim() === '따뜻하고 명확한 말투' ? '' : normalized;
+  };
+  return {
+    id: String(agent?.id || crypto.randomUUID()),
+    name: normalizeKoreanText(String(agent?.name || `페르소나 ${fallbackOrder + 1}`)),
+    emoji: String(agent?.emoji || ':)'),
+    role: normalizeKoreanText(String(agent?.role || '인공지능 비서')),
+    personality: normalizeKoreanText(
+      typeof agent?.personality === 'string'
+        ? agent.personality
+        : '도움이 되고 실용적인 비서 성격'
+    ),
+    tone: normalizeTone(agent?.tone),
+    color: String(agent?.color || '#37352f'),
+    avatar,
+    avatarFrame: avatar ? sanitizeAvatarFrame(agent?.avatarFrame) : undefined,
+    connectionId: typeof agent?.connection_id === 'string' ? agent.connection_id : (typeof agent?.connectionId === 'string' ? agent.connectionId : undefined),
+  };
+};
+
+const getAgentProfileSettings = (agent: Partial<AIAgent>): Partial<AIAgent> => ({
+  avatarFrame: agent.avatar ? sanitizeAvatarFrame(agent.avatarFrame) : undefined,
 });
+
+const isAgentProfileSettingsEmpty = (profile: Partial<AIAgent>): boolean =>
+  !profile.avatarFrame;
+
+const resolveAgentsWithProfiles = (agents: AIAgent[], settings: AppSettings): AIAgent[] =>
+  (agents.length > 0 ? agents : DEFAULT_AGENTS).map((agent, index) =>
+    normalizeAIAgent({
+      ...agent,
+      ...(settings.agentProfiles?.[agent.id] || {}),
+    }, index)
+  );
+
+const normalizeAgentAvatarForSave = async (agent: AIAgent, previousAvatar?: string): Promise<AIAgent> => {
+  const nextAvatar = typeof agent.avatar === 'string' ? agent.avatar.trim() : '';
+  const prevAvatar = typeof previousAvatar === 'string' ? previousAvatar.trim() : '';
+  if (!nextAvatar) {
+    return { ...agent, avatar: undefined, avatarFrame: undefined };
+  }
+  const avatarFrame = sanitizeAvatarFrame(agent.avatarFrame);
+  if (nextAvatar === prevAvatar) return { ...agent, avatar: nextAvatar, avatarFrame };
+  const normalizedAvatar = await normalizePersistedImageSource(nextAvatar);
+  return { ...agent, avatar: normalizedAvatar, avatarFrame };
+};
 
 const DEFAULT_TAGS: CalendarTag[] = [
   { id: 'tag_1', name: '일정', color: '#4c2889' },
-  { id: 'tag_2', name: 'Tasks', color: '#DEB13B' },
+  { id: 'tag_2', name: '할 일', color: '#DEB13B' },
   { id: 'tag_3', name: '생일', color: '#35B37E' },
 ];
 
@@ -458,18 +615,250 @@ const retryTodoUpdateWithFallback = async (
   return { error: finalResult.error, payload };
 };
 
+const TODO_LIST_OPTIONAL_DB_COLUMNS = ['due_date', 'tab_id', 'type'] as const;
+type TodoListOptionalDbColumn = (typeof TODO_LIST_OPTIONAL_DB_COLUMNS)[number];
+
+const getUnsupportedTodoListColumns = (error: any): TodoListOptionalDbColumn[] => {
+  const raw = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+  return TODO_LIST_OPTIONAL_DB_COLUMNS.filter((column) => raw.includes(column));
+};
+
+const shouldRetryTodoListWithoutTab = (error: any): boolean => {
+  const raw = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+  return (
+    error?.code === '23503' ||
+    error?.code === '22P02' ||
+    raw.includes('todo_lists_tab_id') ||
+    raw.includes('tab_todo') ||
+    raw.includes('tab_project') ||
+    raw.includes('tab_routine')
+  );
+};
+
+const stripTodoListOptionalColumns = <T extends Record<string, any>>(value: T, columns: TodoListOptionalDbColumn[]): T => {
+  if (!columns.length) return value;
+  const next = { ...value };
+  columns.forEach((column) => {
+    delete next[column];
+  });
+  return next;
+};
+
+const retryTodoListUpsertWithFallback = async (
+  rows: Record<string, any>[],
+): Promise<{ error: any; rows: Record<string, any>[] }> => {
+  let payloadRows = rows.map((row) => ({ ...row }));
+  let attempt = 0;
+
+  while (attempt < TODO_LIST_OPTIONAL_DB_COLUMNS.length + 1) {
+    const result = await supabase.from('todo_lists').upsert(payloadRows, { onConflict: 'id' });
+    if (!result.error) return { error: null, rows: payloadRows };
+
+    const columnsToStrip = new Set<TodoListOptionalDbColumn>(getUnsupportedTodoListColumns(result.error));
+    if (shouldRetryTodoListWithoutTab(result.error)) {
+      columnsToStrip.add('tab_id');
+    }
+
+    if (columnsToStrip.size === 0) {
+      return { error: result.error, rows: payloadRows };
+    }
+
+    payloadRows = payloadRows.map((row) => stripTodoListOptionalColumns(row, [...columnsToStrip]));
+    attempt += 1;
+  }
+
+  const finalResult = await supabase.from('todo_lists').upsert(payloadRows, { onConflict: 'id' });
+  return { error: finalResult.error, rows: payloadRows };
+};
+
 const DEFAULT_TODO_LISTS: TodoList[] = [
   { id: DEFAULT_TODO_LIST_ID, title: '해야 할 일', order: 1, tabId: 'tab_todo' },
   { id: DEFAULT_ROUTINE_LIST_ID, title: '루틴 목록', order: 2, tabId: 'tab_routine' },
 ];
 
+const THEME_STORAGE_KEY = 'lifesync-ai-theme';
+const THEME_META_COLOR = {
+  light: '#ffffff',
+  dark: '#0a0a0a',
+} as const;
+
+const DEFAULT_THEME: ThemeMode = 'system';
+
 const DEFAULT_SETTINGS: AppSettings = {
   autoAiReactions: false,
   chatActionConfirm: true,
+  theme: DEFAULT_THEME,
   apiConnections: [],
   activeConnectionId: undefined,
+  agentProfiles: {},
+  agentUsageById: {},
+  pinnedPersonaMemoryIds: [],
   lastRoutineResetDate: undefined,
+  routineProgress: {},
 };
+
+const getSystemTheme = (): Exclude<ThemeMode, 'system'> => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'light';
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+};
+
+const resolveThemeMode = (theme: ThemeMode | undefined): Exclude<ThemeMode, 'system'> =>
+  theme === 'dark' || theme === 'light' ? theme : getSystemTheme();
+
+const applyThemeToDocument = (theme: ThemeMode | undefined) => {
+  if (typeof document === 'undefined') return;
+
+  const resolvedTheme = resolveThemeMode(theme);
+  const root = document.documentElement;
+  root.dataset.theme = resolvedTheme;
+  root.style.colorScheme = resolvedTheme;
+
+  const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+  if (metaThemeColor) {
+    metaThemeColor.setAttribute('content', THEME_META_COLOR[resolvedTheme]);
+  }
+};
+
+const ROUTINE_DATE_FORMAT = 'yyyy-MM-dd';
+
+const getTodayDate = (): string => format(new Date(), ROUTINE_DATE_FORMAT);
+
+const parseJournalEntryDate = (dateValue?: string): Date | null => {
+  if (!dateValue) return null;
+  const parsed = parseISO(dateValue);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getJournalEntryTime = (entry: JournalEntry): number =>
+  parseJournalEntryDate(entry.date)?.getTime() ?? 0;
+
+const isRoutineTab = (tab: TodoTab): boolean => {
+  const normalizedName = (tab.name || '').toLowerCase();
+  return tab.id === 'tab_routine' || tab.name.includes('루틴') || normalizedName.includes('routine');
+};
+
+const getRoutineListIds = (lists: TodoList[], tabs: TodoTab[]): Set<string> => {
+  const routineTabIds = new Set(
+    (Array.isArray(tabs) ? tabs : [])
+      .filter(isRoutineTab)
+      .map(tab => tab.id)
+  );
+
+  return new Set(
+    (Array.isArray(lists) ? lists : [])
+      .filter(list => {
+        const normalizedTitle = (list.title || '').toLowerCase();
+        return routineTabIds.has(list.tabId || '') || list.title.includes('루틴') || normalizedTitle.includes('routine');
+      })
+      .map(list => list.id)
+  );
+};
+
+const isRoutineTodo = (todo: Pick<Todo, 'listId'>, routineListIds: Set<string>): boolean =>
+  Boolean(todo.listId && routineListIds.has(todo.listId));
+
+const clearTodoCompletionFlags = (todo: Todo): Todo => {
+  const hasCompletedSubTask = Boolean(todo.subTasks?.some(subTask => subTask.completed));
+  if (!todo.completed && !hasCompletedSubTask) return todo;
+
+  return {
+    ...todo,
+    completed: false,
+    subTasks: todo.subTasks?.map(subTask => ({ ...subTask, completed: false })),
+  };
+};
+
+const pruneRoutineProgress = (
+  progress: Record<string, RoutineProgress> | undefined,
+): Record<string, RoutineProgress> | undefined => {
+  if (!progress) return undefined;
+
+  const entries = Object.entries(progress).flatMap(([todoId, value]) => {
+    if (!value) return [];
+
+    const nextSubTaskCompletedOn = Object.fromEntries(
+      Object.entries(value.subTaskCompletedOn || {}).filter(([, completedOn]) => Boolean(completedOn))
+    );
+
+    const nextValue: RoutineProgress = {};
+    if (value.completedOn) nextValue.completedOn = value.completedOn;
+    if (Object.keys(nextSubTaskCompletedOn).length > 0) nextValue.subTaskCompletedOn = nextSubTaskCompletedOn;
+
+    return nextValue.completedOn || nextValue.subTaskCompletedOn ? [[todoId, nextValue] as const] : [];
+  });
+
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
+
+const getTodoWithRoutineState = (
+  todo: Todo,
+  settings: AppSettings,
+  routineListIds: Set<string>,
+  today: string,
+): Todo => {
+  if (!isRoutineTodo(todo, routineListIds)) return todo;
+
+  const progress = settings.routineProgress?.[todo.id];
+  const subTaskCompletedOn = progress?.subTaskCompletedOn || {};
+
+  return {
+    ...todo,
+    completed: progress?.completedOn === today,
+    subTasks: todo.subTasks?.map(subTask => ({
+      ...subTask,
+      completed: subTaskCompletedOn[subTask.id] === today,
+    })),
+  };
+};
+
+const buildRoutineProgressFromDisplayedTodo = (todo: Todo, today: string): RoutineProgress | undefined => {
+  const nextProgress: RoutineProgress = {};
+
+  if (todo.completed) {
+    nextProgress.completedOn = today;
+  }
+
+  const completedSubTaskEntries = (todo.subTasks || [])
+    .filter(subTask => subTask.completed)
+    .map(subTask => [subTask.id, today] as const);
+
+  if (completedSubTaskEntries.length > 0) {
+    nextProgress.subTaskCompletedOn = Object.fromEntries(completedSubTaskEntries);
+  }
+
+  return nextProgress.completedOn || nextProgress.subTaskCompletedOn ? nextProgress : undefined;
+};
+
+const getSupabaseErrorMessage = (error: any, fallback: string): string =>
+  error?.message || fallback;
+
+const areSettingsValuesEqual = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
+
+const buildSettingsPatch = (previous: AppSettings, next: AppSettings): Partial<AppSettings> => {
+  const patch: Partial<AppSettings> = {};
+  const keys = new Set([
+    ...Object.keys(previous || {}),
+    ...Object.keys(next || {}),
+  ]);
+
+  keys.forEach((key) => {
+    const previousValue = (previous as unknown as Record<string, unknown>)[key];
+    const hasNextValue = Object.prototype.hasOwnProperty.call(next, key);
+    const nextValue = hasNextValue
+      ? (next as unknown as Record<string, unknown>)[key]
+      : null;
+
+    if (!areSettingsValuesEqual(previousValue, nextValue)) {
+      (patch as Record<string, unknown>)[key] = nextValue ?? null;
+    }
+  });
+
+  return patch;
+};
+
+const isMissingUserDataResourceError = (error: any): boolean =>
+  error?.code === '42P01' || error?.code === '42703';
 
 const CACHE_PREFIX = 'lifesync_cache';
 const CACHE_VERSION = 'v2';
@@ -538,11 +927,7 @@ const compactChatSessionsForCache = (
   if (!Array.isArray(sessions) || sessions.length === 0) return [];
 
   return [...sessions]
-    .sort((left, right) => {
-      const leftTime = new Date(left.lastMessageAt || left.createdAt).getTime();
-      const rightTime = new Date(right.lastMessageAt || right.createdAt).getTime();
-      return rightTime - leftTime;
-    })
+    .sort((left, right) => getChatSessionActivityTime(right) - getChatSessionActivityTime(left))
     .slice(0, maxSessions)
     .map((session) => {
       const compactMessages = (Array.isArray(session.messages) ? session.messages : [])
@@ -636,7 +1021,7 @@ const recoverFromStorageQuota = (userId: string, key: CacheKey): void => {
   });
 };
 
-const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat', 'settings'];
+const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat'];
 
 const normalizeView = (rawView: string | null): ViewState => {
   if (!rawView) return 'chat';
@@ -644,7 +1029,7 @@ const normalizeView = (rawView: string | null): ViewState => {
   // Backward-compat aliases from older URLs.
   const aliased =
     rawView === 'dashboard' || rawView === 'board' ? 'chat'
-      : rawView === 'api-settings' || rawView === 'personas' ? 'settings'
+      : rawView === 'settings' || rawView === 'api-settings' || rawView === 'personas' ? 'chat'
         : rawView;
 
   return VALID_VIEWS.includes(aliased as ViewState) ? (aliased as ViewState) : 'chat';
@@ -691,12 +1076,12 @@ class ViewErrorBoundary extends React.Component<ViewErrorBoundaryProps, ViewErro
     return (
       <div className="h-full bg-white flex items-center justify-center p-6">
         <div className="max-w-md text-center space-y-3">
-          <h2 className="text-lg font-semibold text-[#37352f]">화면을 불러오는 중 오류가 발생했습니다.</h2>
+          <h2 className="text-lg font-medium text-[#37352f]">화면을 불러오는 중 오류가 발생했습니다.</h2>
           <p className="text-sm text-[#787774]">다른 섹션으로 이동하거나 채팅 화면으로 복구해 주세요.</p>
           <button
             type="button"
             onClick={this.props.onRecover}
-            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#37352f] text-white text-sm font-medium hover:bg-black transition-colors"
+            className="inline-flex items-center justify-center px-4 py-2 rounded-lg border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-sm font-normal hover:bg-[#eeeeee] transition-colors"
           >
             채팅 화면으로 이동
           </button>
@@ -721,13 +1106,23 @@ const App: React.FC = () => {
   const fetchRetryTimerRef = useRef<number | null>(null);
   const latestSessionUserIdRef = useRef<string | null>(null);
   const fetchingUserIdRef = useRef<string | null>(null);
+  const todoMutationVersionRef = useRef(0);
+  const settingsSyncBaselineRef = useRef<AppSettings>({ ...DEFAULT_SETTINGS });
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error'>('idle');
   const [currentView, setCurrentView] = useState<ViewState>(() => resolveViewFromUrl());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
   useEffect(() => {
     console.log(`[App] v2.5 booting id=${bootId}...`);
+    if (import.meta.env.DEV && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations()
+        .then((registrations) => registrations.forEach((registration) => registration.unregister()))
+        .catch(() => {
+          // Ignore development-only service worker cleanup failures.
+        });
+    }
     // Remove legacy unscoped cache keys to prevent cross-account data bleed.
     CACHE_KEYS.forEach((key) => {
       try {
@@ -738,11 +1133,29 @@ const App: React.FC = () => {
     });
   }, []);
 
+  useEffect(() => {
+    if (!isSettingsModalOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsSettingsModalOpen(false);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isSettingsModalOpen]);
+
   useEffect(() => () => {
     if (fetchRetryTimerRef.current) {
       window.clearTimeout(fetchRetryTimerRef.current);
       fetchRetryTimerRef.current = null;
     }
+    if (latestSessionUserIdRef.current) {
+      clearUserSyncState(latestSessionUserIdRef.current);
+    }
+  }, []);
+
+  const markTodoDataMutated = useCallback(() => {
+    todoMutationVersionRef.current += 1;
   }, []);
 
   // App Data State
@@ -765,8 +1178,15 @@ const App: React.FC = () => {
   const [activeChatAgentIds, setActiveChatAgentIds] = useState<string[]>([]);
   const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
   const [settings, setSettings] = useState<AppSettings>(() => ({ ...DEFAULT_SETTINGS }));
+  const [todayDate, setTodayDate] = useState<string>(() => getTodayDate());
+  const routineListIds = useMemo(() => getRoutineListIds(todoLists, todoTabs), [todoLists, todoTabs]);
+  const effectiveTodos = useMemo(
+    () => todos.map(todo => getTodoWithRoutineState(todo, settings, routineListIds, todayDate)),
+    [todos, settings.routineProgress, routineListIds, todayDate]
+  );
 
   const [calendarTags, setCalendarTags] = useState<CalendarTag[]>(DEFAULT_TAGS);
+  const [visibleCalendarTagIds, setVisibleCalendarTagIds] = useState<string[]>(() => DEFAULT_TAGS.map(tag => tag.id));
   const [journalCategories, setJournalCategories] = useState<JournalCategory[]>([]);
 
   const [selectedJournalId, setSelectedJournalId] = useState<string | null>(null);
@@ -788,11 +1208,115 @@ const App: React.FC = () => {
   const [activeAiAgentMenu, setActiveAiAgentMenu] = useState<string | null>(null);
   const primaryActiveChatAgentId = activeChatAgentIds[0] || aiAgents[0]?.id || 'ARIA';
 
+  useEffect(() => {
+    setVisibleCalendarTagIds(prev => {
+      const availableIds = calendarTags.map(tag => tag.id);
+      const availableSet = new Set(availableIds);
+      const keptIds = prev.filter(id => availableSet.has(id));
+      const addedIds = availableIds.filter(id => !prev.includes(id));
+      const next = [...keptIds, ...addedIds];
+
+      if (next.length === prev.length && next.every((id, index) => id === prev[index])) {
+        return prev;
+      }
+
+      return next;
+    });
+  }, [calendarTags]);
+
+  const visibleCalendarTagSet = useMemo(
+    () => new Set(visibleCalendarTagIds),
+    [visibleCalendarTagIds]
+  );
+  const filteredCalendarEvents = useMemo(
+    () => events.filter(event => visibleCalendarTagSet.has(event.type)),
+    [events, visibleCalendarTagSet]
+  );
+  const toggleCalendarTagFilter = useCallback((tagId: string) => {
+    setVisibleCalendarTagIds(prev =>
+      prev.includes(tagId)
+        ? prev.filter(id => id !== tagId)
+        : [...prev, tagId]
+    );
+  }, []);
+
 
   // Undo Toast
   const undoRef = useRef<null | (() => void)>(null);
   const [undoToast, setUndoToast] = useState<{ id: string; label: string } | null>(null);
   const recentChatObservationsRef = useRef<ChatObservation[]>([]);
+  const {
+    needRefresh: [needRefresh, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW();
+
+  useEffect(() => {
+    const storedTheme = settings.theme || DEFAULT_THEME;
+
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, storedTheme);
+    } catch {
+      // Ignore storage failures.
+    }
+
+    applyThemeToDocument(storedTheme);
+
+    if (storedTheme !== 'system' || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleThemeChange = () => applyThemeToDocument('system');
+
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', handleThemeChange);
+      return () => media.removeEventListener('change', handleThemeChange);
+    }
+
+    media.addListener(handleThemeChange);
+    return () => media.removeListener(handleThemeChange);
+  }, [settings.theme]);
+
+  useEffect(() => {
+    const syncTodayDate = () => {
+      const nextDate = getTodayDate();
+      setTodayDate(prev => (prev === nextDate ? prev : nextDate));
+    };
+
+    syncTodayDate();
+
+    let timeoutId: number | null = null;
+
+    const scheduleNextSync = () => {
+      const now = new Date();
+      const nextMidnight = new Date(now);
+      nextMidnight.setHours(24, 0, 1, 0);
+      const delay = Math.max(1000, nextMidnight.getTime() - now.getTime());
+
+      timeoutId = window.setTimeout(() => {
+        syncTodayDate();
+        scheduleNextSync();
+      }, delay);
+    };
+
+    const handleVisibilitySync = () => {
+      if (document.visibilityState === 'visible') {
+        syncTodayDate();
+      }
+    };
+
+    scheduleNextSync();
+    window.addEventListener('focus', syncTodayDate);
+    document.addEventListener('visibilitychange', handleVisibilitySync);
+
+    return () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      window.removeEventListener('focus', syncTodayDate);
+      document.removeEventListener('visibilitychange', handleVisibilitySync);
+    };
+  }, []);
 
   const appendChatObservation = (text: string) => {
     const trimmed = text.trim();
@@ -813,16 +1337,26 @@ const App: React.FC = () => {
     const trimmedText = text.trim();
     if (!trimmedText) return;
 
+    const explicitMemoryText = extractExplicitMemoryText(trimmedText);
+    if (!explicitMemoryText) return;
+
     const availableAgentIdSet = new Set(aiAgents.map((agent) => agent.id));
     const scopedAgentIds = dedupeAgentIds(targetAgentIds).filter((agentId) => availableAgentIdSet.has(agentId));
     if (scopedAgentIds.length === 0) return;
 
-    const signals = collectMemorySignals(trimmedText);
-    const bucketCandidates: PersonaMemoryBuckets = {
-      facts: dedupeMemoryItems(signals.facts, PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT),
-      preferences: dedupeMemoryItems(signals.preferences, PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT),
-      goals: dedupeMemoryItems(signals.goals, PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT),
+    const bucketCandidates: Record<ManagedPersonaMemoryBucketKey, string[]> = {
+      instructions: [],
+      facts: [],
+      preferences: [],
+      goals: [],
     };
+
+    const explicitBucket = inferMemoryBucketForText(explicitMemoryText);
+    bucketCandidates[explicitBucket] = dedupeMemoryItems(
+      [explicitMemoryText],
+      PERSONA_MEMORY_CAPTURE_PER_TYPE_LIMIT
+    );
+
     const hasAnySignal = bucketCandidates.facts.length > 0
       || bucketCandidates.preferences.length > 0
       || bucketCandidates.goals.length > 0;
@@ -836,7 +1370,7 @@ const App: React.FC = () => {
         indexByCompoundKey.set(`${memory.userId}:${memory.agentId}:${memory.key}`, idx);
       });
 
-      const bucketEntries = Object.entries(bucketCandidates) as Array<[keyof PersonaMemoryBuckets, string[]]>;
+      const bucketEntries = Object.entries(bucketCandidates) as Array<[ManagedPersonaMemoryBucketKey, string[]]>;
       for (const agentId of scopedAgentIds) {
         for (const [bucketKey, items] of bucketEntries) {
           const memoryType = memoryBucketKeyToType(bucketKey);
@@ -844,7 +1378,7 @@ const App: React.FC = () => {
             const normalizedContent = truncateMemoryText(sentence, PERSONA_MEMORY_MAX_CONTENT_CHARS);
             const normalizedKey = normalizeMemoryKey(normalizedContent);
             if (!normalizedContent || !normalizedKey) continue;
-            const persistedKey = `${memoryType}:${normalizedKey}`;
+            const persistedKey = `${bucketKey === 'instructions' ? 'instruction' : memoryType}:${normalizedKey}`;
             const compoundKey = `${currentUser.id}:${agentId}:${persistedKey}`;
             const existingIndex = indexByCompoundKey.get(compoundKey);
 
@@ -958,6 +1492,7 @@ const App: React.FC = () => {
     setSelectedAiAgentId(DEFAULT_AGENTS[0]?.id ?? 'ARIA');
     setUndoToast(null);
     recentChatObservationsRef.current = [];
+    settingsSyncBaselineRef.current = { ...DEFAULT_SETTINGS };
   };
 
   const hydrateFromLocalCache = (userId: string) => {
@@ -977,7 +1512,7 @@ const App: React.FC = () => {
     const cachedCategories = readCacheState<JournalCategory[]>(userId, 'journalCategories', []);
     const cachedPersonaMemories = readCacheState<PersonaMemory[]>(userId, 'personaMemories', []);
 
-    setEvents(cachedEvents);
+    setEvents(cachedEvents.map(normalizeCachedCalendarEvent));
     setTodoTabs(cachedTodoTabs.length > 0 ? cachedTodoTabs : DEFAULT_TODO_TABS);
     setTodoLists(normalizeTodoLists(cachedTodoLists.length > 0 ? cachedTodoLists : DEFAULT_TODO_LISTS));
     setTodoSteps(cachedTodoSteps.map(step => ({
@@ -993,7 +1528,13 @@ const App: React.FC = () => {
     setCommunityPosts(cachedCommunityPosts);
     setAiAgents(normalizedAgents);
     setChatSessions([]);
-    setPersonaMemories(Array.isArray(cachedPersonaMemories) ? cachedPersonaMemories : []);
+    setPersonaMemories(
+      Array.isArray(cachedPersonaMemories)
+        ? cachedPersonaMemories
+          .map((memory) => normalizePersonaMemory(memory, userId))
+          .filter(Boolean) as PersonaMemory[]
+        : []
+    );
     setActivityLog(cachedActivityLog);
     setSettings({ ...DEFAULT_SETTINGS, ...cachedSettings });
     setCalendarTags(cachedTags.length > 0 ? cachedTags : DEFAULT_TAGS);
@@ -1023,11 +1564,15 @@ const App: React.FC = () => {
       // Profile lookups are only used for basic metadata (name, avatar, etc).
 
       if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-        const isDifferentUser = latestSessionUserIdRef.current !== user.id;
+        const previousUserId = latestSessionUserIdRef.current;
+        const isDifferentUser = previousUserId !== user.id;
         latestSessionUserIdRef.current = user.id;
         skipSyncRef.current = true;
         hasSuccessfulServerHydrationRef.current = false;
-        clearSyncSnapshots(user.id);
+        clearUserSyncState(user.id);
+        if (previousUserId && previousUserId !== user.id) {
+          clearUserSyncState(previousUserId);
+        }
         if (fetchRetryTimerRef.current) {
           window.clearTimeout(fetchRetryTimerRef.current);
           fetchRetryTimerRef.current = null;
@@ -1056,12 +1601,13 @@ const App: React.FC = () => {
         window.clearTimeout(fetchRetryTimerRef.current);
         fetchRetryTimerRef.current = null;
       }
-      if (previousUserId) clearSyncSnapshots(previousUserId);
+      if (previousUserId) clearUserSyncState(previousUserId);
       setIsDataLoaded(false);
       resetAppDataState();
     },
     onBeforeSignOut: () => {
       console.log('[App] onBeforeSignOut event');
+      const activeUserId = latestSessionUserIdRef.current;
       skipSyncRef.current = true;
       hasSuccessfulServerHydrationRef.current = false;
       isFetchingRef.current = false;
@@ -1073,6 +1619,7 @@ const App: React.FC = () => {
       setIsDataLoaded(false);
       setIsMobileMenuOpen(false);
       setActiveAiAgentMenu(null);
+      if (activeUserId) clearUserSyncState(activeUserId);
     },
   });
 
@@ -1167,8 +1714,14 @@ const App: React.FC = () => {
   useEffect(() => {
     if (currentUser && isDataLoaded) {
       writeCacheState(currentUser.id, 'settings', settings);
+      const settingsPatch = buildSettingsPatch(settingsSyncBaselineRef.current, settings);
+      settingsSyncBaselineRef.current = settings;
       if (skipSyncRef.current) return;
-      syncUserData(currentUser.id, { settings });
+      if (Object.keys(settingsPatch).length === 0) return;
+      syncUserData(currentUser.id, {
+        settingsPatch,
+        settingsSnapshot: settings,
+      });
     }
   }, [settings, currentUser?.id, isDataLoaded]);
 
@@ -1276,9 +1829,73 @@ const App: React.FC = () => {
     });
   }, [aiAgents]);
   useEffect(() => {
-    const agentIdSet = new Set(aiAgents.map((agent) => agent.id));
-    setPersonaMemories(prev => prev.filter((memory) => agentIdSet.has(memory.agentId)));
+    setSelectedAiAgentId(prev => {
+      if (aiAgents.some(agent => agent.id === prev)) return prev;
+      return aiAgents[0]?.id || '';
+    });
   }, [aiAgents]);
+  useEffect(() => {
+    const agentIdSet = new Set(aiAgents.map((agent) => agent.id));
+    setPersonaMemories(prev => {
+      const next = prev.filter((memory) => agentIdSet.has(memory.agentId));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [aiAgents]);
+  useEffect(() => {
+    const memoryIdSet = new Set(personaMemories.map((memory) => memory.id));
+    setSettings((prev) => {
+      const pinnedIds = prev.pinnedPersonaMemoryIds || [];
+      const nextPinnedIds = pinnedIds.filter((memoryId) => memoryIdSet.has(memoryId));
+      if (pinnedIds.length === nextPinnedIds.length) return prev;
+      return {
+        ...prev,
+        pinnedPersonaMemoryIds: nextPinnedIds,
+      };
+    });
+  }, [personaMemories]);
+  useEffect(() => {
+    const validAgentIds = new Set(aiAgents.map((agent) => agent.id));
+    setSettings((prev) => {
+      let changed = false;
+      const nextProfiles = Object.fromEntries(
+        Object.entries(prev.agentProfiles || {}).filter(([agentId]) => {
+          const keep = validAgentIds.has(agentId);
+          if (!keep) changed = true;
+          return keep;
+        })
+      );
+      const nextUsage = Object.fromEntries(
+        Object.entries(prev.agentUsageById || {}).filter(([agentId]) => {
+          const keep = validAgentIds.has(agentId);
+          if (!keep) changed = true;
+          return keep;
+        })
+      );
+      if (!changed) return prev;
+      return {
+        ...prev,
+        agentProfiles: nextProfiles,
+        agentUsageById: nextUsage,
+      };
+    });
+  }, [aiAgents]);
+  useEffect(() => {
+    const validConnectionIds = new Set((settings.apiConnections || []).map(connection => connection.id));
+    setAiAgents(prev => {
+      let changed = false;
+      const next = prev.map(agent => {
+        if (!agent.connectionId || validConnectionIds.has(agent.connectionId)) return agent;
+        changed = true;
+        return { ...agent, connectionId: undefined };
+      });
+      return changed ? next : prev;
+    });
+  }, [settings.apiConnections]);
+  useEffect(() => {
+    if (!activeChatSessionId) return;
+    if (chatSessions.some(session => session.id === activeChatSessionId)) return;
+    setActiveChatSessionId(null);
+  }, [activeChatSessionId, chatSessions]);
   useEffect(() => {
     if (!activeChatSessionId) return;
     const activeSession = chatSessions.find(session => session.id === activeChatSessionId);
@@ -1288,40 +1905,10 @@ const App: React.FC = () => {
     if (resolvedAgentIds.length === 0) return;
     setActiveChatAgentIds(prev => (isSameAgentIdList(prev, resolvedAgentIds) ? prev : resolvedAgentIds));
   }, [activeChatSessionId, chatSessions, aiAgents]);
-  const persistAiAgentsForUser = async (userId: string, sourceAgents: AIAgent[]) => {
-    const normalizedAgents = (sourceAgents.length > 0 ? sourceAgents : DEFAULT_AGENTS).map((agent, index) => {
-      const normalized = normalizeAIAgent(agent, index);
-      return {
-        id: normalized.id,
-        user_id: userId,
-        name: normalized.name,
-        emoji: normalized.emoji,
-        role: normalized.role,
-        personality: normalized.personality,
-        tone: normalized.tone,
-        color: normalized.color,
-        avatar: normalized.avatar ?? null,
-        connection_id: normalized.connectionId ?? null,
-        order: index,
-      };
-    });
-
-    const { error: clearError } = await supabase
-      .from('ai_agents')
-      .delete()
-      .eq('user_id', userId);
-
-    if (clearError) {
-      throw clearError;
-    }
-
-    if (normalizedAgents.length === 0) return;
-
-    const { error: insertError } = await supabase.from('ai_agents').insert(normalizedAgents);
-    if (insertError) {
-      throw insertError;
-    }
-  };
+  const normalizeAgentCollection = (sourceAgents: AIAgent[]) =>
+    (sourceAgents.length > 0 ? sourceAgents : DEFAULT_AGENTS).map((agent, index) =>
+      normalizeAIAgent(agent, index)
+    );
 
   const isFetchStale = (userId: string) => latestSessionUserIdRef.current !== userId;
 
@@ -1339,6 +1926,10 @@ const App: React.FC = () => {
     isFetchingRef.current = true;
     fetchingUserIdRef.current = userId;
     let criticalFetchSucceeded = false;
+    let finalNormalizedTodos: Todo[] = [];
+    let finalNormalizedLists: TodoList[] = [];
+    let skipFetchedTodoStateApply = false;
+    const todoMutationVersionAtFetchStart = todoMutationVersionRef.current;
 
     try {
       const fetchCritical = Promise.race([
@@ -1367,6 +1958,10 @@ const App: React.FC = () => {
       }
 
       if (isFetchStale(userId)) return;
+      skipFetchedTodoStateApply = todoMutationVersionRef.current !== todoMutationVersionAtFetchStart;
+      if (skipFetchedTodoStateApply) {
+        console.warn('[App] Skipping stale fetched todo state because local todo data changed during fetch.');
+      }
 
       const [
         todoTabsRes,
@@ -1385,7 +1980,7 @@ const App: React.FC = () => {
         todoStepsRes?.error,
         todosRes?.error,
         eventsRes?.error,
-        userDataRes?.error,
+        isMissingUserDataResourceError(userDataRes?.error) ? null : userDataRes?.error,
       ].filter(Boolean);
       if (criticalErrors.length > 0) {
         console.warn('[App] fetchCritical returned errors:', criticalErrors);
@@ -1398,60 +1993,65 @@ const App: React.FC = () => {
       const dbTodoSteps = todoStepsRes?.data;
       const dbTodos = todosRes?.data;
       const dbEvents = eventsRes?.data;
-      const dbUserData = userDataRes?.data;
+      const dbUserData = isMissingUserDataResourceError(userDataRes?.error) ? null : userDataRes?.data;
       const isChatTableUnavailable = (errorCode?: string) => errorCode === '42P01' || errorCode === '42703';
       const dbChatSessions = isChatTableUnavailable(chatSessionsRes?.error?.code) ? [] : chatSessionsRes?.data;
       const dbChatMessages = isChatTableUnavailable(chatMessagesRes?.error?.code) ? [] : chatMessagesRes?.data;
 
-      if (dbTodoTabs && dbTodoTabs.length > 0) {
+      if (!skipFetchedTodoStateApply && dbTodoTabs && dbTodoTabs.length > 0) {
         setTodoTabs(dbTodoTabs.map((tab: any) => ({
           id: tab.id,
           name: normalizeKoreanText(tab.name),
           color: tab.color,
           order: tab.order
         })));
-      } else if (dbTodoTabs && dbTodoTabs.length === 0) {
+      } else if (!skipFetchedTodoStateApply && dbTodoTabs && dbTodoTabs.length === 0) {
         setTodoTabs(DEFAULT_TODO_TABS);
       }
 
-      if (dbTodoLists && dbTodoLists.length > 0) {
-        setTodoLists(normalizeTodoLists(dbTodoLists.map((list: any) => ({
+      if (!skipFetchedTodoStateApply && dbTodoLists && dbTodoLists.length > 0) {
+        finalNormalizedLists = normalizeTodoLists(dbTodoLists.map((list: any) => ({
           ...list,
           title: normalizeKoreanText(list.title),
           dueDate: list.due_date || undefined,
           tabId: list.tab_id || (list.type === 'project' ? 'tab_project' : 'tab_todo')
-        }))));
-      } else if (dbTodoLists && dbTodoLists.length === 0) {
-        setTodoLists(DEFAULT_TODO_LISTS);
+        })));
+        setTodoLists(finalNormalizedLists);
+      } else if (!skipFetchedTodoStateApply && dbTodoLists && dbTodoLists.length === 0) {
+        finalNormalizedLists = DEFAULT_TODO_LISTS;
+        setTodoLists(finalNormalizedLists);
       }
 
-      if (dbTodos) setTodos(dbTodos.map((t: any) => {
-        let parsedSubTasks: Todo['subTasks'] = undefined;
-        if (t.sub_tasks) {
-          if (typeof t.sub_tasks === 'string') {
-            try {
-              parsedSubTasks = JSON.parse(t.sub_tasks);
-            } catch {
-              parsedSubTasks = undefined;
+      if (!skipFetchedTodoStateApply && dbTodos) {
+        finalNormalizedTodos = dbTodos.map((t: any) => {
+          let parsedSubTasks: Todo['subTasks'] = undefined;
+          if (t.sub_tasks) {
+            if (typeof t.sub_tasks === 'string') {
+              try {
+                parsedSubTasks = JSON.parse(t.sub_tasks);
+              } catch {
+                parsedSubTasks = undefined;
+              }
+            } else {
+              parsedSubTasks = t.sub_tasks;
             }
-          } else {
-            parsedSubTasks = t.sub_tasks;
           }
-        }
-        return {
-          id: t.id,
-          listId: normalizeTodoListId(t.list_id) || undefined,
-          text: normalizeKoreanText(t.text),
-          completed: t.completed,
-          date: typeof t.created_at === 'string' ? t.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
-          startDate: t.start_date || undefined,
-          dueDate: t.due_date || undefined,
-          subTasks: parsedSubTasks,
-          stepId: t.step_id || undefined
-        } as Todo;
-      }));
+          return {
+            id: t.id,
+            listId: normalizeTodoListId(t.list_id) || undefined,
+            text: normalizeKoreanText(t.text),
+            completed: t.completed,
+            date: typeof t.created_at === 'string' ? t.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+            startDate: t.start_date || undefined,
+            dueDate: t.due_date || undefined,
+            subTasks: parsedSubTasks,
+            stepId: t.step_id || undefined
+          } as Todo;
+        });
+        setTodos(finalNormalizedTodos);
+      }
 
-      if (dbTodoSteps) setTodoSteps(dbTodoSteps.map((s: any) => ({
+      if (!skipFetchedTodoStateApply && dbTodoSteps) setTodoSteps(dbTodoSteps.map((s: any) => ({
         id: s.id,
         listId: normalizeTodoListId(s.list_id) || DEFAULT_TODO_LIST_ID,
         title: normalizeKoreanText(s.title),
@@ -1459,15 +2059,18 @@ const App: React.FC = () => {
       } as TodoStep)));
 
       if (dbEvents) setEvents(dbEvents.map((e: any) => {
-        const [startDate, startTime] = e.start_time ? e.start_time.split('T') : ['', ''];
-        const [endDate, endTime] = e.end_time ? e.end_time.split('T') : ['', ''];
+        const { date: startDate, time: startTimeRaw } = parseStoredTimestampParts(e.start_time);
+        const { date: endDate, time: endTimeRaw } = parseStoredTimestampParts(e.end_time);
+        const hasExplicitStartTime = Boolean(startTimeRaw && startTimeRaw !== '00:00:00');
+        const hasExplicitEndTime = Boolean(endTimeRaw && endTimeRaw !== '23:59:59');
         return {
           id: e.id,
           title: normalizeKoreanText(e.title),
           date: startDate,
           endDate: endDate || startDate,
-          startTime: startTime && startTime !== '00:00:00' ? startTime.substring(0, 5) : undefined,
-          endTime: endTime && endTime !== '23:59:59' ? endTime.substring(0, 5) : undefined,
+          startTime: hasExplicitStartTime ? startTimeRaw.substring(0, 5) : undefined,
+          endTime: hasExplicitEndTime ? endTimeRaw.substring(0, 5) : undefined,
+          isAllDay: !hasExplicitStartTime && !hasExplicitEndTime,
           description: e.description ? normalizeKoreanText(e.description) : undefined,
           type: (e.tags && e.tags.length > 0) ? e.tags[0] : 'tag_1'
         } as CalendarEvent;
@@ -1600,24 +2203,13 @@ const App: React.FC = () => {
             .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
         }
         if (Array.isArray(dbPersonaMemories)) {
-          const mappedMemories: PersonaMemory[] = dbPersonaMemories
+          const mappedMemories = (dbPersonaMemories
             .filter((row: any) => row?.agent_id && row?.memory_type && row?.memory_key && row?.content)
-            .map((row: any) => ({
-              id: String(row.id || crypto.randomUUID()),
-              userId,
-              agentId: String(row.agent_id),
-              type: (row.memory_type === 'preference' || row.memory_type === 'goal') ? row.memory_type : 'fact',
-              key: String(row.memory_key),
-              content: String(row.content),
-              confidence: typeof row.confidence === 'number' ? row.confidence : 0.6,
-              observationCount: typeof row.observation_count === 'number' ? row.observation_count : 1,
-              firstObservedAt: typeof row.first_observed_at === 'string' ? row.first_observed_at : new Date().toISOString(),
-              lastObservedAt: typeof row.last_observed_at === 'string' ? row.last_observed_at : new Date().toISOString(),
-              createdAt: typeof row.created_at === 'string' ? row.created_at : new Date().toISOString(),
-              updatedAt: typeof row.updated_at === 'string' ? row.updated_at : new Date().toISOString(),
-            }))
+            .map((row: any) => normalizePersonaMemory(row, userId))
+            .filter(Boolean) as PersonaMemory[])
             .slice(0, 500);
           setPersonaMemories(mappedMemories);
+          seedSyncSnapshot('persona_memories', userId, mappedMemories.map((memory) => memory.id));
         }
       } catch (err: any) {
         console.warn('[App] fetchSecondary failed or timed out:', err.message);
@@ -1656,7 +2248,9 @@ const App: React.FC = () => {
 
       if (latestSessionUserIdRef.current === userId) {
         setIsDataLoaded(true);
-        resetRoutineCompletedStatus();
+        if (!skipFetchedTodoStateApply) {
+          resetRoutineCompletedStatus(finalNormalizedTodos, finalNormalizedLists, true);
+        }
         if (criticalFetchSucceeded && hasSuccessfulServerHydrationRef.current) {
           if (fetchRetryTimerRef.current) {
             window.clearTimeout(fetchRetryTimerRef.current);
@@ -1697,18 +2291,10 @@ const App: React.FC = () => {
   }, [todoLists]);
 
   useEffect(() => {
-    if (!isDataLoaded || !currentUser) return;
-    
-    // Initial check
+    if (!isDataLoaded) return;
+
     resetRoutineCompletedStatus();
-
-    // Periodic check every minute to handle date change while app is open
-    const intervalId = setInterval(() => {
-      resetRoutineCompletedStatus();
-    }, 60000);
-
-    return () => clearInterval(intervalId);
-  }, [isDataLoaded, currentUser?.id, settings.lastRoutineResetDate]);
+  }, [isDataLoaded, todayDate, currentUser?.id, settings.lastRoutineResetDate, todos, todoLists, todoTabs]);
 
   // Community post handler
   // Community post handler
@@ -1766,9 +2352,61 @@ const App: React.FC = () => {
     ));
   };
 
+  const persistTodoTabsForUser = async (userId: string, tabsToPersist: TodoTab[]): Promise<any> => {
+    if (tabsToPersist.length === 0) return null;
+    const rows = tabsToPersist.map(tab => ({
+      id: tab.id,
+      user_id: userId,
+      name: tab.name,
+      color: tab.color,
+      "order": tab.order,
+    }));
+    const { error } = await supabase.from('todo_tabs').upsert(rows, { onConflict: 'id' });
+    if (error) {
+      console.warn('[Todo] Failed to persist todo tabs before saving dependent data:', error);
+    }
+    return error;
+  };
+
+  const persistTodoListsForUser = async (userId: string, listsToPersist: TodoList[]): Promise<any> => {
+    if (listsToPersist.length === 0) return null;
+    const relatedTabIds = new Set(listsToPersist.map(list => list.tabId).filter(Boolean) as string[]);
+    const tabsToPersist = [...relatedTabIds]
+      .map(tabId => todoTabs.find(tab => tab.id === tabId) || DEFAULT_TODO_TABS.find(tab => tab.id === tabId))
+      .filter(Boolean) as TodoTab[];
+
+    await persistTodoTabsForUser(userId, tabsToPersist);
+
+    const rows = listsToPersist.map(list => ({
+      id: normalizeTodoListId(list.id) || DEFAULT_TODO_LIST_ID,
+      user_id: userId,
+      title: list.title,
+      "order": list.order,
+      tab_id: list.tabId || null,
+      due_date: list.dueDate || null,
+    }));
+    const { error } = await retryTodoListUpsertWithFallback(rows);
+    if (error) {
+      console.warn('[Todo] Failed to persist todo lists before saving dependent data:', error);
+    }
+    return error;
+  };
+
+  const ensureTodoListPersisted = async (listId?: string): Promise<any> => {
+    if (!currentUser) return null;
+    const normalizedListId = normalizeTodoListId(listId) || DEFAULT_TODO_LIST_ID;
+    const listToPersist =
+      todoLists.find(list => normalizeTodoListId(list.id) === normalizedListId) ||
+      DEFAULT_TODO_LISTS.find(list => list.id === normalizedListId) ||
+      DEFAULT_TODO_LISTS[0];
+
+    return persistTodoListsForUser(currentUser.id, [listToPersist]);
+  };
+
   const addTodoList = async (title: string, tabId: string, dueDate?: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
+    markTodoDataMutated();
     const nextOrder = Math.max(0, ...todoLists.map(l => l.order)) + 1;
     const newList: TodoList = {
       id: crypto.randomUUID(),
@@ -1780,20 +2418,27 @@ const App: React.FC = () => {
     setTodoLists(prev => [...prev, newList]);
 
     if (currentUser) {
-      await supabase.from('todo_lists').insert([{
+      const tabToPersist = todoTabs.find(tab => tab.id === newList.tabId) || DEFAULT_TODO_TABS.find(tab => tab.id === newList.tabId);
+      await persistTodoTabsForUser(currentUser.id, tabToPersist ? [tabToPersist] : []);
+      const { error } = await retryTodoListUpsertWithFallback([{
         id: newList.id,
         user_id: currentUser.id,
         title: newList.title,
         "order": newList.order,
         tab_id: newList.tabId,
-        due_date: newList.dueDate || null
+        due_date: newList.dueDate || null,
       }]);
+      if (error) {
+        setTodoLists(prev => prev.filter(list => list.id !== newList.id));
+        alert(`목록을 저장하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+      }
     }
   };
 
   const addTodoTab = async (name: string, color: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
+    markTodoDataMutated();
     const nextOrder = Math.max(0, ...todoTabs.map(t => t.order)) + 1;
     const newTab: TodoTab = {
       id: crypto.randomUUID(),
@@ -1803,28 +2448,75 @@ const App: React.FC = () => {
     };
     setTodoTabs(prev => [...prev, newTab]);
     if (currentUser) {
-      await supabase.from('todo_tabs').insert([{
+      const { error } = await supabase.from('todo_tabs').insert([{
         id: newTab.id,
         user_id: currentUser.id,
         name: newTab.name,
         color: newTab.color,
         "order": newTab.order
       }]);
+      if (error) {
+        setTodoTabs(prev => prev.filter(tab => tab.id !== newTab.id));
+        alert(`탭을 저장하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+      }
     }
   };
 
   const updateTodoTab = async (id: string, updates: Partial<TodoTab>) => {
+    markTodoDataMutated();
+    const previousTabs = todoTabs;
     setTodoTabs(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
     if (currentUser) {
-      await supabase.from('todo_tabs').update(updates).eq('id', id);
+      const { error } = await supabase.from('todo_tabs').update(updates).eq('id', id);
+      if (error) {
+        setTodoTabs(previousTabs);
+        alert(`탭을 수정하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+      }
     }
   };
 
   const deleteTodoTab = async (id: string) => {
     if (window.confirm('이 탭을 삭제할까요? 관련 목록은 삭제되지 않지만 다른 탭으로 이동해야 할 수도 있습니다.')) {
+      if (todoTabs.length <= 1) {
+        alert('마지막 탭은 삭제할 수 없습니다.');
+        return;
+      }
+
+      const previousTabs = todoTabs;
+      const previousLists = todoLists;
+      markTodoDataMutated();
+      const fallbackTabId = todoTabs.find(tab => tab.id !== id)?.id;
+      if (!fallbackTabId) {
+        alert('이동할 다른 탭을 찾지 못했습니다.');
+        return;
+      }
+
+      const affectedListIds = todoLists.filter(list => list.tabId === id).map(list => list.id);
       setTodoTabs(prev => prev.filter(t => t.id !== id));
+      setTodoLists(prev => prev.map(list => (
+        list.tabId === id ? { ...list, tabId: fallbackTabId } : list
+      )));
+
       if (currentUser) {
-        await supabase.from('todo_tabs').delete().eq('id', id);
+        if (affectedListIds.length > 0) {
+          const { error: listUpdateError } = await supabase
+            .from('todo_lists')
+            .update({ tab_id: fallbackTabId })
+            .in('id', affectedListIds);
+          if (listUpdateError) {
+            setTodoTabs(previousTabs);
+            setTodoLists(previousLists);
+            alert(`탭 이동 처리를 완료하지 못했습니다: ${getSupabaseErrorMessage(listUpdateError, '알 수 없는 오류')}`);
+            return;
+          }
+        }
+
+        const { error } = await supabase.from('todo_tabs').delete().eq('id', id);
+        if (error) {
+          setTodoTabs(previousTabs);
+          setTodoLists(previousLists);
+          alert(`탭을 삭제하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+        }
       }
     }
   };
@@ -1833,6 +2525,7 @@ const App: React.FC = () => {
     const trimmed = title.trim();
     if (!trimmed) return;
     const normalizedListId = normalizeTodoListId(listId) || DEFAULT_TODO_LIST_ID;
+    markTodoDataMutated();
     const nextOrder = Math.max(0, ...todoSteps.filter(s => s.listId === normalizedListId).map(s => s.order)) + 1;
     const newStep: TodoStep = {
       id: crypto.randomUUID(),
@@ -1842,6 +2535,12 @@ const App: React.FC = () => {
     };
     setTodoSteps(prev => [...prev, newStep]);
     if (currentUser) {
+      const listError = await ensureTodoListPersisted(normalizedListId);
+      if (listError) {
+        setTodoSteps(prev => prev.filter(step => step.id !== newStep.id));
+        alert(`단계를 저장하지 못했습니다: ${getSupabaseErrorMessage(listError, '목록 저장 오류')}`);
+        return;
+      }
       const { error } = await supabase.from('todo_steps').insert([{
         id: newStep.id,
         user_id: currentUser.id,
@@ -1857,20 +2556,41 @@ const App: React.FC = () => {
   };
 
   const updateTodoStep = async (id: string, updates: Partial<TodoStep>) => {
+    markTodoDataMutated();
+    const previousSteps = todoSteps;
     setTodoSteps(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
     if (currentUser) {
-      await supabase.from('todo_steps').update(updates).eq('id', id);
+      const { error } = await supabase.from('todo_steps').update(updates).eq('id', id);
+      if (error) {
+        setTodoSteps(previousSteps);
+        alert(`단계를 수정하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+      }
     }
   };
 
   const deleteTodoStep = async (id: string) => {
     if (!window.confirm('이 단계를 삭제하시겠습니까? 관련 할 일들은 해제됩니다.')) return;
+    const previousSteps = todoSteps;
+    const previousTodos = todos;
+    markTodoDataMutated();
     setTodoSteps(prev => prev.filter(s => s.id !== id));
     setTodos(prev => prev.map(t => t.stepId === id ? { ...t, stepId: undefined } : t));
 
     if (currentUser) {
-      await supabase.from('todos').update({ step_id: null }).eq('step_id', id);
-      await supabase.from('todo_steps').delete().eq('id', id);
+      const { error: todoError } = await supabase.from('todos').update({ step_id: null }).eq('step_id', id);
+      if (todoError) {
+        setTodoSteps(previousSteps);
+        setTodos(previousTodos);
+        alert(`단계 연결을 해제하지 못했습니다: ${getSupabaseErrorMessage(todoError, '알 수 없는 오류')}`);
+        return;
+      }
+
+      const { error } = await supabase.from('todo_steps').delete().eq('id', id);
+      if (error) {
+        setTodoSteps(previousSteps);
+        setTodos(previousTodos);
+        alert(`단계를 삭제하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+      }
     }
   };
 
@@ -1906,48 +2626,48 @@ const App: React.FC = () => {
       tone: '친절하고 공손한 스타일',
       color: '#37352f',
     });
-    const nextAgents = [...aiAgents, newAgent];
+    const nextAgents = normalizeAgentCollection([...aiAgents, newAgent]);
     setAiAgents(nextAgents);
-
-    if (currentUser) {
-      try {
-        await persistAiAgentsForUser(currentUser.id, nextAgents);
-      } catch (error) {
-        console.error('Failed to persist added AI persona:', error);
-      }
-    }
   };
 
   const updateAiAgent = async (id: string, updates: Partial<AIAgent>) => {
-    const nextAgents = aiAgents.map(a => a.id === id ? normalizeAIAgent({ ...a, ...updates }) : a);
-    setAiAgents(nextAgents);
+    const currentAgent = aiAgents.find(a => a.id === id);
+    if (!currentAgent) return;
 
-    if (currentUser) {
-      try {
-        await persistAiAgentsForUser(currentUser.id, nextAgents);
-      } catch (error) {
-        console.error('Failed to persist updated AI persona:', error);
-      }
-    }
+    const mergedAgent = normalizeAIAgent({
+      ...currentAgent,
+      ...(settings.agentProfiles?.[id] || {}),
+      ...updates,
+    });
+    const normalizedAgent = await normalizeAgentAvatarForSave(mergedAgent, currentAgent.avatar);
+    const profileSettings = getAgentProfileSettings(normalizedAgent);
+    setAiAgents(prev => normalizeAgentCollection(
+      prev.map(agent => agent.id === id ? normalizedAgent : agent)
+    ));
+    setSettings(prev => {
+      const nextProfiles = { ...(prev.agentProfiles || {}) };
+      if (isAgentProfileSettingsEmpty(profileSettings)) delete nextProfiles[id];
+      else nextProfiles[id] = profileSettings;
+      return {
+        ...prev,
+        agentProfiles: nextProfiles,
+      };
+    });
   };
 
   const deleteAiAgent = async (id: string) => {
     const agent = aiAgents.find(a => a.id === id);
     if (!agent) return;
+    if (aiAgents.length <= 1) {
+      alert('최소 한 개의 페르소나는 유지해야 합니다.');
+      return;
+    }
 
     if (window.confirm(`'${agent.name}' 페르소나를 삭제하시겠습니까? 관련 게시글은 삭제되지 않습니다.`)) {
-      const nextAgents = aiAgents.filter(a => a.id !== id);
+      const nextAgents = normalizeAgentCollection(aiAgents.filter(a => a.id !== id));
       setAiAgents(nextAgents);
       if (selectedAiAgentId === id) {
-        setSelectedAiAgentId(aiAgents.find(a => a.id !== id)?.id || '');
-      }
-
-      if (currentUser) {
-        try {
-          await persistAiAgentsForUser(currentUser.id, nextAgents);
-        } catch (error) {
-          console.error('Failed to persist deleted AI persona:', error);
-        }
+        setSelectedAiAgentId(nextAgents[0]?.id || '');
       }
     }
   };
@@ -1994,20 +2714,32 @@ const App: React.FC = () => {
   };
 
   const updateTodoList = async (id: string, updates: Partial<TodoList>) => {
+    const previousLists = todoLists;
+    const currentList = todoLists.find(list => list.id === id);
+    if (!currentList) return;
+    markTodoDataMutated();
+    const nextList = { ...currentList, ...updates };
     setTodoLists(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
     if (currentUser) {
-      const dbUpdates: any = {};
-      if (updates.title !== undefined) dbUpdates.title = updates.title;
-      if (updates.tabId !== undefined) dbUpdates.tab_id = updates.tabId;
-      if (updates.dueDate !== undefined) dbUpdates.due_date = updates.dueDate || null;
-
-      if (Object.keys(dbUpdates).length > 0) {
-        await supabase.from('todo_lists').update(dbUpdates).eq('id', id);
+      const tabToPersist = todoTabs.find(tab => tab.id === nextList.tabId) || DEFAULT_TODO_TABS.find(tab => tab.id === nextList.tabId);
+      await persistTodoTabsForUser(currentUser.id, tabToPersist ? [tabToPersist] : []);
+      const { error } = await retryTodoListUpsertWithFallback([{
+        id: normalizeTodoListId(nextList.id) || DEFAULT_TODO_LIST_ID,
+        user_id: currentUser.id,
+        title: nextList.title,
+        "order": nextList.order,
+        tab_id: nextList.tabId || null,
+        due_date: nextList.dueDate || null,
+      }]);
+      if (error) {
+        setTodoLists(previousLists);
+        alert(`목록을 수정하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
       }
     }
   };
 
   const updateTodoListOrder = (newLists: TodoList[]) => {
+    markTodoDataMutated();
     setTodoLists(newLists);
   };
 
@@ -2016,12 +2748,37 @@ const App: React.FC = () => {
     if (!list) return;
 
     if (window.confirm(`'${list.title}' 목록을 삭제하시겠습니까? 포함된 할 일도 모두 삭제됩니다.`)) {
+      const previousLists = todoLists;
+      const previousTodos = todos;
+      const previousSteps = todoSteps;
+      const previousRoutineProgress = settings.routineProgress;
+      const removedTodoIds = todos.filter(todo => todo.listId === id).map(todo => todo.id);
+
+      markTodoDataMutated();
       setTodoLists(prev => prev.filter(l => l.id !== id));
       setTodos(prev => prev.filter(t => t.listId !== id));
+      setTodoSteps(prev => prev.filter(step => step.listId !== id));
+      removeRoutineProgressForTodoIds(removedTodoIds);
 
       if (currentUser) {
-        await supabase.from('todos').delete().eq('list_id', id);
-        await supabase.from('todo_lists').delete().eq('id', id);
+        const { error: todoError } = await supabase.from('todos').delete().eq('list_id', id);
+        if (todoError) {
+          setTodoLists(previousLists);
+          setTodos(previousTodos);
+          setTodoSteps(previousSteps);
+          setSettings(prev => ({ ...prev, routineProgress: previousRoutineProgress || {} }));
+          alert(`목록의 할 일을 삭제하지 못했습니다: ${getSupabaseErrorMessage(todoError, '알 수 없는 오류')}`);
+          return;
+        }
+
+        const { error } = await supabase.from('todo_lists').delete().eq('id', id);
+        if (error) {
+          setTodoLists(previousLists);
+          setTodos(previousTodos);
+          setTodoSteps(previousSteps);
+          setSettings(prev => ({ ...prev, routineProgress: previousRoutineProgress || {} }));
+          alert(`목록을 삭제하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+        }
       }
     }
   };
@@ -2080,6 +2837,7 @@ const App: React.FC = () => {
     if (currentUser) {
       try {
         const userId = currentUser.id;
+        clearUserSyncState(userId);
         const safeDeleteByUser = async (table: string) => {
           const result = await supabase.from(table).delete().eq('user_id', userId);
           if (result.error && result.error.code !== '42P01') {
@@ -2134,7 +2892,7 @@ const App: React.FC = () => {
     if (currentUser) {
       clearUserScopedCache(currentUser.id);
       void clearChatSessionsCache(currentUser.id);
-      clearSyncSnapshots(currentUser.id);
+      clearUserSyncState(currentUser.id);
     }
   };
 
@@ -2153,7 +2911,9 @@ const App: React.FC = () => {
 
   const handleClearTodos = () => {
     setTodos([]);
+    setTodoSteps([]);
     setTodoLists(DEFAULT_TODO_LISTS);
+    setSettings(prev => ({ ...prev, routineProgress: {} }));
   };
 
   const handleClearEntries = () => {
@@ -2162,13 +2922,27 @@ const App: React.FC = () => {
 
   const handleClearChat = () => {
     setChatSessions([]);
+    setPersonaMemories([]);
     setActiveChatSessionId(null);
+    setActiveChatAgentIds(aiAgents[0]?.id ? [aiAgents[0].id] : []);
+    setSettings(prev => {
+      if (!prev.pinnedPersonaMemoryIds?.length) return prev;
+      return { ...prev, pinnedPersonaMemoryIds: [] };
+    });
     if (currentUser) {
+      const userId = currentUser.id;
+      clearUserSyncState(currentUser.id);
       void clearChatSessionsCache(currentUser.id);
-      supabase.from('chat_sessions').delete().eq('user_id', currentUser.id).then(({ error }) => {
-        if (error && error.code !== '42P01') {
-          console.error('Failed to clear chat sessions:', error);
-        }
+      const safeDeleteByUser = async (table: string) => {
+        const { error } = await supabase.from(table).delete().eq('user_id', userId);
+        if (error && error.code !== '42P01') throw error;
+      };
+      Promise.all([
+        safeDeleteByUser('chat_messages'),
+        safeDeleteByUser('chat_sessions'),
+        safeDeleteByUser('persona_memories'),
+      ]).catch((error) => {
+        console.error('Failed to clear chat data:', error);
       });
     }
   };
@@ -2211,7 +2985,7 @@ const App: React.FC = () => {
     const endDate = event.endDate || event.date;
 
     if (currentUser) {
-      await supabase.from('calendar_events').insert([{
+      const { error } = await supabase.from('calendar_events').insert([{
         id: event.id,
         user_id: currentUser.id,
         title: event.title,
@@ -2221,6 +2995,11 @@ const App: React.FC = () => {
         color: calendarTags.find(t => t.id === event.type)?.color || '#4c2889',
         tags: [event.type]
       }]);
+      if (error) {
+        setEvents(prev => prev.filter(existing => existing.id !== event.id));
+        alert(`일정을 저장하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+        return;
+      }
     }
 
     logActivity({
@@ -2242,12 +3021,13 @@ const App: React.FC = () => {
   };
 
   const updateEvent = async (event: CalendarEvent, previous: CalendarEvent) => {
+    const previousEvents = events;
     setEvents(prev => prev.map(e => e.id === event.id ? event : e));
     const endDate = event.endDate || event.date;
     const previousEndDate = previous.endDate || previous.date;
 
     if (currentUser) {
-      await supabase.from('calendar_events').update({
+      const { error } = await supabase.from('calendar_events').update({
         title: event.title,
         start_time: event.date + (event.startTime ? `T${event.startTime}:00` : 'T00:00:00'),
         end_time: endDate + (event.endTime ? `T${event.endTime}:00` : 'T23:59:59'),
@@ -2255,6 +3035,11 @@ const App: React.FC = () => {
         color: calendarTags.find(t => t.id === event.type)?.color || '#4c2889',
         tags: [event.type]
       }).eq('id', event.id);
+      if (error) {
+        setEvents(previousEvents);
+        alert(`일정을 수정하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+        return;
+      }
     }
 
     logActivity({
@@ -2285,11 +3070,17 @@ const App: React.FC = () => {
     const removed = events.find(e => e.id === id);
     if (!removed) return;
     const removedEndDate = removed.endDate || removed.date;
+    const previousEvents = events;
 
     setEvents(prev => prev.filter(e => e.id !== id));
 
     if (currentUser) {
-      await supabase.from('calendar_events').delete().eq('id', id);
+      const { error } = await supabase.from('calendar_events').delete().eq('id', id);
+      if (error) {
+        setEvents(previousEvents);
+        alert(`일정을 삭제하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+        return;
+      }
     }
 
     logActivity({
@@ -2318,6 +3109,50 @@ const App: React.FC = () => {
     });
   };
 
+  const updateRoutineProgressState = (
+    todoId: string,
+    updater: (current: RoutineProgress | undefined) => RoutineProgress | undefined,
+  ) => {
+    setSettings(prev => {
+      const currentDate = getTodayDate();
+      const nextProgress = { ...(prev.routineProgress || {}) };
+      const nextValue = updater(nextProgress[todoId]);
+
+      if (nextValue) nextProgress[todoId] = nextValue;
+      else delete nextProgress[todoId];
+
+      return {
+        ...prev,
+        lastRoutineResetDate: currentDate,
+        routineProgress: pruneRoutineProgress(nextProgress) || {},
+      };
+    });
+  };
+
+  const removeRoutineProgressForTodoIds = (todoIds: string[]) => {
+    if (todoIds.length === 0) return;
+
+    const idSet = new Set(todoIds);
+    setSettings(prev => {
+      const nextProgress = { ...(prev.routineProgress || {}) };
+      let changed = false;
+
+      idSet.forEach(todoId => {
+        if (nextProgress[todoId]) {
+          delete nextProgress[todoId];
+          changed = true;
+        }
+      });
+
+      if (!changed) return prev;
+
+      return {
+        ...prev,
+        routineProgress: pruneRoutineProgress(nextProgress) || {},
+      };
+    });
+  };
+
   const addTodo = async (text: string, listId?: string, dueDate?: string, stepId?: string, category: Todo['category'] = 'personal') => {
     const targetListId = normalizeTodoListId(listId) || todoLists[0]?.id || DEFAULT_TODO_LIST_ID;
     const listLabel = todoLists.find(l => l.id === targetListId)?.title || '목록';
@@ -2333,9 +3168,16 @@ const App: React.FC = () => {
       subTasks: [],
     };
 
+    markTodoDataMutated();
     setTodos(prev => [...prev, newTodo]);
 
     if (currentUser) {
+      const listError = await ensureTodoListPersisted(targetListId);
+      if (listError) {
+        setTodos(prev => prev.filter(t => t.id !== newTodo.id));
+        alert(`할 일을 저장하지 못했습니다: ${getSupabaseErrorMessage(listError, '목록 저장 오류')}`);
+        return;
+      }
       const todoRow = {
         id: newTodo.id,
         user_id: currentUser.id,
@@ -2376,15 +3218,59 @@ const App: React.FC = () => {
   };
 
   const updateTodo = async (id: string, updates: Partial<Todo>) => {
-    setTodos(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+    const currentTodo = todos.find(t => t.id === id);
+    if (!currentTodo) return;
+    markTodoDataMutated();
+    const currentDate = getTodayDate();
+
+    const currentIsRoutine = isRoutineTodo(currentTodo, routineListIds);
+    const displayedCurrentTodo = currentIsRoutine
+      ? getTodoWithRoutineState(currentTodo, settings, routineListIds, currentDate)
+      : currentTodo;
+    const nextListId = updates.listId !== undefined
+      ? normalizeTodoListId(updates.listId) || undefined
+      : currentTodo.listId;
+    const nextTodoDraft: Todo = {
+      ...displayedCurrentTodo,
+      ...updates,
+      listId: nextListId,
+    };
+    const nextIsRoutine = isRoutineTodo({ listId: nextListId }, routineListIds);
+
+    let nextTodo = nextTodoDraft;
+    let nextRoutineProgress: RoutineProgress | undefined;
+
+    if (nextIsRoutine) {
+      const routineBaseTodo = currentIsRoutine
+        ? displayedCurrentTodo
+        : clearTodoCompletionFlags(currentTodo);
+      const displayedTodo: Todo = {
+        ...routineBaseTodo,
+        ...updates,
+        listId: nextListId,
+      };
+      nextRoutineProgress = buildRoutineProgressFromDisplayedTodo(displayedTodo, currentDate);
+      nextTodo = clearTodoCompletionFlags(nextTodoDraft);
+    }
+
+    setTodos(prev => prev.map(todo => (
+      todo.id === id
+        ? nextTodo
+        : todo
+    )));
+
+    if (currentIsRoutine || nextIsRoutine) {
+      updateRoutineProgressState(id, () => nextRoutineProgress);
+    }
+
     if (currentUser) {
       const dbUpdates: any = {};
       if (updates.text !== undefined) dbUpdates.text = updates.text;
-      if (updates.completed !== undefined) dbUpdates.completed = updates.completed;
-      if (updates.listId !== undefined) dbUpdates.list_id = updates.listId;
+      if (updates.completed !== undefined || currentIsRoutine || nextIsRoutine) dbUpdates.completed = nextTodo.completed;
+      if (updates.listId !== undefined) dbUpdates.list_id = nextListId || null;
       if (updates.stepId !== undefined) dbUpdates.step_id = updates.stepId || null;
       if (updates.dueDate !== undefined) dbUpdates.due_date = updates.dueDate || null;
-      if (updates.subTasks !== undefined) dbUpdates.sub_tasks = updates.subTasks || null;
+      if (updates.subTasks !== undefined || currentIsRoutine || nextIsRoutine) dbUpdates.sub_tasks = nextTodo.subTasks || null;
 
       if (Object.keys(dbUpdates).length > 0) {
         const { error } = await retryTodoUpdateWithFallback(id, dbUpdates);
@@ -2395,51 +3281,150 @@ const App: React.FC = () => {
     }
   };
 
-  const resetRoutineCompletedStatus = () => {
-    const today = format(new Date(), 'yyyy-MM-dd');
-    if (settings.lastRoutineResetDate === today) return;
+  const resetRoutineCompletedStatus = (currentTodos?: Todo[], currentLists?: TodoList[], isServerData: boolean = false) => {
+    const today = getTodayDate();
+    const sourceTodos = currentTodos || todos;
+    const sourceLists = currentLists || todoLists;
 
-    // Find all lists belonging to the 'Routine' tab
-    const routineListIds = new Set(todoLists.filter(l => l.tabId === 'tab_routine').map(l => l.id));
-    if (routineListIds.size === 0) return;
-
-    // Find todos in those lists that are completed
-    const routinesToReset = todos.filter(t => t.completed && t.listId && routineListIds.has(t.listId));
-    if (routinesToReset.length === 0) {
-      // Still update the date even if no routines were reset, so we don't keep checking today
-      setSettings(prev => ({ ...prev, lastRoutineResetDate: today }));
+    if (!sourceLists.length) {
+      if (settings.lastRoutineResetDate !== today) {
+        setSettings(prev => (
+          prev.lastRoutineResetDate === today
+            ? prev
+            : { ...prev, lastRoutineResetDate: today }
+        ));
+      }
       return;
     }
 
-    console.log(`[Routine] Resetting ${routinesToReset.length} routines for ${today}`);
-    
-    setTodos(prev => prev.map(t => {
-      if (t.completed && t.listId && routineListIds.has(t.listId)) {
-        return { ...t, completed: false };
+    const sourceRoutineListIds = getRoutineListIds(sourceLists, todoTabs);
+
+    if (sourceRoutineListIds.size === 0) {
+      if (settings.lastRoutineResetDate !== today) {
+        setSettings(prev => (
+          prev.lastRoutineResetDate === today
+            ? prev
+            : { ...prev, lastRoutineResetDate: today }
+        ));
       }
-      return t;
-    }));
+      return;
+    }
 
-    setSettings(prev => ({ ...prev, lastRoutineResetDate: today }));
+    const legacyRoutineTodos = sourceTodos.filter(todo =>
+      isRoutineTodo(todo, sourceRoutineListIds) &&
+      (todo.completed || Boolean(todo.subTasks?.some(subTask => subTask.completed)))
+    );
 
-    // Update DB
+    if (legacyRoutineTodos.length === 0) {
+      if (settings.lastRoutineResetDate !== today) {
+        setSettings(prev => (
+          prev.lastRoutineResetDate === today
+            ? prev
+            : { ...prev, lastRoutineResetDate: today }
+        ));
+      }
+      return;
+    }
+
+    console.log(`[Routine] Reconciling ${legacyRoutineTodos.length} legacy routine states for ${today}`);
+
+    setTodos(prev => prev.map(todo => (
+      isRoutineTodo(todo, sourceRoutineListIds)
+        ? clearTodoCompletionFlags(todo)
+        : todo
+    )));
+
+    setSettings(prev => {
+      const nextProgress = { ...(prev.routineProgress || {}) };
+
+      if (prev.lastRoutineResetDate === today) {
+        legacyRoutineTodos.forEach(todo => {
+          const legacyProgress = buildRoutineProgressFromDisplayedTodo(todo, today);
+          if (!legacyProgress) return;
+
+          const existing = nextProgress[todo.id];
+          nextProgress[todo.id] = {
+            completedOn: legacyProgress.completedOn || existing?.completedOn,
+            subTaskCompletedOn: {
+              ...(existing?.subTaskCompletedOn || {}),
+              ...(legacyProgress.subTaskCompletedOn || {}),
+            },
+          };
+        });
+      }
+
+      return {
+        ...prev,
+        lastRoutineResetDate: today,
+        routineProgress: pruneRoutineProgress(nextProgress) || {},
+      };
+    });
+
     if (currentUser) {
-      const resetIds = routinesToReset.map(t => t.id);
-      supabase.from('todos').update({ completed: false }).in('id', resetIds).then();
+      legacyRoutineTodos.forEach(todo => {
+        const sanitizedTodo = clearTodoCompletionFlags(todo);
+        retryTodoUpdateWithFallback(todo.id, {
+          completed: false,
+          sub_tasks: sanitizedTodo.subTasks || null,
+        }).then(({ error }) => {
+          if (error) {
+            console.error('[Routine] Failed to reconcile legacy routine state:', error);
+          }
+        });
+      });
     }
   };
 
   const toggleTodo = async (id: string) => {
-    const todo = todos.find(t => t.id === id);
-    if (!todo) return;
+    const storedTodo = todos.find(t => t.id === id);
+    const todo = effectiveTodos.find(t => t.id === id);
+    if (!storedTodo || !todo) return;
+    markTodoDataMutated();
+    const currentDate = getTodayDate();
 
+    const routineTodo = isRoutineTodo(storedTodo, routineListIds);
+    const previousRoutineProgress = settings.routineProgress?.[id];
     const wasCompleted = todo.completed;
     const newCompleted = !wasCompleted;
 
-    setTodos(prev => prev.map(t => t.id === id ? { ...t, completed: newCompleted } : t));
+    if (routineTodo) {
+      const sanitizedTodo = clearTodoCompletionFlags(storedTodo);
+      setTodos(prev => prev.map(t => t.id === id ? sanitizedTodo : t));
+      updateRoutineProgressState(id, current => {
+        const nextValue: RoutineProgress = {
+          ...(current || {}),
+          subTaskCompletedOn: { ...(current?.subTaskCompletedOn || {}) },
+        };
 
-    if (currentUser) {
-      await supabase.from('todos').update({ completed: newCompleted }).eq('id', id);
+        if (newCompleted) nextValue.completedOn = currentDate;
+        else delete nextValue.completedOn;
+
+        return pruneRoutineProgress({ [id]: nextValue })?.[id];
+      });
+
+      if (currentUser) {
+        const { error } = await retryTodoUpdateWithFallback(id, {
+          completed: false,
+          sub_tasks: sanitizedTodo.subTasks || null,
+        });
+        if (error) {
+          setTodos(prev => prev.map(t => t.id === id ? storedTodo : t));
+          updateRoutineProgressState(id, () => previousRoutineProgress);
+          alert(`할 일을 수정하지 못했습니다: ${error.message || '알 수 없는 오류'}`);
+          return;
+        }
+      }
+    } else {
+      setTodos(prev => prev.map(t => t.id === id ? { ...t, completed: newCompleted } : t));
+
+      if (currentUser) {
+        const { error } = await supabase.from('todos').update({ completed: newCompleted }).eq('id', id);
+        if (error) {
+          setTodos(prev => prev.map(t => t.id === id ? { ...t, completed: wasCompleted } : t));
+          alert(`할 일을 수정하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+          return;
+        }
+      }
     }
 
     if (newCompleted) {
@@ -2469,9 +3454,28 @@ const App: React.FC = () => {
       });
 
       showUndo('완료 처리됨 (캘린더 추가)', async () => {
-        setTodos(prev => prev.map(t => t.id === id ? { ...t, completed: false } : t));
-        if (currentUser) {
-          await supabase.from('todos').update({ completed: false }).eq('id', id);
+        if (routineTodo) {
+          const sanitizedTodo = clearTodoCompletionFlags(storedTodo);
+          setTodos(prev => prev.map(t => t.id === id ? sanitizedTodo : t));
+          updateRoutineProgressState(id, current => {
+            const nextValue: RoutineProgress = {
+              ...(current || {}),
+              subTaskCompletedOn: { ...(current?.subTaskCompletedOn || {}) },
+            };
+            delete nextValue.completedOn;
+            return pruneRoutineProgress({ [id]: nextValue })?.[id];
+          });
+          if (currentUser) {
+            await retryTodoUpdateWithFallback(id, {
+              completed: false,
+              sub_tasks: sanitizedTodo.subTasks || null,
+            });
+          }
+        } else {
+          setTodos(prev => prev.map(t => t.id === id ? { ...t, completed: false } : t));
+          if (currentUser) {
+            await supabase.from('todos').update({ completed: false }).eq('id', id);
+          }
         }
         
         setEvents(prev => prev.filter(e => e.id !== newEvent.id));
@@ -2502,11 +3506,23 @@ const App: React.FC = () => {
   const deleteTodo = async (id: string) => {
     const removed = todos.find(t => t.id === id);
     if (!removed) return;
+    const removedRoutineProgress = settings.routineProgress?.[id];
+    const previousTodos = todos;
 
+    markTodoDataMutated();
     setTodos(prev => prev.filter(t => t.id !== id));
+    updateRoutineProgressState(id, () => undefined);
 
     if (currentUser) {
-      await supabase.from('todos').delete().eq('id', id);
+      const { error } = await supabase.from('todos').delete().eq('id', id);
+      if (error) {
+        setTodos(previousTodos);
+        if (removedRoutineProgress) {
+          updateRoutineProgressState(id, () => removedRoutineProgress);
+        }
+        alert(`할 일을 삭제하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+        return;
+      }
     }
 
     logActivity({
@@ -2516,6 +3532,9 @@ const App: React.FC = () => {
     });
     showUndo('할 일이 삭제됨', async () => {
       setTodos(prev => [removed, ...prev]);
+      if (removedRoutineProgress) {
+        updateRoutineProgressState(id, () => removedRoutineProgress);
+      }
       if (currentUser) {
         const restoreRow = {
           id: removed.id,
@@ -2672,27 +3691,154 @@ const App: React.FC = () => {
   };
 
   const updateAgents = async (agents: AIAgent[]) => {
-    const normalized = agents.map((agent, index) => normalizeAIAgent(agent, index));
+    const normalized = await Promise.all(
+      normalizeAgentCollection(agents).map(async (agent) => {
+        const previousAgent = aiAgents.find(currentAgent => currentAgent.id === agent.id);
+        return normalizeAgentAvatarForSave(agent, previousAgent?.avatar);
+      })
+    );
     setAiAgents(normalized);
+    setSettings(prev => {
+      const nextProfiles = normalized.reduce((acc, agent) => {
+        const profile = getAgentProfileSettings(agent);
+        if (!isAgentProfileSettingsEmpty(profile)) {
+          acc[agent.id] = profile;
+        }
+        return acc;
+      }, {} as Record<string, Partial<AIAgent>>);
 
-    if (currentUser) {
-      try {
-        await persistAiAgentsForUser(currentUser.id, normalized);
-      } catch (error) {
-        console.error('Failed to persist AI persona list:', error);
-      }
-    }
+      return {
+        ...prev,
+        agentProfiles: nextProfiles,
+      };
+    });
   };
 
   const updateUser = async (updatedUser: User) => {
-    setCurrentUser(updatedUser);
+    const normalizedAvatar = await normalizePersistedImageSource(updatedUser.avatar);
+    const nextUser = {
+      ...updatedUser,
+      avatar: normalizedAvatar,
+    };
+    setCurrentUser(nextUser);
     if (currentUser) {
       await supabase.from('profiles').update({
-        name: updatedUser.name,
-        avatar_url: updatedUser.avatar
+        name: nextUser.name,
+        avatar_url: nextUser.avatar
       }).eq('id', updatedUser.id);
     }
   };
+
+  const forgetPersonaMemory = (memoryId: string) => {
+    setPersonaMemories(prev => prev.filter(memory => memory.id !== memoryId));
+  };
+
+  const addPersonaMemory = (agentId: string, type: PersonaMemoryType, content: string) => {
+    if (!currentUser?.id) return;
+
+    const normalizedContent = truncateMemoryText(content, PERSONA_MEMORY_MAX_CONTENT_CHARS);
+    const normalizedKey = normalizeMemoryKey(normalizedContent);
+    if (!agentId || !normalizedContent || !normalizedKey) return;
+
+    const nowIso = new Date().toISOString();
+    const inferredBucket = inferMemoryBucketForText(normalizedContent);
+    const effectiveType = inferredBucket === 'instructions' ? 'preference' : type;
+    const persistedKey = `${inferredBucket === 'instructions' ? 'instruction' : effectiveType}:${normalizedKey}`;
+    const compoundKey = `${currentUser.id}:${agentId}:${persistedKey}`;
+
+    setPersonaMemories(prev => {
+      const existingIndex = prev.findIndex(memory =>
+        `${memory.userId}:${memory.agentId}:${memory.key}` === compoundKey
+      );
+
+      if (existingIndex >= 0) {
+        return prev.map((memory, index) => index === existingIndex
+          ? {
+            ...memory,
+            content: normalizedContent,
+            confidence: Math.max(memory.confidence || 0, 0.9),
+            observationCount: (memory.observationCount || 0) + 1,
+            lastObservedAt: nowIso,
+            updatedAt: nowIso,
+          }
+          : memory
+        );
+      }
+
+      const created: PersonaMemory = {
+        id: crypto.randomUUID(),
+        userId: currentUser.id,
+        agentId,
+        type: effectiveType,
+        key: persistedKey,
+        content: normalizedContent,
+        confidence: 0.9,
+        observationCount: 1,
+        firstObservedAt: nowIso,
+        lastObservedAt: nowIso,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      return [created, ...prev].slice(0, 800);
+    });
+  };
+
+  const clearAgentPersonaMemories = (agentId: string) => {
+    setPersonaMemories(prev => prev.filter(memory => memory.agentId !== agentId));
+  };
+
+  const handleUpdateChatMessages = useCallback((sessionId: string, messages: ChatMessage[]) => {
+    setChatSessions((prev: ChatSession[]) => {
+      let changed = false;
+      const next = prev.map((s: ChatSession) => {
+        if (s.id !== sessionId) return s;
+
+        let title = s.title;
+        if (title === '새 대화' && messages.length > 0) {
+          const firstUserMsg = messages.find((m: ChatMessage) => m.role === 'user');
+          if (firstUserMsg) {
+            title = firstUserMsg.content.slice(0, 20) + (firstUserMsg.content.length > 20 ? '...' : '');
+          }
+        }
+
+        const lastMsg = messages[messages.length - 1];
+        const nextLastMessageAt = lastMsg?.timestamp || s.lastMessageAt;
+        const currentAgentIds = dedupeAgentIds(Array.isArray(s.agentIds) ? s.agentIds : []);
+        const messageAgentIds = dedupeAgentIds(
+          messages
+            .filter((message: ChatMessage) => message.role === 'assistant')
+            .map((message: ChatMessage) => message.agentId)
+        );
+        const nextAgentId = messageAgentIds.length > 0 ? messageAgentIds[0] : s.agentId;
+        const nextAgentIds = currentAgentIds.length > 0
+          ? currentAgentIds
+          : (messageAgentIds.length > 0 ? messageAgentIds : dedupeAgentIds([s.agentId]));
+
+        const unchanged =
+          isSameChatMessageList(s.messages, messages) &&
+          s.title === title &&
+          s.lastMessageAt === nextLastMessageAt &&
+          s.agentId === nextAgentId &&
+          isSameAgentIdList(currentAgentIds, nextAgentIds);
+
+        if (unchanged) return s;
+        changed = true;
+
+        return {
+          ...s,
+          messages,
+          title,
+          lastMessageAt: nextLastMessageAt,
+          agentId: nextAgentId,
+          agentIds: nextAgentIds,
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  const resolvedAiAgents = resolveAgentsWithProfiles(aiAgents, settings);
 
   const navItems: { id: ViewState; label: string; icon: React.ElementType }[] = [
     { id: 'chat', label: '새 채팅', icon: MessageCircle },
@@ -2702,15 +3848,42 @@ const App: React.FC = () => {
   ];
   const mobileNavItems: { id: ViewState; label: string; icon: React.ElementType }[] = [
     ...navItems,
-    { id: 'settings', label: '설정', icon: Settings2 },
   ];
+
+  const renderSettingsView = () => (
+    <SettingsView
+      agents={resolvedAiAgents}
+      onUpdateAgents={updateAgents}
+      settings={settings}
+      onUpdateSettings={setSettings}
+      currentUser={currentUser}
+      onUpdateUser={updateUser}
+      onLogout={() => {
+        setIsSettingsModalOpen(false);
+        handleLogout();
+      }}
+      isLoggingOut={isLoggingOut}
+      onExportData={handleExportData}
+      onClearAllData={handleClearAllData}
+      onClearActivity={handleClearActivity}
+      onClearPosts={handleClearPosts}
+      onClearEvents={handleClearEvents}
+      onClearTodos={handleClearTodos}
+      onClearEntries={handleClearEntries}
+      onClearChat={handleClearChat}
+      personaMemories={personaMemories}
+      onAddPersonaMemory={addPersonaMemory}
+      onForgetPersonaMemory={forgetPersonaMemory}
+      onClearAgentPersonaMemories={clearAgentPersonaMemories}
+    />
+  );
 
   const renderView = () => {
     switch (currentView) {
       case 'calendar':
         return (
           <CalendarView
-            events={events}
+            events={filteredCalendarEvents}
             tags={calendarTags}
             onAddEvent={addEvent}
             onDeleteEvent={deleteEvent}
@@ -2720,7 +3893,7 @@ const App: React.FC = () => {
       case 'todo':
         return (
           <TodoView
-            todos={todos}
+            todos={effectiveTodos}
             lists={todoLists}
             tabs={todoTabs}
             steps={todoSteps}
@@ -2751,45 +3924,29 @@ const App: React.FC = () => {
             onSelectId={setSelectedJournalId}
             onSelectCategory={setSelectedJournalCategory}
             onSearchQuery={setJournalSearchQuery}
+            onAddCategory={addJournalCategory}
             onAddEntry={addEntry}
             onUpdateEntry={updateEntry}
             onDeleteEntry={deleteEntry}
-            onAddCategory={addJournalCategory}
-          />
-        );
-      case 'settings':
-        return (
-          <SettingsView
-            agents={aiAgents}
-            onUpdateAgents={updateAgents}
-            settings={settings}
-            onUpdateSettings={setSettings}
-            currentUser={currentUser}
-            onUpdateUser={updateUser}
-            onExportData={handleExportData}
-            onClearAllData={handleClearAllData}
-            onClearActivity={handleClearActivity}
-            onClearPosts={handleClearPosts}
-            onClearEvents={handleClearEvents}
-            onClearTodos={handleClearTodos}
-            onClearEntries={handleClearEntries}
-            onClearChat={handleClearChat}
           />
         );
       case 'chat':
       default: {
         const activeSession = chatSessions.find(s => s.id === activeChatSessionId);
         const activeAgentIdsForChat = dedupeAgentIds(activeChatAgentIds).filter(id =>
-          aiAgents.some(agent => agent.id === id)
+          resolvedAiAgents.some(agent => agent.id === id)
         );
         const sessionAgentIds =
           activeAgentIdsForChat.length > 0
             ? activeAgentIdsForChat
-            : (aiAgents[0]?.id ? [aiAgents[0].id] : []);
+            : (resolvedAiAgents[0]?.id ? [resolvedAiAgents[0].id] : []);
         const selectedChatAgents = sessionAgentIds
-          .map(id => aiAgents.find(agent => agent.id === id))
+          .map(id => resolvedAiAgents.find(agent => agent.id === id))
           .filter(Boolean) as AIAgent[];
-        const personaMemoryBucketsByAgent = buildPersonaMemoryBuckets(personaMemories);
+        const personaMemoryBucketsByAgent = buildPersonaMemoryBuckets(
+          personaMemories,
+          new Set(settings.pinnedPersonaMemoryIds || [])
+        );
         const personaMemoryContextByAgent = sessionAgentIds.reduce((acc, agentId) => {
           const memory = buildPersonaMemoryContext(
             chatSessions,
@@ -2804,7 +3961,7 @@ const App: React.FC = () => {
         return (
           <ChatView
             events={events}
-            todos={todos}
+            todos={effectiveTodos}
             entries={entries}
             posts={posts}
             todoLists={todoLists}
@@ -2815,8 +3972,8 @@ const App: React.FC = () => {
             onAddPost={addPost}
             requireConfirm={settings.chatActionConfirm}
             settings={settings}
-            agent={selectedChatAgents[0] || aiAgents[0]}
-            agents={aiAgents}
+            agent={selectedChatAgents[0] || resolvedAiAgents[0]}
+            agents={resolvedAiAgents}
             selectedAgentIds={sessionAgentIds}
             selectedAgents={selectedChatAgents}
             onSelectAgents={(agentIds) => {
@@ -2840,14 +3997,17 @@ const App: React.FC = () => {
                 : (aiAgents[0]?.id ? [aiAgents[0].id] : []);
               const addressedAgentIds = dedupeAgentIds(context?.addressedAgentIds || []);
               const memoryTargetIds = addressedAgentIds.length > 0 ? addressedAgentIds : nextAgentIds;
+              const sessionStartedAt = context?.sessionStartedAt
+                ? new Date(context.sessionStartedAt.replace(' ', 'T')).toISOString()
+                : new Date().toISOString();
               if (!activeChatSessionId) {
                 const newId = crypto.randomUUID();
                 const newSession: ChatSession = {
                   id: newId,
                   title: text.slice(0, 20) + (text.length > 20 ? '...' : ''),
                   messages: [],
-                  createdAt: new Date().toISOString(),
-                  lastMessageAt: new Date().toISOString(),
+                  createdAt: sessionStartedAt,
+                  lastMessageAt: sessionStartedAt,
                   agentId: nextAgentIds[0],
                   agentIds: nextAgentIds,
                 };
@@ -2868,59 +4028,7 @@ const App: React.FC = () => {
             chatSessions={chatSessions}
             personaMemoryContextByAgent={personaMemoryContextByAgent}
             defaultUserName={currentUser?.name || ''}
-            onUpdateMessages={(sessionId: string, messages: ChatMessage[]) => {
-              setChatSessions((prev: ChatSession[]) => {
-                let changed = false;
-                const next = prev.map((s: ChatSession) => {
-                  if (s.id !== sessionId) return s;
-
-                  let title = s.title;
-                  if (title === '새 대화' && messages.length > 0) {
-                    const firstUserMsg = messages.find((m: ChatMessage) => m.role === 'user');
-                    if (firstUserMsg) {
-                      title = firstUserMsg.content.slice(0, 20) + (firstUserMsg.content.length > 20 ? '...' : '');
-                    }
-                  }
-
-                  const lastMsg = messages[messages.length - 1];
-                  const nextLastMessageAt = lastMsg?.timestamp || s.lastMessageAt;
-
-                  // Maintain current user selected agentIds; do not drop them just because they haven't spoken yet
-                  const currentAgentIds = dedupeAgentIds([
-                    ...(Array.isArray(s.agentIds) ? s.agentIds : []),
-                  ]);
-
-                  // For the primary agentId fallback
-                  const messageAgentIds = dedupeAgentIds(
-                    messages
-                      .filter((message: ChatMessage) => message.role === 'assistant')
-                      .map((message: ChatMessage) => message.agentId)
-                  );
-                  const nextAgentId = messageAgentIds.length > 0 ? messageAgentIds[0] : s.agentId;
-                  const nextAgentIds = currentAgentIds.length > 0 ? currentAgentIds : (messageAgentIds.length > 0 ? messageAgentIds : [s.agentId]);
-
-                  const unchanged =
-                    isSameChatMessageList(s.messages, messages) &&
-                    s.title === title &&
-                    s.lastMessageAt === nextLastMessageAt &&
-                    s.agentId === nextAgentId &&
-                    isSameAgentIdList(currentAgentIds, nextAgentIds);
-
-                  if (unchanged) return s;
-                  changed = true;
-
-                  return {
-                    ...s,
-                    messages,
-                    title,
-                    lastMessageAt: nextLastMessageAt,
-                    agentId: nextAgentId,
-                    agentIds: nextAgentIds,
-                  };
-                });
-                return changed ? next : prev;
-              });
-            }}
+            onUpdateMessages={handleUpdateChatMessages}
           />
         );
       }
@@ -2929,10 +4037,17 @@ const App: React.FC = () => {
 
   const headerLabel =
     mobileNavItems.find(i => i.id === currentView)?.label ||
-    (currentView === 'settings' ? '설정' : 'Dashboard');
+    'Dashboard';
   const historySessions = chatSessions
     .filter((session: ChatSession) => hasUserChatMessage(session))
-    .sort((a, b) => new Date(b.lastMessageAt || b.createdAt).getTime() - new Date(a.lastMessageAt || a.createdAt).getTime());
+    .sort((a, b) => getChatSessionActivityTime(b) - getChatSessionActivityTime(a));
+  const recentJournalEntries = useMemo(() => {
+    return [...entries].sort((a, b) => {
+      const byDate = getJournalEntryTime(b) - getJournalEntryTime(a);
+      if (byDate !== 0) return byDate;
+      return (a.order ?? 0) - (b.order ?? 0);
+    });
+  }, [entries]);
 
   const handleNewChat = () => {
     setActiveChatSessionId(null);
@@ -2964,58 +4079,88 @@ const App: React.FC = () => {
 
 
   return (
-    <div className="flex h-[100dvh] bg-[#fbfbfa] font-sans selection:bg-[#2ecc71]/20 relative overflow-x-hidden">
+    <div className="flex h-[100dvh] bg-[#fbfbfa] font-sans selection:bg-black/10 relative overflow-x-hidden">
       {/* Full Page Loading Overlay Removed in v2.6 for "Instant" feel */}
       {/* Sidebar Navigation */}
-      <aside className="hidden lg:flex w-16 lg:w-[240px] bg-[#f7f7f5] border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0">
+      <aside className="hidden lg:flex lg:w-[280px] xl:w-[300px] bg-white border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0">
         <div>
           {/* Logo Section */}
-          <button
-            type="button"
-            className="w-full p-4 lg:p-5 flex items-center gap-3 group hover:bg-[#efefef] transition-colors text-left"
-            onClick={handleNewChat}
-            aria-label="새 채팅 시작"
-          >
-            <div className="w-8 h-8 bg-[#37352f] text-white rounded-[10px] flex items-center justify-center transition-transform group-hover:rotate-6">
-              <Sparkles size={16} />
-            </div>
-            <span className="hidden lg:block text-lg font-bold tracking-tight text-[#37352f]">LifeSync AI</span>
-          </button>
+          <div className="h-16 px-6 flex items-center">
+            <span className="text-[15px] leading-5 font-medium text-[#171717]">LifeSync AI</span>
+          </div>
 
-          <nav className="px-2 space-y-0.5">
+          <nav className="px-3 space-y-1">
             {navItems.map(item => (
               <button
                 key={item.id}
                 onClick={() => item.id === 'chat' ? handleNewChat() : setCurrentView(item.id)}
                 className={`
-                  w-full flex items-center px-3 py-1.5 rounded-[4px] transition-colors group
+                  w-full flex items-center px-3 py-2.5 rounded-lg transition-colors group
                   ${currentView === item.id
-                    ? 'bg-[#efefef] text-[#37352f] font-medium'
-                    : 'text-[#787774] hover:bg-[#efefef] hover:text-[#37352f]'}
+                    ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'
+                    : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}
                 `}
               >
-                <item.icon size={18} className={currentView === item.id ? 'text-[#37352f]' : 'text-[#9b9a97] group-hover:text-[#37352f]'} />
-                <span className="hidden lg:block ml-2.5 text-sm">
+                <item.icon size={18} className={currentView === item.id ? 'text-[var(--color-primary)]' : 'text-[#8a8a8a] group-hover:text-[#171717]'} strokeWidth={currentView === item.id ? 2.5 : 2} />
+                <span className={`ml-3 text-[15px] leading-5 ${currentView === item.id ? 'font-medium text-[var(--color-primary)]' : 'font-normal'}`}>
                   {item.label}
                 </span>
               </button>
             ))}
           </nav>
           {
+            currentView === 'calendar' && (
+              <div className="hidden lg:block mt-6 pt-4 border-t border-[#e9e9e8] px-3">
+                <div className="px-3 mb-2">
+                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">태그 필터</span>
+                </div>
+                <div className="space-y-1">
+                  {calendarTags.map(tag => {
+                    const isVisible = visibleCalendarTagIds.includes(tag.id);
+
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => toggleCalendarTagFilter(tag.id)}
+                        className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
+                          isVisible
+                            ? 'text-[#171717] hover:bg-[#f7f7f7]'
+                            : 'text-[#8a8a8a] hover:bg-[#f7f7f7] hover:text-[#5f5f5f]'
+                        }`}
+                      >
+                        <span
+                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px]"
+                          style={{
+                            backgroundColor: isVisible ? tag.color : '#ffffff',
+                            border: isVisible ? `1px solid ${tag.color}` : `1px solid ${tag.color}66`,
+                          }}
+                        >
+                          {isVisible && <Check size={12} className="text-white" strokeWidth={3} />}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[15px] leading-5 font-normal">{tag.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )
+          }
+          {
             currentView === 'chat' && (
-              <div className="hidden lg:block mt-6 pt-4 border-t border-[#e9e9e8] px-2">
+              <div className="hidden lg:block mt-6 pt-4 border-t border-[#e9e9e8] px-3">
                 <div className="flex items-center justify-between px-3 mb-2 group">
-                  <span className="text-[11px] font-medium text-[#787774] uppercase tracking-wider">채팅 기록</span>
+                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">채팅 기록</span>
                   <button
                     onClick={handleNewChat}
-                    className="p-1 hover:bg-[#efefef] rounded text-[#9b9a97] opacity-0 group-hover:opacity-100 transition-all"
+                    className="p-1 hover:bg-[#f3f3f3] rounded text-[#8a8a8a] opacity-0 group-hover:opacity-100 transition-all"
                   >
                     <Plus size={14} />
                   </button>
                 </div>
-                <div className="space-y-0.5 overflow-y-auto max-h-[400px] scrollbar-hide">
+                <div className="space-y-1 overflow-y-auto max-h-[400px] scrollbar-hide">
                   {historySessions.length === 0 ? (
-                    <div className="px-3 py-2 text-[11px] text-[#9b9a97] italic">
+                    <div className="px-3 py-2 text-[13px] leading-5 text-[#8a8a8a]">
                       진행 중인 대화가 없습니다.
                     </div>
                   ) : (
@@ -3029,9 +4174,9 @@ const App: React.FC = () => {
                               setActiveChatSessionId(session.id);
                               setActiveChatAgentIds(resolvedAgentIds);
                             }}
-                            className={`w-full text-left px-3 py-1.5 rounded-[4px] cursor-pointer transition-colors text-sm group ${activeChatSessionId === session.id
-                              ? 'bg-[#efefef] text-[#37352f] font-medium'
-                              : 'text-[#787774] hover:bg-[#efefef] hover:text-[#37352f]'
+                            className={`w-full text-left px-3 py-2 rounded-lg cursor-pointer transition-colors text-[14px] leading-5 group ${activeChatSessionId === session.id
+                              ? 'bg-[#f7f7f7] text-[#171717]'
+                              : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
                               }`}
                             role="button"
                             tabIndex={0}
@@ -3044,7 +4189,6 @@ const App: React.FC = () => {
                             }}
                           >
                             <div className="flex items-center">
-                              <MessageCircle size={14} className="mr-2.5 opacity-40 shrink-0" />
                               <span className="truncate flex-1 pr-6">{session.title}</span>
                             </div>
                           </div>
@@ -3056,7 +4200,7 @@ const App: React.FC = () => {
                                 if (activeChatSessionId === session.id) setActiveChatSessionId(null);
                               }
                             }}
-                            className="absolute right-1 top-1/2 -translate-y-1/2 p-1 hover:bg-[#d9d9d8] z-10 rounded text-[#9b9a97] opacity-0 group-hover:opacity-100 transition-all"
+                            className="absolute right-1 top-1/2 -translate-y-1/2 p-1 hover:bg-[#eeeeee] z-10 rounded text-[#8a8a8a] opacity-0 group-hover:opacity-100 transition-all"
                             aria-label="채팅 삭제"
                           >
                             <Trash2 size={12} />
@@ -3071,14 +4215,14 @@ const App: React.FC = () => {
 
           {
             currentView === 'board' && (
-              <div className="hidden lg:block mt-4 pt-4 border-t border-[#e9e9e8] px-2 space-y-6">
+              <div className="hidden lg:block mt-4 pt-4 border-t border-[#e9e9e8] px-3 space-y-6">
                 {/* AI Agents (Categories) */}
                 <div className="space-y-0.5">
                   <div className="px-3 flex items-center justify-between mb-1.5 group">
-                    <span className="text-[11px] font-medium text-[#787774] uppercase tracking-wider">AI 페르소나</span>
+                    <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">AI 페르소나</span>
                     <button
                       onClick={() => setIsAddingAiAgent(!isAddingAiAgent)}
-                      className={`p-0.5 hover:bg-[#efefef] rounded transition-all ${isAddingAiAgent ? 'bg-[#efefef]' : ''}`}
+                      className={`p-0.5 hover:bg-[#f3f3f3] rounded transition-all ${isAddingAiAgent ? 'bg-[#f3f3f3]' : ''}`}
                     >
                       <Plus size={14} className="text-[#787774]" />
                     </button>
@@ -3091,7 +4235,7 @@ const App: React.FC = () => {
                         placeholder="새 페르소나..."
                         value={aiAgentInput}
                         onChange={e => setAiAgentInput(e.target.value)}
-                        className="w-full bg-white border border-[#e9e9e8] rounded-[4px] py-1.5 px-3 text-sm outline-none shadow-sm"
+                        className="w-full bg-white border border-[#e9e9e8] rounded-[4px] py-1.5 px-3 text-[14px] leading-5 outline-none"
                         autoFocus
                         onKeyDown={e => {
                           if (e.key === 'Enter') {
@@ -3113,7 +4257,7 @@ const App: React.FC = () => {
                             type="text"
                             value={editingAiAgentName}
                             onChange={e => setEditingAiAgentName(e.target.value)}
-                            className="w-full bg-white border border-[#37352f] rounded-[4px] py-1 px-2 text-sm outline-none shadow-sm"
+                            className="w-full bg-white border border-[#d4d4d4] rounded-lg py-1 px-2 text-[14px] leading-5 outline-none"
                             autoFocus
                             onKeyDown={e => {
                               if (e.key === 'Enter') {
@@ -3132,20 +4276,13 @@ const App: React.FC = () => {
                         <div className="flex items-center">
                           <button
                             onClick={() => setSelectedAiAgentId(agent.id)}
-                            className={`flex-1 flex items-center px-3 py-1.5 rounded-[4px] transition-colors group ${selectedAiAgentId === agent.id
-                              ? 'bg-[#efefef] text-[#37352f] font-medium'
-                              : 'text-[#9b9a97] hover:bg-[#efefef] hover:text-[#37352f]'
+                            className={`flex-1 flex items-center px-3 py-2 rounded-lg transition-colors group ${selectedAiAgentId === agent.id
+                              ? 'bg-[#f7f7f7] text-[#171717]'
+                              : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
                               }`}
                           >
-                            <div className="mr-2 flex-shrink-0">
-                              {agent.avatar ? (
-                                <img src={agent.avatar} alt={agent.name} className="w-5 h-5 rounded-full object-cover border border-[#e9e9e8]" />
-                              ) : (
-                                <span className="text-sm">{agent.emoji}</span>
-                              )}
-                            </div>
-                            <span className="text-sm truncate">{agent.name}</span>
-                            <span className="ml-2 text-[11px] opacity-40 font-medium">
+                            <span className="text-[14px] leading-5 truncate">{agent.name}</span>
+                            <span className="ml-2 text-[13px] leading-5 font-normal opacity-45">
                               {communityPosts.filter(p => p.author === agent.id).length}
                             </span>
                           </button>
@@ -3154,7 +4291,7 @@ const App: React.FC = () => {
                               e.stopPropagation();
                               setActiveAiAgentMenu(activeAiAgentMenu === agent.id ? null : agent.id);
                             }}
-                            className={`p-1 hover:bg-[#e9e9e8] rounded opacity-0 group-hover/agent:opacity-100 transition-opacity mr-1 ${activeAiAgentMenu === agent.id ? 'opacity-100 bg-[#e9e9e8]' : ''}`}
+                            className={`p-1 hover:bg-[#eeeeee] rounded opacity-0 group-hover/agent:opacity-100 transition-opacity mr-1 ${activeAiAgentMenu === agent.id ? 'opacity-100 bg-[#eeeeee]' : ''}`}
                           >
                             <MoreVertical size={14} className="text-[#9b9a97]" />
                           </button>
@@ -3162,14 +4299,14 @@ const App: React.FC = () => {
                       )}
 
                       {activeAiAgentMenu === agent.id && (
-                        <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-[#e9e9e8] rounded-[4px] shadow-lg z-[100] py-1 animate-in fade-in zoom-in-95 duration-100">
+                        <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-[#e9e9e8] rounded-lg z-[100] py-1 animate-in fade-in zoom-in-95 duration-100">
                           <button
                             onClick={() => {
                               setEditingAiAgentId(agent.id);
                               setEditingAiAgentName(agent.name);
                               setActiveAiAgentMenu(null);
                             }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#37352f] hover:bg-[#efefef] transition-colors text-left"
+                            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] leading-5 text-[#37352f] hover:bg-[#f3f3f3] transition-colors text-left"
                           >
                             <Edit3 size={12} className="text-[#9b9a97]" /> 이름 변경
                           </button>
@@ -3178,7 +4315,7 @@ const App: React.FC = () => {
                               deleteAiAgent(agent.id);
                               setActiveAiAgentMenu(null);
                             }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#eb5757] hover:bg-[#fff0f0] transition-colors text-left"
+                            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] leading-5 text-[#eb5757] hover:bg-[#fff0f0] transition-colors text-left"
                           >
                             <Trash2 size={12} /> 삭제
                           </button>
@@ -3191,7 +4328,7 @@ const App: React.FC = () => {
                 {/* AI Post List */}
                 <div className="space-y-0.5 overflow-hidden">
                   <div className="px-3 mb-1.5">
-                    <span className="text-[11px] font-medium text-[#787774] uppercase tracking-wider">AI 게시글</span>
+                    <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">AI 게시글</span>
                   </div>
                   <div className="max-h-[350px] overflow-y-auto custom-scrollbar space-y-0.5">
                     {communityPosts
@@ -3202,16 +4339,16 @@ const App: React.FC = () => {
                         <button
                           key={post.id}
                           onClick={() => setSelectedAiPostId(post.id)}
-                          className={`w-full text-left px-3 py-2 rounded-[4px] transition-colors group ${selectedAiPostId === post.id
-                            ? 'bg-[#efefef] text-[#37352f] font-medium'
-                            : 'text-[#9b9a97] hover:bg-[#efefef] hover:text-[#37352f]'
+                          className={`w-full text-left px-3 py-2 rounded-lg transition-colors group ${selectedAiPostId === post.id
+                            ? 'bg-[#f7f7f7] text-[#171717]'
+                            : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
                             }`}
                         >
                           <div className="flex items-center justify-between">
-                            <span className="text-sm truncate pr-2">
+                            <span className="text-[14px] leading-5 truncate pr-2">
                               {post.content.split('\n')[0].substring(0, 15)}...
                             </span>
-                            <span className="text-[10px] opacity-60 font-medium flex-shrink-0">
+                            <span className="text-[13px] leading-5 font-normal opacity-50 flex-shrink-0">
                               {format(parseISO(post.timestamp), 'MM.dd')}
                             </span>
                           </div>
@@ -3225,196 +4362,115 @@ const App: React.FC = () => {
 
           {
             currentView === 'journal' && (
-              <div className="mt-8 px-2 space-y-6 overflow-hidden">
-                {/* Categories Section */}
-                <div className="space-y-0.5">
-                  <div className="px-3 mb-1.5 flex items-center justify-between group">
-                    <span className="text-[11px] font-medium text-[#787774] uppercase tracking-wider">카테고리</span>
-                    <button
-                      onClick={() => setIsAddingJournalCategory(true)}
-                      className="p-1 hover:bg-[#efefef] rounded text-[#9b9a97] hover:text-[#37352f] transition-all"
-                    >
-                      <Plus size={16} />
-                    </button>
-                  </div>
-
-
-
-                  {journalCategories.map(cat => (
-                    <div
-                      key={cat.id}
-                      className="relative group/cat"
-                      onMouseLeave={() => setActiveCategoryMenu(null)}
-                    >
-                      <button
-                        onClick={() => setSelectedJournalCategory(cat.name)}
-                        className={`w-full flex items-center px-3 py-1.5 rounded-[4px] transition-colors text-sm ${selectedJournalCategory === cat.name ? 'bg-[#efefef] text-[#37352f] font-medium' : 'text-[#787774] hover:bg-[#efefef] hover:text-[#37352f]'}`}
-                      >
-                        <Hash size={14} className="mr-2.5 opacity-50" />
-                        <span className="truncate flex-1 text-left">{cat.name}</span>
-
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveCategoryMenu(activeCategoryMenu === cat.id ? null : cat.id);
-                          }}
-                          className="p-0.5 hover:bg-[#d9d9d8] rounded text-[#9b9a97] opacity-0 group-hover/cat:opacity-100 transition-all"
-                        >
-                          <MoreVertical size={12} />
-                        </button>
-                      </button>
-
-                      {/* Category Action Menu */}
-                      {activeCategoryMenu === cat.id && (
-                        <div className="absolute left-full top-0 ml-1 w-32 bg-white border border-[#e9e9e8] rounded-lg shadow-xl py-1 z-[60] animate-in fade-in zoom-in-95 duration-200">
-                          <button
-                            onClick={() => {
-                              setEditingCategoryId(cat.id);
-                              setEditingCategoryName(cat.name);
-                              setActiveCategoryMenu(null);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#37352f] hover:bg-[#efefef] transition-colors text-left"
-                          >
-                            <Edit3 size={12} className="text-[#9b9a97]" /> 이름 변경
-                          </button>
-                          <button
-                            onClick={() => {
-                              deleteJournalCategory(cat.id);
-                              setActiveCategoryMenu(null);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#eb5757] hover:bg-[#fff0f0] transition-colors text-left"
-                          >
-                            <Trash2 size={12} /> 삭제
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-
-                  {isAddingJournalCategory && (
-                    <div className="px-2 mb-2">
-                      <input
-                        type="text"
-                        placeholder="새 카테고리..."
-                        value={journalCategoryInput}
-                        onChange={e => setJournalCategoryInput(e.target.value)}
-                        className="w-full bg-white border border-[#e9e9e8] rounded-[4px] py-1.5 px-3 text-sm outline-none shadow-sm"
-                        autoFocus
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            addJournalCategory(journalCategoryInput);
-                            setJournalCategoryInput('');
-                            setIsAddingJournalCategory(false);
-                          }
-                          if (e.key === 'Escape') setIsAddingJournalCategory(false);
-                        }}
-                      />
-                    </div>
-                  )}
+              <div className="px-3 overflow-hidden">
+                <div className="border-t border-[#e9e9e8] pt-6 mt-6 mb-2 px-3">
+                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">카테고리</span>
                 </div>
 
-                {/* Entry List */}
-                <div className="space-y-0.5 overflow-hidden">
-                  <div className="px-3 mb-1.5">
-                    <span className="text-[11px] font-medium text-[#787774] uppercase tracking-wider">기록 목록</span>
-                  </div>
-                  <div className="max-h-[350px] overflow-y-auto custom-scrollbar space-y-0.5">
-                    {entries
-                      .filter(e => selectedJournalCategory === 'all' || e.category === selectedJournalCategory)
-                      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-                      .map(entry => (
+                <div className="space-y-0.5">
+                  <button
+                    onClick={() => setSelectedJournalCategory('all')}
+                    className={`w-full flex items-center px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${selectedJournalCategory === 'all' ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
+                  >
+                    <span className="flex-1 text-left text-[15px] leading-5">전체</span>
+                    <span className={`text-[13px] leading-5 ${selectedJournalCategory === 'all' ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{entries.length}</span>
+                  </button>
+
+                  {journalCategories.map(cat => {
+                    const isActive = selectedJournalCategory === cat.name;
+
+                    return (
+                      <div
+                        key={cat.id}
+                        className="relative group/cat"
+                      >
+                        <button
+                          onClick={() => setSelectedJournalCategory(cat.name)}
+                          className={`w-full flex items-center px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${isActive ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
+                        >
+                          <span className="truncate flex-1 text-left text-[15px] leading-5">{cat.name}</span>
+                          <span className={`text-[13px] leading-5 ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>
+                            {entries.filter(e => e.category === cat.name).length}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Entry List / Record List */}
+                <div className="border-t border-[#e9e9e8] pt-6 mt-6 mb-2 px-3">
+                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">기록 목록</span>
+                </div>
+                <div className="max-h-[320px] space-y-0.5 overflow-y-auto pr-1 custom-scrollbar">
+                  {recentJournalEntries.length === 0 ? (
+                    <div className="px-3 py-2 text-[13px] leading-5 text-[#8a8a8a]">
+                      아직 기록이 없습니다.
+                    </div>
+                  ) : (
+                    recentJournalEntries.map((entry) => {
+                      const isSelected = selectedJournalId === entry.id;
+
+                      return (
                         <button
                           key={entry.id}
-                          onClick={() => setSelectedJournalId(entry.id)}
-                          className={`w-full text-left px-3 py-2 rounded-[4px] transition-colors group ${selectedJournalId === entry.id
-                            ? 'bg-[#efefef] text-[#37352f] font-medium'
-                            : 'text-[#9b9a97] hover:bg-[#efefef] hover:text-[#37352f]'
-                            }`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedJournalCategory('all');
+                            setSelectedJournalId(entry.id);
+                          }}
+                          className={`w-full truncate rounded-lg px-3 py-2 text-left text-[15px] leading-5 transition-colors ${
+                            isSelected
+                              ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium'
+                              : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
+                          }`}
                         >
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm truncate pr-2">
-                              {entry.title || '제목 없음'}
-                            </span>
-                            <span className="text-[10px] opacity-60 font-medium flex-shrink-0">
-                              {format(parseISO(entry.date), 'MM.dd')}
-                            </span>
-                          </div>
+                          {entry.title || '제목 없음'}
                         </button>
-                      ))}
-                  </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )
           }
 
-          {/* Divider */}
-          <div className="mx-4 my-4 border-t border-[#e9e9e8]"></div>
-
-          {/* Settings and User Info */}
-          <div className="px-2">
-            <div className="pt-4 space-y-0.5">
-              <button
-                onClick={() => setCurrentView('settings')}
-                className={`w-full flex items-center gap-3 px-3 py-1.5 text-sm font-medium rounded-lg transition-all ${currentView === 'settings' ? 'bg-[#efefef] text-[#37352f]' : 'text-[#787774] hover:bg-[#f7f7f5] hover:text-[#37352f]'}`}
-              >
-                <Settings2 size={16} />
-                <span className="hidden lg:block">설정</span>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Bottom Section: Pro & Auth */}
-        <div className="p-3 space-y-3">
-
-
+        <div className="p-4 space-y-3">
           {currentUser ? (
-            <div className="bg-white border border-[#e9e9e8] rounded-lg p-2 flex items-center justify-between shadow-sm">
-              <div className="flex items-center gap-3 overflow-hidden">
-                <div className="w-8 h-8 rounded-full bg-[#f1f1f0] flex items-center justify-center text-xs font-bold text-[#37352f] flex-shrink-0 overflow-hidden border border-[#e9e9e8]">
+            <button
+              type="button"
+              onClick={() => setIsSettingsModalOpen(true)}
+              className="w-full rounded-[14px] bg-white p-3 text-left transition-colors hover:bg-[#f7f7f7]"
+              title="설정"
+              aria-label="설정 열기"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[14px] leading-5 font-medium text-[#171717] flex-shrink-0 overflow-hidden">
                   {currentUser?.avatar ? (
-                    <img src={currentUser.avatar} alt={currentUser.name} className="w-full h-full object-cover" />
+                    <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
                   ) : (
-                    currentUser?.name?.[0] || 'U'
+                    currentUser?.name?.[0] || 'J'
                   )}
                 </div>
-                <div className="flex flex-col min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-[#37352f] truncate">{currentUser?.name}</span>
-                    <span className="text-[9px] text-[#9b9a97] font-medium leading-none">v2.6.0</span>
-                  </div>
-                  {!isDataLoaded && (
-                    <span className="text-[9px] text-[#eb5757] font-semibold flex items-center gap-1 mt-0.5 animate-pulse">
-                      <span className="w-1 h-1 rounded-full bg-[#eb5757]" />
-                      데이터 로딩 중...
-                    </span>
-                  )}
-                  {isDataLoaded && syncStatus === 'error' && (
-                    <span className="text-[9px] text-[#eb5757] font-bold flex items-center gap-1 mt-0.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#eb5757]" />
-                      저장 오류 (RLS 고장)
-                    </span>
-                  )}
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="text-[14px] leading-5 font-medium text-[#171717] truncate">{currentUser?.name || 'JNMED'}</div>
+                  <div className="text-[13px] leading-5 font-normal text-[#8a8a8a] truncate mt-0.5">내 계정</div>
                 </div>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
+                  <SettingsIcon size={16} />
+                </span>
               </div>
-              <button
-                type="button"
-                onClick={handleLogout}
-                disabled={isLoggingOut}
-                className="flex items-center gap-1 px-2 py-1.5 hover:bg-[#efefef] rounded text-[#9b9a97] hover:text-[#eb5757] transition-colors flex-shrink-0 text-[11px] disabled:opacity-60 disabled:cursor-not-allowed"
-                title="로그아웃"
-              >
-                <LogOut size={14} />
-                <span>{isLoggingOut ? '처리 중...' : '로그아웃'}</span>
-              </button>
-            </div>
+            </button>
           ) : (
             <div className="px-1">
               <button
                 onClick={() => {
                   setAuthMode('login');
                 }}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#37352f] text-white text-[11px] font-bold rounded-lg hover:bg-black transition-all shadow-sm"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-[14px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all"
               >
                 <UserIcon size={14} strokeWidth={3} />
                 로그인 / 가입하기
@@ -3427,7 +4483,7 @@ const App: React.FC = () => {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-white pb-0">
         {/* Top Mobile Bar (Visible only on small screens) */}
-        <header className="lg:hidden h-14 bg-white border-b border-[#e9e9e8] flex items-center justify-between px-4 font-semibold text-sm z-40 relative">
+        <header className="lg:hidden h-14 bg-white border-b border-[#e9e9e8] flex items-center justify-between px-4 font-medium text-sm z-40 relative">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
@@ -3439,42 +4495,69 @@ const App: React.FC = () => {
             </button>
             <span className="text-[#37352f] truncate">{headerLabel}</span>
           </div>
-          {currentUser ? (
-            <div className="w-8 h-8 rounded-full bg-[#f1f1f0] flex items-center justify-center text-[11px] font-bold text-[#37352f] overflow-hidden border border-[#e9e9e8]">
-              {currentUser?.avatar ? (
-                <img src={currentUser.avatar} alt={currentUser.name} className="w-full h-full object-cover" />
-              ) : (
-                currentUser?.name?.[0] || 'U'
-              )}
-            </div>
-          ) : (
-            <button
-              onClick={() => {
-                setAuthMode('login');
-              }}
-              className="text-[11px] font-semibold text-[#37352f] px-2.5 py-1 rounded-md border border-[#e9e9e8] bg-white"
-            >
-              로그인
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {currentUser ? (
+              <div className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] overflow-hidden">
+                {currentUser?.avatar ? (
+                  <img src={currentUser.avatar} alt={currentUser.name} className="w-full h-full object-cover" />
+                ) : (
+                  currentUser?.name?.[0] || 'U'
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setAuthMode('login');
+                }}
+                className="text-[13px] leading-5 font-medium text-[#37352f] px-2.5 py-1 rounded-md border border-[#e9e9e8] bg-white"
+              >
+                로그인
+              </button>
+            )}
+          </div>
         </header>
 
         {/* Scrollable View Content */}
         <div className={`flex-1 relative scroll-smooth ${['todo', 'journal', 'calendar'].includes(currentView) ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-          <div className={`h-full mx-auto ${['todo', 'journal', 'calendar'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1200px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
+          <div className={`h-full mx-auto ${['todo', 'journal', 'calendar'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1440px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
             <ViewErrorBoundary view={currentView} onRecover={() => setCurrentView('chat')}>
               {renderView()}
             </ViewErrorBoundary>
           </div>
         </div>
 
+        {needRefresh && (
+          <div className="fixed bottom-36 lg:bottom-24 right-3 lg:right-6 left-3 lg:left-auto z-50">
+            <div className="bg-white border border-[#e9e9e8] text-[#37352f] px-4 py-3 rounded-xl flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">새 버전이 준비됐어요.</div>
+                <div className="text-[13px] leading-5 text-[#787774] mt-0.5">새로고침하면 최신 배포가 바로 적용됩니다.</div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setNeedRefresh(false)}
+                  className="text-[13px] leading-5 font-medium px-2.5 py-1 rounded-md border border-[#e9e9e8] text-[#787774] hover:bg-[#f7f7f7] transition-colors"
+                >
+                  나중에
+                </button>
+                <button
+                  onClick={() => void updateServiceWorker(true)}
+                  className="text-[13px] leading-5 font-normal px-2.5 py-1 rounded-md border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] hover:bg-[#eeeeee] transition-colors"
+                >
+                  지금 업데이트
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {undoToast && (
           <div className="fixed bottom-20 lg:bottom-6 right-3 lg:right-6 left-3 lg:left-auto z-50">
-            <div className="bg-[#37352f] text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3">
+            <div className="bg-white border border-[#e9e9e8] text-[#171717] px-4 py-3 rounded-xl flex items-center gap-3">
               <span className="text-sm">{undoToast.label}</span>
               <button
                 onClick={handleUndo}
-                className="text-xs font-semibold bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded-md transition-colors"
+                    className="text-[13px] leading-5 font-normal bg-[#f7f7f7] hover:bg-[#eeeeee] px-2.5 py-1 rounded-md border border-[#e9e9e8] transition-colors"
               >
                 실행 취소
               </button>
@@ -3483,6 +4566,33 @@ const App: React.FC = () => {
         )}
       </main>
 
+      {isSettingsModalOpen && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/20 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="설정"
+          onMouseDown={() => setIsSettingsModalOpen(false)}
+        >
+          <div
+            className="relative flex max-h-[calc(100dvh-48px)] w-full max-w-[1120px] flex-col overflow-hidden rounded-2xl bg-white"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setIsSettingsModalOpen(false)}
+              className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-lg bg-white text-[#787774] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
+              aria-label="설정 닫기"
+            >
+              <X size={17} />
+            </button>
+            <div className="overflow-y-auto px-4 pt-3 custom-scrollbar sm:px-6">
+              {renderSettingsView()}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile Slide Menu */}
       <div className={`lg:hidden fixed inset-0 z-[80] transition-opacity duration-300 ${isMobileMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
         <div
@@ -3490,14 +4600,14 @@ const App: React.FC = () => {
           onClick={() => setIsMobileMenuOpen(false)}
           aria-hidden="true"
         />
-        <aside className={`absolute inset-y-0 left-0 w-[78vw] max-w-[320px] bg-white border-r border-[#e9e9e8] shadow-xl transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <aside className={`absolute inset-y-0 left-0 w-[82vw] max-w-[340px] bg-white border-r border-[#e9e9e8] transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
           <div className="h-full flex flex-col">
             <div className="h-14 px-4 border-b border-[#e9e9e8] flex items-center justify-between">
-              <span className="text-sm font-semibold text-[#37352f]">전체 메뉴</span>
+              <span className="text-[14px] leading-5 font-medium text-[#37352f]">전체 메뉴</span>
               <button
                 type="button"
                 onClick={() => setIsMobileMenuOpen(false)}
-                className="w-8 h-8 rounded-md border border-[#e9e9e8] bg-white flex items-center justify-center text-[#787774] hover:text-[#37352f] hover:bg-[#f7f7f5] transition-colors"
+                className="w-8 h-8 rounded-md bg-white flex items-center justify-center text-[#787774] hover:text-[#37352f] hover:bg-[#f7f7f7] transition-colors"
                 aria-label="메뉴 닫기"
               >
                 <X size={16} />
@@ -3511,12 +4621,12 @@ const App: React.FC = () => {
                     <button
                       key={item.id}
                       onClick={() => handleMobileNavigate(item.id)}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${isActive
-                        ? 'bg-[#efefef] text-[#37352f] font-medium'
-                        : 'text-[#787774] hover:bg-[#f7f7f5] hover:text-[#37352f]'}`}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[14px] leading-5 transition-colors ${isActive
+                        ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'
+                        : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
                     >
-                      <item.icon size={16} />
-                      <span>{item.label}</span>
+                      <item.icon size={18} className={isActive ? 'text-[var(--color-primary)]' : 'text-[#8a8a8a]'} strokeWidth={isActive ? 2.5 : 2} />
+                      <span className={`text-[14px] leading-5 ${isActive ? 'font-medium' : 'font-normal'}`}>{item.label}</span>
                     </button>
                   );
                 })}
@@ -3524,14 +4634,14 @@ const App: React.FC = () => {
 
               <div className="border-t border-[#e9e9e8] pt-3">
                 <div className="flex items-center justify-between px-1 mb-2">
-                  <span className="text-[11px] font-semibold text-[#787774] uppercase tracking-wide">채팅 내역</span>
+                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">채팅 내역</span>
                   <button
                     type="button"
                     onClick={() => {
                       handleNewChat();
                       setIsMobileMenuOpen(false);
                     }}
-                    className="p-1 rounded-md border border-[#e9e9e8] text-[#787774] hover:text-[#37352f] hover:bg-[#f7f7f5] transition-colors"
+                    className="p-1 rounded-md text-[#787774] hover:text-[#37352f] hover:bg-[#f7f7f7] transition-colors"
                     aria-label="새 채팅"
                   >
                     <Plus size={13} />
@@ -3539,7 +4649,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="space-y-1 max-h-52 overflow-y-auto">
                   {historySessions.length === 0 ? (
-                    <div className="px-2 py-2 text-xs text-[#9b9a97]">저장된 대화가 없습니다.</div>
+                    <div className="px-2 py-2 text-[13px] leading-5 text-[#9b9a97]">저장된 대화가 없습니다.</div>
                   ) : (
                     historySessions
                       .slice(0, 12)
@@ -3554,9 +4664,9 @@ const App: React.FC = () => {
                               setCurrentView('chat');
                               setIsMobileMenuOpen(false);
                             }}
-                            className={`flex-1 text-left px-2.5 py-2 rounded-md text-sm transition-colors ${activeChatSessionId === session.id
-                              ? 'bg-[#efefef] text-[#37352f] font-medium'
-                              : 'text-[#787774] hover:bg-[#f7f7f5] hover:text-[#37352f]'}`}
+                            className={`flex-1 text-left px-2.5 py-2 rounded-md text-[14px] leading-5 transition-colors ${activeChatSessionId === session.id
+                              ? 'bg-[#f7f7f7] text-[#171717]'
+                              : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
                           >
                             <span className="block truncate">{session.title}</span>
                           </button>
@@ -3570,7 +4680,7 @@ const App: React.FC = () => {
                                 }
                               }
                             }}
-                            className="shrink-0 p-1.5 rounded-md text-[#9b9a97] hover:bg-[#efefef] hover:text-[#eb5757] transition-colors"
+                            className="shrink-0 p-1.5 rounded-md text-[#8a8a8a] hover:bg-[#f3f3f3] hover:text-[#171717] transition-colors"
                             aria-label="채팅 삭제"
                           >
                             <Trash2 size={12} />
@@ -3584,16 +4694,28 @@ const App: React.FC = () => {
             <div className="p-3 border-t border-[#e9e9e8]">
               {currentUser ? (
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-3 overflow-hidden">
-                    <div className="w-8 h-8 rounded-full bg-[#f1f1f0] flex items-center justify-center text-xs font-bold text-[#37352f] flex-shrink-0 overflow-hidden border border-[#e9e9e8]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobileMenuOpen(false);
+                      setIsSettingsModalOpen(true);
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left transition-colors hover:bg-[#f7f7f7]"
+                    title="설정"
+                    aria-label="설정 열기"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] flex-shrink-0 overflow-hidden">
                       {currentUser?.avatar ? (
-                        <img src={currentUser.avatar} alt={currentUser.name} className="w-full h-full object-cover" />
+                        <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
                       ) : (
                         currentUser?.name?.[0] || 'U'
                       )}
                     </div>
-                    <span className="text-xs font-semibold text-[#37352f] truncate">{currentUser?.name}</span>
-                  </div>
+                    <span className="min-w-0 flex-1 text-[13px] leading-5 font-normal text-[#37352f] truncate">{currentUser?.name}</span>
+                    <span className="shrink-0 text-[#8a8a8a]">
+                      <SettingsIcon size={15} />
+                    </span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -3601,7 +4723,7 @@ const App: React.FC = () => {
                       handleLogout();
                     }}
                     disabled={isLoggingOut}
-                    className="flex items-center gap-1 px-2 py-1.5 hover:bg-[#efefef] rounded text-[#9b9a97] hover:text-[#eb5757] transition-colors text-[11px] disabled:opacity-60 disabled:cursor-not-allowed"
+                    className="flex items-center gap-1 px-2 py-1.5 hover:bg-[#f3f3f3] rounded text-[#8a8a8a] hover:text-[#171717] transition-colors text-[13px] leading-5 font-normal disabled:opacity-60 disabled:cursor-not-allowed"
                     title="로그아웃"
                     aria-label="로그아웃"
                   >
@@ -3615,7 +4737,7 @@ const App: React.FC = () => {
                     setIsMobileMenuOpen(false);
                     setAuthMode('login');
                   }}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#37352f] text-white text-[12px] font-semibold rounded-lg hover:bg-black transition-all"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-[13px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all"
                 >
                   <UserIcon size={14} />
                   로그인 / 가입

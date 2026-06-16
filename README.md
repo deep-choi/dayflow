@@ -25,11 +25,13 @@ For AI diary generation while the browser is closed, see:
 
 - [docs/SERVER_AI_AUTOMATION.md](docs/SERVER_AI_AUTOMATION.md)
 
-## Deployment (Default)
+## Deployment
 
-- Primary deploy target: Firebase Hosting (`life-a01e2`)
+Firebase Hosting is the only operational deploy target for this app.
+
+- Project: `life-a01e2`
 - Build: `npm run build`
-- Deploy: `npx firebase deploy --only hosting`
+- Deploy: `npm run deploy`
 - Hosting URL: `https://life-a01e2.web.app`
 
-Note: `npm run deploy` currently publishes to `gh-pages`. Firebase is the default operational deploy target.
+For deployment details, see [docs/FIREBASE_HOSTING.md](docs/FIREBASE_HOSTING.md).

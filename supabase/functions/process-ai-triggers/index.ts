@@ -165,7 +165,7 @@ const buildPrompt = (
     'This is NOT a message to the user. This is your private diary.',
     'Write from first-person AI perspective.',
     'Do not address the user directly.',
-    'When referring to the human in this diary, always use "주인님".',
+    'When referring to the human in this diary, always use "사용자님".',
     'Never use other labels for the human (such as "사용자", "너", or a name).',
     'Write like a human diary entry in natural prose.',
     'Do not use markdown, bullets, numbered lists, or section headers.',

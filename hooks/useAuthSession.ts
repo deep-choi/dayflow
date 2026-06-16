@@ -17,11 +17,14 @@ type UseAuthSessionOptions = {
   onBeforeSignOut?: () => void;
 };
 
+const getMetadataAvatar = (metadata: any): string =>
+  metadata?.avatar_url || metadata?.picture || '';
+
 const mapSupabaseUser = (sessionUser: any, profile: any): User => ({
   id: sessionUser.id,
   email: sessionUser.email || '',
   name: profile?.name || sessionUser.user_metadata?.full_name || sessionUser.email?.split('@')[0] || 'User',
-  avatar: profile?.avatar_url || sessionUser.user_metadata?.avatar_url || '',
+  avatar: profile?.avatar_url || getMetadataAvatar(sessionUser.user_metadata) || '',
   geminiApiKey: profile?.gemini_api_key || '',
 });
 
@@ -45,7 +48,11 @@ export const useAuthSession = (options: UseAuthSessionOptions = {}) => {
 
   useEffect(() => {
     let disposed = false;
-    let receivedInitialSession = false;
+
+    const resetSessionGuards = () => {
+      processedSessionsRef.current.clear();
+      triggeredCallbacksRef.current.clear();
+    };
 
     const resolveProfile = async (user: any) => {
       try {
@@ -69,12 +76,23 @@ export const useAuthSession = (options: UseAuthSessionOptions = {}) => {
           .insert([{
             id: user.id,
             name: user.user_metadata?.full_name || user.email?.split('@')[0],
+            avatar_url: getMetadataAvatar(user.user_metadata),
             gemini_api_key: ''
           }])
           .select()
           .maybeSingle();
 
         if (insertError) {
+          if (insertError.code === '23505') {
+            const { data: existingProfile, error: retryError } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', user.id)
+              .maybeSingle();
+            if (!retryError && existingProfile) {
+              return existingProfile;
+            }
+          }
           console.error('[Auth] profile bootstrap failed:', insertError);
           return null;
         }
@@ -103,6 +121,7 @@ export const useAuthSession = (options: UseAuthSessionOptions = {}) => {
 
       try {
         if (!session?.user) {
+          resetSessionGuards();
           if (event === 'SIGNED_OUT' || event === 'INITIAL_SESSION' || fromBoot) {
             setCurrentUser(null);
             setAuthMode('login');
@@ -118,7 +137,7 @@ export const useAuthSession = (options: UseAuthSessionOptions = {}) => {
         setCurrentUser(optimisticUser);
 
         // --- NEW v2.6.0: Trigger onSession callback OPTIMISTICALLY so background fetching starts ASAP ---
-        const callbackKey = `${event}-${session.user.id}`;
+        const callbackKey = `${event}-${session.user.id}-${session.access_token?.slice(-10) || 'none'}`;
         if (onSessionRef.current && !triggeredCallbacksRef.current.has(callbackKey)) {
           triggeredCallbacksRef.current.add(callbackKey);
           try {
@@ -206,7 +225,7 @@ export const useAuthSession = (options: UseAuthSessionOptions = {}) => {
     onBeforeSignOutRef.current?.();
 
     try {
-      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      const { error } = await supabase.auth.signOut();
       if (error) {
         console.error('Error signing out:', error);
       }

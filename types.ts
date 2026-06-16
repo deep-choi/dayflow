@@ -92,6 +92,12 @@ export interface Comment {
   timestamp: string;
 }
 
+export interface AvatarFrame {
+  zoom: number;
+  x: number;
+  y: number;
+}
+
 // AI Community Board Types
 export interface AIAgent {
   id: string;
@@ -102,6 +108,7 @@ export interface AIAgent {
   tone: string;
   color: string;
   avatar?: string;
+  avatarFrame?: AvatarFrame;
   connectionId?: string; // Optional: per-persona API connection override
 }
 
@@ -142,14 +149,32 @@ export interface ApiConnection {
   isActive: boolean;
 }
 
+export interface AgentUsageStats extends ApiUsageStats {
+  textResponses: number;
+  lastProvider?: ApiConnection['provider'];
+  lastModelName?: string;
+}
+
+export interface RoutineProgress {
+  completedOn?: string;
+  subTaskCompletedOn?: Record<string, string>;
+}
+
+export type ThemeMode = 'system' | 'light' | 'dark';
+
 export interface AppSettings {
   autoAiReactions: boolean;
   chatActionConfirm: boolean;
+  theme: ThemeMode;
   geminiApiKey?: string; // @deprecated use apiConnections
   apiConnections: ApiConnection[];
   activeConnectionId?: string;
   apiUsage?: ApiUsageStats;
+  agentProfiles?: Record<string, Partial<AIAgent>>;
+  agentUsageById?: Record<string, AgentUsageStats>;
+  pinnedPersonaMemoryIds?: string[];
   lastRoutineResetDate?: string; // YYYY-MM-DD
+  routineProgress?: Record<string, RoutineProgress>;
 }
 
 export interface User {
@@ -178,7 +203,7 @@ export interface ChatMessage {
   imageUrl?: string;
   videoUrl?: string;
   action?: {
-    type: 'add_event' | 'delete_event' | 'add_todo' | 'add_journal' | 'generate_insight' | 'generate_image' | 'generate_video' | 'onboarding';
+    type: 'onboarding';
     data?: any;
     executed?: boolean;
   };
@@ -211,8 +236,6 @@ export interface PersonaMemory {
   createdAt: string;
   updatedAt: string;
 }
-
-export type ChatMode = 'basic' | 'learning';
 
 export type ViewState = 'dashboard' | 'calendar' | 'todo' | 'journal' | 'board' | 'chat' | 'settings' | 'api-settings' | 'personas';
 

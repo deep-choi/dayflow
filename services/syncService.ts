@@ -7,7 +7,8 @@ const scopedKey = (resource: string, userId: string) => `${resource}:${userId}`;
 const syncSnapshotKey = (resource: string, userId: string) => `${resource}:${userId}`;
 const syncSnapshots = new Map<string, Set<string>>();
 const pendingUserData = new Map<string, {
-    settings?: AppSettings;
+    settingsPatch?: Partial<AppSettings>;
+    settingsSnapshot?: AppSettings;
     activityLog?: ActivityItem[];
     calendarTags?: CalendarTag[];
 }>();
@@ -30,6 +31,29 @@ export const clearSyncSnapshots = (userId: string) => {
     [...syncSnapshots.keys()].forEach((key) => {
         if (key.endsWith(suffix)) syncSnapshots.delete(key);
     });
+};
+
+const clearScopedMapEntries = <T>(map: Map<string, T>, userId: string) => {
+    const suffix = `:${userId}`;
+    [...map.keys()].forEach((key) => {
+        if (key.endsWith(suffix)) map.delete(key);
+    });
+};
+
+export const clearPendingSyncTasks = (userId: string) => {
+    const suffix = `:${userId}`;
+    [...pendingTimers.entries()].forEach(([key, timer]) => {
+        if (!key.endsWith(suffix)) return;
+        clearTimeout(timer);
+        pendingTimers.delete(key);
+    });
+    clearScopedMapEntries(pendingUserData, userId);
+    clearScopedMapEntries(pendingChatSessions, userId);
+};
+
+export const clearUserSyncState = (userId: string) => {
+    clearPendingSyncTasks(userId);
+    clearSyncSnapshots(userId);
 };
 
 const normalizeChatAction = (action: any) => {
@@ -65,6 +89,12 @@ const isMissingChatTableError = (error: any): boolean =>
 const isMissingPersonaMemoryTableError = (error: any): boolean =>
     error?.code === '42P01' || error?.code === '42703';
 
+const isMissingUserDataResourceError = (error: any): boolean =>
+    error?.code === '42P01' || error?.code === '42703';
+
+const isMissingMergeUserDataFunctionError = (error: any): boolean =>
+    error?.code === '42883' || `${error?.message || ''}`.includes('merge_user_data_patch');
+
 const TODO_OPTIONAL_DB_COLUMNS = ['start_date', 'due_date', 'sub_tasks', 'step_id'] as const;
 type TodoOptionalDbColumn = (typeof TODO_OPTIONAL_DB_COLUMNS)[number];
 
@@ -99,6 +129,62 @@ const retryTodoUpsertWithFallback = async (
     }
 
     const finalResult = await supabase.from('todos').upsert(payloadRows, { onConflict: 'id' });
+    return { error: finalResult.error, rows: payloadRows };
+};
+
+const TODO_LIST_OPTIONAL_DB_COLUMNS = ['due_date', 'tab_id', 'type'] as const;
+type TodoListOptionalDbColumn = (typeof TODO_LIST_OPTIONAL_DB_COLUMNS)[number];
+
+const getUnsupportedTodoListColumns = (error: any): TodoListOptionalDbColumn[] => {
+    const raw = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+    return TODO_LIST_OPTIONAL_DB_COLUMNS.filter((column) => raw.includes(column));
+};
+
+const shouldRetryTodoListWithoutTab = (error: any): boolean => {
+    const raw = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+    return (
+        error?.code === '23503' ||
+        error?.code === '22P02' ||
+        raw.includes('todo_lists_tab_id') ||
+        raw.includes('tab_todo') ||
+        raw.includes('tab_project') ||
+        raw.includes('tab_routine')
+    );
+};
+
+const stripTodoListOptionalColumns = <T extends Record<string, any>>(value: T, columns: TodoListOptionalDbColumn[]): T => {
+    if (!columns.length) return value;
+    const next = { ...value };
+    columns.forEach((column) => {
+        delete next[column];
+    });
+    return next;
+};
+
+const retryTodoListUpsertWithFallback = async (
+    rows: Record<string, any>[],
+): Promise<{ error: any; rows: Record<string, any>[] }> => {
+    let payloadRows = rows.map((row) => ({ ...row }));
+    let attempt = 0;
+
+    while (attempt < TODO_LIST_OPTIONAL_DB_COLUMNS.length + 1) {
+        const result = await supabase.from('todo_lists').upsert(payloadRows, { onConflict: 'id' });
+        if (!result.error) return { error: null, rows: payloadRows };
+
+        const columnsToStrip = new Set<TodoListOptionalDbColumn>(getUnsupportedTodoListColumns(result.error));
+        if (shouldRetryTodoListWithoutTab(result.error)) {
+            columnsToStrip.add('tab_id');
+        }
+
+        if (columnsToStrip.size === 0) {
+            return { error: result.error, rows: payloadRows };
+        }
+
+        payloadRows = payloadRows.map((row) => stripTodoListOptionalColumns(row, [...columnsToStrip]));
+        attempt += 1;
+    }
+
+    const finalResult = await supabase.from('todo_lists').upsert(payloadRows, { onConflict: 'id' });
     return { error: finalResult.error, rows: payloadRows };
 };
 
@@ -231,7 +317,7 @@ export const syncTodoLists = (userId: string, lists: TodoList[]) => {
         const deletedIds = getDeletedIds('todo_lists', userId, rowIds);
 
         if (rows.length > 0) {
-            const { error: upsertError } = await supabase.from('todo_lists').upsert(rows, { onConflict: 'id' });
+            const { error: upsertError } = await retryTodoListUpsertWithFallback(rows);
             if (upsertError) throw upsertError;
         }
 
@@ -504,9 +590,9 @@ export const syncChatSessions = (userId: string, sessions: ChatSession[]) => {
         return;
     }
 
-    // Critical: If sessions is empty, it's likely a hydration race condition. 
-    // Skip sync to avoid wiping out server-side data accidentally.
-    if (sessions.length === 0) {
+    // Protect only the pre-hydration empty state. Once a snapshot exists,
+    // an empty array means "delete all remaining sessions".
+    if (sessions.length === 0 && !syncSnapshots.has(syncSnapshotKey('chat_sessions', userId))) {
         console.log('[Sync] syncChatSessions: Sessions list is empty, skipping sync to protect data.');
         return;
     }
@@ -618,6 +704,7 @@ export const syncPersonaMemories = (userId: string, memories: PersonaMemory[]) =
     const key = scopedKey('persona_memories', userId);
     debouncedSync(key, async () => {
         const rows = memories.map((memory) => ({
+            id: memory.id,
             user_id: userId,
             agent_id: memory.agentId,
             memory_type: memory.type,
@@ -629,21 +716,37 @@ export const syncPersonaMemories = (userId: string, memories: PersonaMemory[]) =
             last_observed_at: memory.lastObservedAt,
             updated_at: new Date().toISOString(),
         }));
+        const rowIds = rows.map((row) => row.id);
+        const deletedIds = getDeletedIds('persona_memories', userId, rowIds);
 
-        if (rows.length === 0) return;
-        const { error } = await supabase
-            .from('persona_memories')
-            .upsert(rows, { onConflict: 'user_id,agent_id,memory_key' });
-        if (error) {
-            if (isMissingPersonaMemoryTableError(error)) return;
-            throw error;
+        if (rows.length > 0) {
+            const { error } = await supabase
+                .from('persona_memories')
+                .upsert(rows, { onConflict: 'user_id,agent_id,memory_key' });
+            if (error) {
+                if (isMissingPersonaMemoryTableError(error)) return;
+                throw error;
+            }
+        }
+
+        if (deletedIds.length > 0) {
+            const { error: deleteError } = await supabase
+                .from('persona_memories')
+                .delete()
+                .eq('user_id', userId)
+                .in('id', deletedIds);
+            if (deleteError) {
+                if (isMissingPersonaMemoryTableError(deleteError)) return;
+                throw deleteError;
+            }
         }
     });
 };
 
 // ─── User Data (JSONB blob: settings, activity, calendar tags) ───
 export const syncUserData = (userId: string, data: {
-    settings?: AppSettings;
+    settingsPatch?: Partial<AppSettings>;
+    settingsSnapshot?: AppSettings;
     activityLog?: ActivityItem[];
     calendarTags?: CalendarTag[];
 }) => {
@@ -652,7 +755,15 @@ export const syncUserData = (userId: string, data: {
         return;
     }
     const key = scopedKey('user_data', userId);
-    const merged = { ...(pendingUserData.get(key) || {}), ...data };
+    const existing = pendingUserData.get(key) || {};
+    const merged = {
+        ...existing,
+        ...data,
+        settingsPatch: data.settingsPatch
+            ? { ...(existing.settingsPatch || {}), ...data.settingsPatch }
+            : existing.settingsPatch,
+        settingsSnapshot: data.settingsSnapshot ?? existing.settingsSnapshot,
+    };
     pendingUserData.set(key, merged);
 
     debouncedSync(key, async () => {
@@ -660,15 +771,44 @@ export const syncUserData = (userId: string, data: {
         pendingUserData.delete(key);
         if (!pending) return;
 
+        const hasSettingsPatch = Boolean(pending.settingsPatch && Object.keys(pending.settingsPatch).length > 0);
+        const shouldTryMergeRpc =
+            hasSettingsPatch ||
+            pending.activityLog !== undefined ||
+            pending.calendarTags !== undefined;
+
+        if (shouldTryMergeRpc) {
+            const { error: mergeError } = await supabase.rpc('merge_user_data_patch', {
+                p_user_id: userId,
+                p_settings_patch: hasSettingsPatch ? pending.settingsPatch : null,
+                p_activity_log: pending.activityLog ?? null,
+                p_calendar_tags: pending.calendarTags ?? null,
+            });
+
+            if (!mergeError) {
+                return;
+            }
+
+            if (!isMissingMergeUserDataFunctionError(mergeError)) {
+                if (isMissingUserDataResourceError(mergeError)) return;
+                throw mergeError;
+            }
+        }
+
         const payload: Record<string, any> = { user_id: userId, updated_at: new Date().toISOString() };
-        if (pending.settings !== undefined) payload.settings = pending.settings;
+        if (pending.settingsSnapshot !== undefined) payload.settings = pending.settingsSnapshot;
         if (pending.activityLog !== undefined) payload.activity_log = pending.activityLog;
         if (pending.calendarTags !== undefined) payload.calendar_tags = pending.calendarTags;
+
+        if (Object.keys(payload).length <= 2) return;
 
         console.log(`[Sync] Upserting user_data for user ${userId}. Keys present: ${Object.keys(payload).join(', ')}`);
         const { error } = await supabase
             .from('user_data')
             .upsert(payload, { onConflict: 'user_id' });
-        if (error) throw error;
+        if (error) {
+            if (isMissingUserDataResourceError(error)) return;
+            throw error;
+        }
     });
 };

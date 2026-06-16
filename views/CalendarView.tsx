@@ -191,11 +191,11 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
           onWheel={handleWheel}
         >
           {/* Helper Header */}
-          <div className="h-14 flex items-center justify-between px-4 sm:px-5 border-b border-[#e9e9e8] bg-white">
+          <div className="min-h-16 flex items-center justify-between px-4 sm:px-8 border-b border-[#e9e9e8] bg-white">
             <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold tracking-tight tabular-nums">
+              <h1 className="text-lg font-medium tracking-normal tabular-nums">
                 {format(currentDate, 'yyyy년 M월', { locale: ko })}
-              </h2>
+              </h1>
               <div className="flex items-center gap-1">
                 <button onClick={handlePrevMonth} className="p-1 hover:bg-[#efefef] rounded transition-colors text-[#9b9a97]">
                   <ChevronLeft size={18} />
@@ -253,14 +253,14 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                         className={`
                         group relative p-1 select-none transition-colors flex flex-col min-h-0
                         ${!isCurrentMonth ? 'bg-[#fbfbfa]/50 text-[#d3d1cb]' : 'bg-white hover:bg-[#f7f7f5]'}
-                        ${isSelected ? '!bg-[#efefef]' : ''}
+                        ${isSelected ? 'calendar-cell-selected' : ''}
                       `}
                       >
                         {/* Date Number & Add Button */}
                         <div className="flex justify-between items-center px-1 mb-1 min-h-[24px]">
                           <span className={`
                     text-sm font-medium w-7 h-7 flex items-center justify-center rounded-full
-                    ${isToday ? 'bg-[#eb5757] text-white' : ''}
+                    ${isToday ? 'bg-[var(--color-primary)] text-white' : ''}
                   `}>
                             {format(day, 'd')}
                           </span>
@@ -285,6 +285,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                         <div className="flex flex-col gap-0.5">
                           {dayEvents.slice(0, 4).map(ev => {
                             const tag = getTag(ev.type);
+                            const hideTimeForAutoTodoEvent = Boolean(ev.description?.includes('[TODO_LINK:'));
                             return (
                               <div
                                 key={ev.id}
@@ -294,18 +295,17 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                 }}
                                 style={{ backgroundColor: tag?.color || '#37352f' }}
                                 className={`
-                                text-[12.5px] px-2 py-1 rounded-[4px] truncate cursor-pointer font-medium text-white
-                                opacity-90 hover:opacity-100 hover:ring-1 hover:ring-inset hover:ring-[#d3d1cb]
-                                shadow-sm leading-tight
+                                text-xs px-2 py-1 rounded-[4px] truncate cursor-pointer font-medium text-white
+                                opacity-90 hover:opacity-100 hover:ring-1 hover:ring-inset hover:ring-[#d3d1cb] leading-tight
                               `}
                               >
-                                {!ev.isAllDay && ev.startTime && isSameDay(parseISO(ev.date), day) && <span className="mr-1.5 opacity-80 font-normal text-[11px]">{ev.startTime}</span>}
+                                {!ev.isAllDay && !hideTimeForAutoTodoEvent && ev.startTime && isSameDay(parseISO(ev.date), day) && <span className="mr-1.5 opacity-80 font-normal text-xs">{ev.startTime}</span>}
                                 {ev.title}
                               </div>
                             );
                           })}
                           {dayEvents.length > 4 && (
-                            <div className="text-[10px] text-[#9b9a97] px-1.5 font-medium">
+                            <div className="text-xs text-[#9b9a97] px-1.5 font-medium">
                               +{dayEvents.length - 4} 더보기
                             </div>
                           )}
@@ -324,10 +324,10 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
         {/* Modern Modal Overlay */}
         {showModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-[3px] p-4 transition-all animate-[fadeIn_0.2s_ease-out]">
-            <div className="bg-white w-full max-w-[480px] rounded-2xl shadow-2xl overflow-hidden text-[#37352f] flex flex-col max-h-[90vh]">
+            <div className="bg-white w-full max-w-[480px] rounded-2xl overflow-hidden text-[#37352f] flex flex-col max-h-[90vh]">
               {/* Modal Header */}
               <div className="px-6 py-4 flex items-center justify-between border-b border-[#f1f1f0]">
-                <h3 className="text-[15px] font-semibold text-[#787774]">
+                <h3 className="text-[15px] font-medium text-[#787774]">
                   {isEditing ? '일정 수정' : '새 일정'}
                 </h3>
                 <div className="flex items-center gap-1.5">
@@ -357,12 +357,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                     <input
                       type="text"
                       placeholder="무엇을 하나요?"
-                      className="w-full text-2xl font-bold placeholder-[#d3d1cb] border-none focus:ring-0 p-0 text-[#37352f] bg-transparent selection:bg-[#2383e2]/20"
+                      className="w-full text-xl font-medium placeholder-[#d3d1cb] border-none focus:ring-0 p-0 text-[#37352f] bg-transparent selection:bg-black/10"
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
                       autoFocus
                     />
-                    <div className="h-px w-full bg-[#f1f1f0] mt-2 group-focus-within:bg-[#2383e2] transition-colors" />
+                    <div className="h-px w-full bg-[#f1f1f0] mt-2 group-focus-within:bg-[#d4d4d4] transition-colors" />
                   </div>
 
                   {/* Properties Table-like Layout */}
@@ -410,12 +410,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                           onClick={() => setIsAllDay(!isAllDay)}
                           className={`
                             relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-200 focus:outline-none
-                            ${isAllDay ? 'bg-[#2383e2]' : 'bg-[#e2e2e2]'}
+                            ${isAllDay ? 'bg-[#b8b8b8]' : 'bg-[#e2e2e2]'}
                           `}
                         >
                           <span
                             className={`
-                              inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow-md transition-all duration-200
+                              inline-block h-4.5 w-4.5 transform rounded-full bg-white transition-all duration-200
                               ${isAllDay ? 'translate-x-5.5' : 'translate-x-[3px]'}
                             `}
                           />
@@ -437,7 +437,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                   const current = getAmPm(startTime);
                                   setStartTime(to24hTime(get12hTime(startTime), current === '오전' ? '오후' : '오전'));
                                 }}
-                                className="px-2 py-1 text-[11px] font-bold text-[#37352f] hover:bg-white rounded-md transition-all uppercase"
+                                className="px-2 py-1 text-xs font-medium text-[#37352f] hover:bg-white rounded-md transition-all"
                               >
                                 {getAmPm(startTime)}
                               </button>
@@ -452,7 +452,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                   {get12hTime(startTime).split(':')[0]}시
                                 </button>
                                 {showStartHourPicker && (
-                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] z-[80] p-1 custom-scrollbar">
+                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl z-[80] p-1 custom-scrollbar">
                                     {hourOptions.map(h => (
                                       <button
                                         key={`sh-${h}`}
@@ -478,7 +478,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                   {startTime ? startTime.split(':')[1] : '00'}분
                                 </button>
                                 {showStartMinPicker && (
-                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] z-[80] p-1 custom-scrollbar">
+                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl z-[80] p-1 custom-scrollbar">
                                     {minuteOptions.map(m => (
                                       <button
                                         key={`sm-${m}`}
@@ -511,7 +511,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                   const current = getAmPm(endTime);
                                   setEndTime(to24hTime(get12hTime(endTime), current === '오전' ? '오후' : '오전'));
                                 }}
-                                className="px-2 py-1 text-[11px] font-bold text-[#37352f] hover:bg-white rounded-md transition-all uppercase"
+                                className="px-2 py-1 text-xs font-medium text-[#37352f] hover:bg-white rounded-md transition-all"
                               >
                                 {getAmPm(endTime)}
                               </button>
@@ -526,7 +526,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                   {get12hTime(endTime).split(':')[0]}시
                                 </button>
                                 {showEndHourPicker && (
-                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] z-[70] p-1 custom-scrollbar">
+                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl z-[70] p-1 custom-scrollbar">
                                     {hourOptions.map(h => (
                                       <button
                                         key={`eh-${h}`}
@@ -552,7 +552,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                   {endTime ? endTime.split(':')[1] : '00'}분
                                 </button>
                                 {showEndMinPicker && (
-                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] z-[70] p-1 custom-scrollbar">
+                                  <div className="absolute top-full left-0 mt-2 w-20 max-h-48 overflow-y-auto bg-white border border-[#f1f1f0] rounded-xl z-[70] p-1 custom-scrollbar">
                                     {minuteOptions.map(m => (
                                       <button
                                         key={`em-${m}`}
@@ -586,9 +586,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                             key={t.id}
                             onClick={() => setType(t.id)}
                             className={`
-                              px-3 py-1.5 rounded-xl text-[13px] font-semibold transition-all flex items-center gap-2 border shadow-sm
+                              px-3 py-1.5 rounded-xl text-[13px] font-medium transition-all flex items-center gap-2 border
                               ${type === t.id
-                                ? 'bg-[#37352f] text-white border-[#37352f] scale-105'
+                                ? 'bg-[#f3f3f3] text-[#171717] border-[#d4d4d4] scale-105'
                                 : 'bg-white text-[#787774] border-[#f1f1f0] hover:bg-[#f7f7f5]'}
                             `}
                           >
@@ -607,7 +607,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                       <textarea
                         placeholder="메모를 입력하세요..."
                         rows={5}
-                        className="w-full bg-[#f7f7f5] border border-[#f1f1f0] rounded-2xl p-4 text-[14px] text-[#37352f] focus:bg-white focus:ring-2 focus:ring-[#2383e2]/10 focus:border-[#2383e2] transition-all resize-none outline-none leading-relaxed placeholder-[#b1b0ad]"
+                        className="w-full bg-[#f7f7f5] border border-[#f1f1f0] rounded-2xl p-4 text-[14px] text-[#37352f] focus:bg-white focus:ring-2 focus:ring-[#d4d4d4]/40 focus:border-[#d4d4d4] transition-all resize-none outline-none leading-relaxed placeholder-[#b1b0ad]"
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
                       />
@@ -620,7 +620,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
               <div className="px-6 py-4 bg-[#fbfbfa] border-t border-[#f1f1f0] flex justify-end">
                 <button
                   onClick={handleSave}
-                  className="bg-[#2383e2] hover:bg-[#1d6fce] text-white px-8 py-2.5 rounded-xl text-[15px] font-bold transition-all shadow-md hover:shadow-lg active:scale-95"
+                  className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white px-8 py-2.5 rounded-xl text-sm font-bold transition-all active:scale-95 shadow-sm shadow-blue-100"
                 >
                   일정 저장
                 </button>
@@ -648,9 +648,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
     console.error("CalendarView render error:", error);
     return (
       <div className="p-8 text-center bg-white h-full flex flex-col items-center justify-center">
-        <h2 className="text-xl font-bold text-[#eb5757] mb-2">캘린더를 불러오는 중 오류가 발생했습니다.</h2>
+        <h2 className="text-xl font-medium text-[#eb5757] mb-2">캘린더를 불러오는 중 오류가 발생했습니다.</h2>
         <p className="text-[#787774]">데이터 형식이 올바르지 않거나 로직 오류가 있을 수 있습니다.</p>
-        <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-[#37352f] text-white rounded-lg">페이지 새로고침</button>
+        <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-lg hover:bg-[#eeeeee]">페이지 새로고침</button>
       </div>
     );
   }

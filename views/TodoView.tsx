@@ -59,7 +59,7 @@ const Checkbox = ({ checked, onClick }: { checked: boolean; onClick: (e: React.M
     aria-pressed={checked}
     className={`w-4 h-4 mt-0.5 rounded-full border flex-shrink-0 cursor-pointer transition-all flex items-center justify-center
       ${checked
-        ? 'bg-[#1a73e8] border-[#1a73e8]'
+        ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
         : 'border-[#5f6368] hover:bg-[#e8eaed]'
       }`}
     onClick={onClick}
@@ -101,10 +101,10 @@ const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddLi
   };
 
   return (
-    <div className="fixed inset-0 bg-black/30 z-[100] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 bg-[#171717]/10 z-[100] flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg border border-[#e9e9e8] w-full max-w-sm overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-          <h2 className="text-lg font-semibold text-gray-800">
+          <h2 className="text-lg font-medium text-gray-800">
             {isEditing ? '목록 설정' : '새 목록 만들기'}
           </h2>
           <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-full transition-colors">
@@ -115,12 +115,12 @@ const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddLi
         <div className="px-5 py-5 space-y-6">
           {!isEditing && (
             <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1.5 capital">목록 제목</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1.5 capital">목록 제목</label>
               <input
                 autoFocus
                 type="text"
                 placeholder="제목을 입력하세요"
-                className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-blue-500 transition-all font-medium"
+                className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-[#d4d4d4] transition-all font-medium"
                 value={title}
                 onChange={e => setTitle(e.target.value)}
               />
@@ -128,14 +128,14 @@ const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddLi
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-2">탭(분류) 선택</label>
+            <label className="block text-xs font-medium text-gray-500 mb-2">탭(분류) 선택</label>
             <div className="grid grid-cols-2 gap-2 max-h-[160px] overflow-y-auto pr-1">
               {tabs.map((tab: TodoTab) => (
                 <button
                   key={tab.id}
                   onClick={() => setTabId(tab.id)}
                   className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 border-2 ${tabId === tab.id
-                    ? 'border-blue-500 bg-blue-50'
+                    ? 'border-[#d4d4d4] bg-white'
                     : 'border-transparent bg-gray-50 hover:bg-gray-100'
                     }`}
                 >
@@ -147,10 +147,10 @@ const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddLi
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1.5">마감 일자 (선택)</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">마감 일자 (선택)</label>
             <input
               type="date"
-              className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-blue-500 transition-all"
+              className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-[#d4d4d4] transition-all"
               value={dueDate}
               onChange={e => setDueDate(e.target.value)}
             />
@@ -164,7 +164,7 @@ const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddLi
           <button
             onClick={handleSave}
             disabled={!isEditing && !title.trim()}
-            className="px-6 py-2 text-sm font-medium text-white bg-[#1a73e8] hover:bg-blue-700 rounded-lg shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-6 py-2 text-sm font-medium text-[#171717] bg-white border border-[#d4d4d4] hover:bg-[#f7f7f7] rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isEditing ? '저장' : '만들기'}
           </button>
@@ -180,9 +180,9 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
   const tab = isEditing ? tabs.find((t: TodoTab) => t.id === tabId) : null;
 
   const [name, setName] = useState(tab?.name || '');
-  const [color, setColor] = useState(tab?.color || '#1a73e8');
+  const [color, setColor] = useState(tab?.color || 'var(--color-primary)');
 
-  const COLORS = ['#1a73e8', '#d93025', '#188038', '#f29900', '#9c27b0', '#0097a7', '#5f6368', '#ff4081'];
+  const COLORS = ['var(--color-primary)', '#d93025', '#188038', '#f29900', '#9c27b0', '#0097a7', '#5f6368', '#ff4081'];
 
   const handleSave = () => {
     if (isEditing) {
@@ -194,10 +194,10 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
   };
 
   return (
-    <div className="fixed inset-0 bg-black/30 z-[100] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-sm overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 bg-[#171717]/10 z-[100] flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg border border-[#e9e9e8] w-full max-w-sm overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-800">
+          <h2 className="text-lg font-medium text-gray-800">
             {isEditing ? '탭 수정' : '새 탭 만들기'}
           </h2>
           <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-full transition-colors">
@@ -207,25 +207,25 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
 
         <div className="px-5 py-5 space-y-5">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1.5 capital">탭 이름</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5 capital">탭 이름</label>
             <input
               autoFocus
               type="text"
               placeholder="이름을 입력하세요"
-              className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-blue-500 transition-all font-medium"
+              className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-[#d4d4d4] transition-all font-medium"
               value={name}
               onChange={e => setName(e.target.value)}
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-2">테마 색상</label>
+            <label className="block text-xs font-medium text-gray-500 mb-2">테마 색상</label>
             <div className="flex flex-wrap gap-3">
               {COLORS.map(c => (
                 <button
                   key={c}
                   onClick={() => setColor(c)}
-                  className={`w-8 h-8 rounded-full transition-transform ${color === c ? 'scale-125 ring-2 ring-offset-2 ring-gray-400' : 'hover:scale-110'}`}
+                  className={`w-8 h-8 rounded-full transition-transform ${color === c ? 'scale-110 ring-2 ring-offset-2 ring-[#d4d4d4]' : 'hover:scale-105'}`}
                   style={{ backgroundColor: c }}
                 />
               ))}
@@ -253,7 +253,7 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
             <button
               onClick={handleSave}
               disabled={!name.trim()}
-              className="px-6 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-md transition-all disabled:opacity-50"
+              className="px-6 py-2 text-sm font-medium text-[#171717] bg-white border border-[#d4d4d4] hover:bg-[#f7f7f7] rounded-lg transition-all disabled:opacity-50"
             >
               저장
             </button>
@@ -287,10 +287,10 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
   };
 
   return (
-    <div className="fixed inset-0 bg-black/30 z-[100] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-[#171717]/10 z-[100] flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg border border-[#e9e9e8] w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-800">상세 편집</h2>
+          <h2 className="text-lg font-medium text-gray-800">상세 편집</h2>
           <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-full transition-colors">
             <X size={18} className="text-gray-500" />
           </button>
@@ -298,9 +298,9 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1.5">할 일 내용</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">할 일 내용</label>
             <textarea
-              className="w-full text-sm text-gray-800 border-none bg-gray-50 rounded-lg px-3 py-2.5 resize-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors"
+              className="w-full text-sm text-gray-800 border-none bg-gray-50 rounded-lg px-3 py-2.5 resize-none focus:ring-2 focus:ring-[#d4d4d4] focus:bg-white transition-colors"
               rows={3}
               value={text}
               onChange={e => setText(e.target.value)}
@@ -309,7 +309,7 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1.5 flex items-center justify-between">
+            <label className="block text-xs font-medium text-gray-500 mb-1.5 flex items-center justify-between">
               <span>마감 일자</span>
               {maxDueDate && (
                 <span className="text-[10px] font-normal text-teal-600 bg-teal-50 px-1.5 py-0.5 rounded">
@@ -319,7 +319,7 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
             </label>
             <input
               type="date"
-              className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-blue-500 transition-colors"
+              className="w-full text-sm border-none bg-gray-50 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-[#d4d4d4] transition-colors"
               value={dueDate}
               onChange={e => setDueDate(e.target.value)}
               max={maxDueDate || undefined}
@@ -327,7 +327,7 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1.5 flex items-center justify-between">
+            <label className="block text-xs font-medium text-gray-500 mb-1.5 flex items-center justify-between">
               <span>하위 작업 (체크리스트)</span>
               <span className="text-blue-500 font-medium">
                 {subTasks.filter(s => s.completed).length} / {subTasks.length}
@@ -345,7 +345,7 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
                     }}
                   />
                   <input
-                    className={`flex-1 text-sm bg-transparent border-transparent focus:border-blue-500 focus:ring-0 px-1 py-1 rounded transition-colors ${st.completed ? 'text-gray-400 line-through' : 'text-gray-700'}`}
+                    className={`flex-1 text-sm bg-transparent border-transparent focus:border-[#d4d4d4] focus:ring-0 px-1 py-1 rounded transition-colors ${st.completed ? 'text-gray-400 line-through' : 'text-gray-700'}`}
                     value={st.text}
                     onChange={e => {
                       const updated = [...subTasks];
@@ -371,7 +371,7 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
             }} className="flex items-center gap-2 mt-2">
               <div className="w-4 h-4 ml-0.5 rounded-full border border-gray-300 flex-shrink-0" />
               <input
-                className="flex-1 text-sm bg-gray-50 border-none rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500"
+                className="flex-1 text-sm bg-gray-50 border-none rounded-lg px-3 py-2 focus:ring-2 focus:ring-[#d4d4d4]"
                 placeholder="하위 작업 추가..."
                 value={newSubTask}
                 onChange={e => setNewSubTask(e.target.value)}
@@ -387,7 +387,7 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-200 rounded-lg transition-colors">
             취소
           </button>
-          <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition-colors">
+          <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-[#171717] bg-white border border-[#d4d4d4] hover:bg-[#f7f7f7] rounded-lg transition-colors">
             저장
           </button>
         </div>
@@ -453,7 +453,7 @@ const SortableTodoItem = ({
     <div
       ref={setNodeRef}
       style={style}
-      className={`group relative px-3 py-2.5 rounded-lg hover:bg-[#f5f5f5] hover:shadow-sm transition-all flex items-start gap-3 cursor-pointer ${isEditing ? 'bg-white shadow ring-2 ring-[#1a73e8] z-10' : ''}`}
+      className={`group relative px-3 py-2.5 rounded-lg hover:bg-[#f5f5f5] transition-all flex items-start gap-3 cursor-pointer ${isEditing ? 'bg-white ring-1 ring-[#d4d4d4] z-10' : ''}`}
       onClick={() => !isEditing && startEditing(todo)}
       role="button"
       tabIndex={0}
@@ -480,7 +480,7 @@ const SortableTodoItem = ({
               if (e.key === 'Enter') saveTodo();
               if (e.key === 'Escape') cancelEditing();
             }}
-            className="w-full text-[14px] text-[#1f1f1f] bg-transparent border-b border-[#1a73e8] focus:outline-none"
+            className="w-full text-[14px] text-[#1f1f1f] bg-transparent border-b border-[var(--color-primary)] focus:outline-none"
             onPointerDown={e => e.stopPropagation()}
           />
         ) : (
@@ -496,7 +496,7 @@ const SortableTodoItem = ({
             </span>
           )}
           {totalSubTasks > 0 && !hideBadge && (
-            <span className={`block text-[11px] px-1.5 py-0.5 rounded font-medium ${completedSubTasks === totalSubTasks ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+            <span className={`block text-[11px] px-1.5 py-0.5 rounded font-medium ${completedSubTasks === totalSubTasks ? 'bg-[var(--color-primary)] text-white shadow-sm' : 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'}`}>
               {completedSubTasks}/{totalSubTasks} 완료
             </span>
           )}
@@ -521,11 +521,11 @@ const SortableTodoItem = ({
               >
                 <div className="mt-[2px] cursor-pointer">
                   {st.completed ? (
-                    <div className="w-3.5 h-3.5 rounded bg-blue-500 border border-blue-500 flex items-center justify-center">
+                    <div className="w-3.5 h-3.5 rounded bg-[var(--color-primary)] border border-[var(--color-primary)] flex items-center justify-center">
                       <Check size={10} className="text-white stroke-[3px]" />
                     </div>
                   ) : (
-                    <div className="w-3.5 h-3.5 rounded border border-gray-400 group-hover/subtask:border-blue-500 bg-white transition-colors" />
+                    <div className="w-3.5 h-3.5 rounded border border-gray-300 group-hover/subtask:border-[#9bbcf3] bg-white transition-colors" />
                   )}
                 </div>
                 <span
@@ -620,7 +620,7 @@ const TodoSectionRenderer = ({
       </SortableContext>
 
       {draft.stepId === stepId && draft.text !== '' && (
-        <div className="mt-1 mx-1 mb-2 bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="mt-1 mx-1 mb-2 bg-white rounded-lg border border-gray-200">
           <input
             autoFocus
             value={draft.text}
@@ -811,7 +811,7 @@ const SortableList = ({
     <div
       ref={setSortableRef}
       style={style}
-      className={`w-full sm:min-w-[300px] sm:w-[300px] flex flex-col h-fit max-h-full bg-white rounded-xl shadow-[0_2px_8px_rgba(0,0,0,0.08)] border border-[#e9e9e8] transition-all flex-shrink-0 ${isDragging ? 'opacity-0' : ''}`}
+      className={`w-full sm:min-w-[300px] sm:w-[300px] flex flex-col h-fit max-h-full bg-white rounded-xl border border-[#e9e9e8] transition-all flex-shrink-0 ${isDragging ? 'opacity-0' : ''}`}
     >
       {/* Column Header - Drag Handle */}
       <div
@@ -829,7 +829,7 @@ const SortableList = ({
               if (e.key === 'Enter') saveListTitle();
               if (e.key === 'Escape') setEditingListId(null);
             }}
-            className="font-medium text-lg text-[#1f1f1f] bg-transparent border-b-2 border-[#1a73e8] focus:outline-none w-full"
+            className="font-medium text-lg text-[#1f1f1f] bg-transparent border-b-2 border-[var(--color-primary)] focus:outline-none w-full"
             onPointerDown={e => e.stopPropagation()}
           />
         ) : (
@@ -896,7 +896,7 @@ const SortableList = ({
                   {editingStepId === step.id ? (
                     <input
                       autoFocus
-                      className="text-[12px] font-bold text-[#1a73e8] uppercase tracking-wider bg-transparent border-b border-[#1a73e8] focus:outline-none w-full"
+                      className="text-[12px] font-medium text-[var(--color-primary)] uppercase tracking-wider bg-transparent border-b border-[#9bbcf3] focus:outline-none w-full"
                       value={editingStepTitle}
                       onChange={(e) => setEditingStepTitle(e.target.value)}
                       onBlur={() => {
@@ -913,7 +913,7 @@ const SortableList = ({
                   ) : (
                     <div className="flex items-center gap-2">
                       <span
-                        className="text-[12px] font-bold text-[#5f6368] uppercase tracking-wider cursor-pointer hover:text-[#1a73e8]"
+                        className="text-[12px] font-medium text-[#5f6368] uppercase tracking-wider cursor-pointer hover:text-[var(--color-primary)]"
                         onClick={() => {
                           setEditingStepId(step.id);
                           setEditingStepTitle(step.title);
@@ -922,7 +922,7 @@ const SortableList = ({
                         {step.title}
                       </span>
                       {aggregateTotal > 0 && (
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${aggregateCompleted === aggregateTotal ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${aggregateCompleted === aggregateTotal ? 'bg-[var(--color-primary)] text-white shadow-sm' : 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'}`}>
                           {aggregateCompleted}/{aggregateTotal} 완료
                         </span>
                       )}
@@ -957,14 +957,14 @@ const SortableList = ({
           <div className="flex flex-col gap-1 mt-2">
             <button
               onClick={() => setDraft({ text: ' ', stepId: null })}
-              className="w-full text-left px-2 py-2 text-[13px] text-[#1a73e8] font-medium rounded-lg hover:bg-[#ebf5fc] transition-colors flex items-center gap-2"
+              className="w-full text-left px-2 py-2 text-[13px] text-[var(--color-primary)] font-medium rounded-lg hover:bg-[#ebf5fc] transition-colors flex items-center gap-2"
             >
               <Plus size={18} />
               할 일 추가
             </button>
             <button
               onClick={() => onAddStep('새 단계', list.id)}
-              className="w-full text-left px-2 py-1.5 text-[11px] text-[#5f6368] font-semibold uppercase tracking-tight rounded hover:bg-gray-100 transition-colors flex items-center gap-2 ml-1"
+              className="w-full text-left px-2 py-1.5 text-[11px] text-[#5f6368] font-medium uppercase tracking-tight rounded hover:bg-gray-100 transition-colors flex items-center gap-2 ml-1"
             >
               <Layout size={14} />
               단계 추가
@@ -993,7 +993,7 @@ const SortableList = ({
                     <button
                       type="button"
                       aria-label="완료 취소"
-                      className="w-4 h-4 mt-0.5 rounded-full bg-[#1a73e8] border border-[#1a73e8] flex-shrink-0 flex items-center justify-center cursor-pointer"
+                      className="w-4 h-4 mt-0.5 rounded-full bg-[var(--color-primary)] border border-[var(--color-primary)] flex-shrink-0 flex items-center justify-center cursor-pointer"
                       onClick={() => onToggleTodo(todo.id)}
                     >
                       <Check size={10} className="text-white stroke-[3px]" />
@@ -1324,16 +1324,16 @@ const TodoView: React.FC<TodoViewProps> = ({
         onMouseLeave={handleMouseUp}
         style={{ cursor: isPanning ? 'grabbing' : 'auto' }}
       >
-        <div className="hidden sm:flex px-4 h-[56px] sm:px-8 border-b border-gray-100 items-center">
-          <h1 className="text-[14px] font-normal text-[#37352f]">할 일</h1>
+        <div className="hidden min-h-16 sm:flex px-4 sm:px-8 border-b border-gray-100 items-center">
+          <h1 className="text-lg font-medium text-[#37352f]">할 일</h1>
         </div>
 
         <div className="px-4 pt-6 pb-5 sm:px-8 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth">
           <button
             onClick={() => setFilterMode('all')}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${filterMode === 'all'
-              ? 'bg-[#37352f] text-white shadow-md'
-              : 'bg-gray-100 text-[#1f1f1f] hover:bg-gray-200'
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap border ${filterMode === 'all'
+              ? 'bg-[var(--color-primary)] text-white border-transparent'
+              : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
               }`}
           >
             모두 보기
@@ -1343,19 +1343,21 @@ const TodoView: React.FC<TodoViewProps> = ({
             <div key={tab.id} className="relative group flex-shrink-0">
               <button
                 onClick={() => setFilterMode(tab.id)}
-                className={`px-4 py-1.5 rounded-lg text-sm transition-all whitespace-nowrap flex items-center font-medium ${filterMode === tab.id
-                  ? 'text-white shadow-md'
-                  : 'bg-gray-100 text-[#1f1f1f] hover:bg-gray-200'
+                className={`px-4 py-1.5 rounded-lg text-sm transition-colors whitespace-nowrap flex items-center font-medium border ${filterMode === tab.id
+                  ? ''
+                  : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
                   }`}
                 style={{
-                  backgroundColor: filterMode === tab.id ? tab.color : undefined
+                  backgroundColor: filterMode === tab.id ? tab.color : undefined,
+                  borderColor: filterMode === tab.id ? tab.color : undefined,
+                  color: filterMode === tab.id ? '#ffffff' : undefined
                 }}
               >
                 {tab.name}
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); setTabSettingsModal(tab.id); }}
-                className="absolute -top-1 -right-1 w-4 h-4 bg-white border border-gray-200 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                className="absolute -top-1 -right-1 w-4 h-4 bg-white border border-gray-200 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
               >
                 <Edit3 size={10} className="text-gray-400" />
               </button>
@@ -1415,7 +1417,7 @@ const TodoView: React.FC<TodoViewProps> = ({
               {/* Add List Placeholder or Button */}
               <div className="min-w-[50px] h-[50px] flex items-center justify-center opacity-50 hover:opacity-100 transition-opacity">
                 <button
-                  className="w-10 h-10 rounded-full bg-white shadow flex items-center justify-center text-[#1a73e8]"
+                  className="w-10 h-10 rounded-full bg-white border border-[#e9e9e8] flex items-center justify-center text-[var(--color-primary)] hover:bg-[#f7f7f7] transition-colors"
                   onClick={() => setNewListModal(true)}
                 >
                   <Plus />
@@ -1429,11 +1431,11 @@ const TodoView: React.FC<TodoViewProps> = ({
         <DragOverlay dropAnimation={dropAnimation}>
           {activeId ? (
             activeType === 'List' ? (
-              <div className="w-[calc(100vw-32px)] sm:w-[300px] h-[400px] bg-white rounded-xl shadow-2xl border border-[#1a73e8] opacity-90 cursor-grabbing p-4">
+              <div className="w-[calc(100vw-32px)] sm:w-[300px] h-[400px] bg-white rounded-xl border border-[#9bbcf3] opacity-90 cursor-grabbing p-4">
                 <div className="font-medium text-lg text-[#1f1f1f]">{lists.find(l => l.id === activeId)?.title}</div>
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-xl border border-[#1a73e8] p-3 flex items-center gap-3 opacity-90 cursor-grabbing ring-2 ring-[#1a73e8] z-50">
+              <div className="bg-white rounded-lg border border-[#9bbcf3] p-3 flex items-center gap-3 opacity-90 cursor-grabbing ring-1 ring-[#dce8fd] z-50">
                 {(() => {
                   const todo = todos.find(t => t.id === activeId);
                   if (!todo) return null;
@@ -1461,10 +1463,10 @@ const TodoView: React.FC<TodoViewProps> = ({
         {contextMenu && !contextMenu.expanded && (
           <div
             ref={contextMenuRef}
-            className="fixed bg-white rounded-lg shadow-xl border border-[#e9e9e8] py-1 z-50 w-48 animate-in fade-in zoom-in-95 duration-100"
+            className="fixed bg-white rounded-lg border border-[#e9e9e8] py-1 z-50 w-48 animate-in fade-in zoom-in-95 duration-100"
             style={{ top: contextMenu.y, left: contextMenu.x - 180 }}
           >
-            <div className="px-3 py-2 border-b border-[#f0f0ef] text-xs font-semibold text-[#9b9a97]">
+            <div className="px-3 py-2 border-b border-[#f0f0ef] text-xs font-medium text-[#9b9a97]">
               작업 이동
             </div>
             {lists.map(list => (
@@ -1492,10 +1494,10 @@ const TodoView: React.FC<TodoViewProps> = ({
         {listMenu && (
           <div
             ref={listMenuRef}
-            className="fixed bg-white rounded-lg shadow-xl border border-[#e9e9e8] py-1 z-50 w-40 animate-in fade-in zoom-in-95 duration-100"
+            className="fixed bg-white rounded-lg border border-[#e9e9e8] py-1 z-50 w-40 animate-in fade-in zoom-in-95 duration-100"
             style={{ top: listMenu.y, left: listMenu.x - 140 }}
           >
-            <div className="px-3 py-2 border-b border-[#f0f0ef] text-xs font-semibold text-[#9b9a97]">
+            <div className="px-3 py-2 border-b border-[#f0f0ef] text-xs font-medium text-[#9b9a97]">
               목록 관리
             </div>
 
