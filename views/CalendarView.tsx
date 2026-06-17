@@ -3,6 +3,7 @@ import { CalendarEvent, CalendarTag } from '../types';
 import { ChevronLeft, ChevronRight, Plus, X, Trash2, CalendarIcon, Check, Clock, AlignLeft } from '../components/Icons';
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, startOfWeek, endOfWeek, parseISO, isToday as dfIsToday } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
+import { getDarkAdaptiveColor } from '../utils/colorPalette';
 
 interface CalendarViewProps {
   events: CalendarEvent[];
@@ -293,9 +294,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                   e.stopPropagation();
                                   openEditModal(ev);
                                 }}
-                                style={{ backgroundColor: tag?.color || '#37352f' }}
+                                style={{
+                                  '--calendar-tag-color': tag?.color || '#37352f',
+                                  '--calendar-tag-dark-color': getDarkAdaptiveColor(tag?.color || '#37352f'),
+                                } as React.CSSProperties}
                                 className={`
-                                text-xs px-2 py-1 rounded-[4px] truncate cursor-pointer font-medium text-white
+                                calendar-event-bar text-xs px-2 py-1 rounded-[4px] truncate cursor-pointer font-medium text-white
                                 opacity-90 hover:opacity-100 hover:ring-1 hover:ring-inset hover:ring-[#d3d1cb] leading-tight
                               `}
                               >
@@ -592,7 +596,13 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                 : 'bg-white text-[#787774] border-[#f1f1f0] hover:bg-[#f7f7f5]'}
                             `}
                           >
-                            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: t.color }} />
+                            <div
+                              className="calendar-tag-dot w-2.5 h-2.5 rounded-full"
+                              style={{
+                                '--calendar-tag-color': t.color,
+                                '--calendar-tag-dark-color': getDarkAdaptiveColor(t.color),
+                              } as React.CSSProperties}
+                            />
                             {t.name}
                           </button>
                         ))}

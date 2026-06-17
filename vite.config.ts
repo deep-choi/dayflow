@@ -57,6 +57,22 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       }
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('@supabase')) return 'vendor-supabase';
+            if (id.includes('@google/genai')) return 'vendor-ai';
+            if (id.includes('@dnd-kit')) return 'vendor-dnd';
+            if (id.includes('date-fns')) return 'vendor-date';
+            if (id.includes('lucide-react')) return 'vendor-icons';
+            if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
+            return 'vendor';
+          }
+        }
+      }
     }
   };
 });

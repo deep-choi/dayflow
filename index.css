@@ -32,25 +32,34 @@
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --color-primary: #3b82f6;
-  --color-primary-hover: #60a5fa;
-  --color-primary-light: #1e3a8a;
+  accent-color: var(--color-primary);
+  --color-primary: #a21caf;
+  --color-primary-hover: #c026d3;
+  --color-primary-light: #a21caf;
   --app-bg: #121212;
   --app-text: #e0e0e0;
   --app-surface: #1e1e1e;
   --app-surface-alt: #252525;
   --app-surface-subtle: #181818;
   --app-surface-hover: #2a2a2a;
-  --app-border: #333333;
-  --app-border-strong: #444444;
-  --app-text-primary: #dddddd;
-  --app-text-secondary: #b8b8b8;
-  --app-text-muted: #888888;
+  --app-border: #2b2b2b;
+  --app-border-strong: #3a3a3a;
+  --app-text-primary: #f0f0f0;
+  --app-text-secondary: #c6c6c6;
+  --app-text-muted: #969696;
   --app-text-faint: #626262;
   --app-accent-surface: #1a1a1a;
   --app-accent-hover: #242424;
   --app-accent: #bdbdbd;
   --app-accent-strong: #cecece;
+  --app-point-surface: var(--color-primary);
+  --app-point-hover: var(--color-primary-hover);
+  --app-point: #c026d3;
+  --app-point-strong: #d946ef;
+  --app-point-soft: var(--color-primary-light);
+  --app-point-soft-hover: #c026d3;
+  --app-point-border: #c026d3;
+  --app-point-ring: rgba(192, 38, 211, 0.28);
   --app-success-surface: #1a1a1a;
   --app-danger-surface: #1a1a1a;
   --app-info-surface: #1a1a1a;
@@ -350,6 +359,34 @@ select {
   --tw-ring-offset-color: var(--app-bg) !important;
 }
 
+:root[data-theme='dark'] .border,
+:root[data-theme='dark'] .border-t,
+:root[data-theme='dark'] .border-r,
+:root[data-theme='dark'] .border-b,
+:root[data-theme='dark'] .border-l {
+  border-color: var(--app-border);
+}
+
+:root[data-theme='dark'] .border-transparent {
+  border-color: transparent !important;
+}
+
+:root[data-theme='dark'] .border-t-transparent {
+  border-top-color: transparent !important;
+}
+
+:root[data-theme='dark'] .border-r-transparent {
+  border-right-color: transparent !important;
+}
+
+:root[data-theme='dark'] .border-b-transparent {
+  border-bottom-color: transparent !important;
+}
+
+:root[data-theme='dark'] .border-l-transparent {
+  border-left-color: transparent !important;
+}
+
 :root[data-theme='dark'] .bg-white,
 :root[data-theme='dark'] .bg-white\/10,
 :root[data-theme='dark'] .bg-white\/20,
@@ -370,6 +407,10 @@ select {
   background-color: var(--app-surface-subtle) !important;
 }
 
+:root[data-theme='dark'] .bg-\[\#f7f7f7\] {
+  background-color: var(--app-surface-alt) !important;
+}
+
 :root[data-theme='dark'] .bg-\[\#f1f1f0\] {
   background-color: var(--app-surface-subtle) !important;
 }
@@ -379,6 +420,15 @@ select {
 }
 
 :root[data-theme='dark'] .bg-\[\#efefef\] {
+  background-color: var(--app-surface-hover) !important;
+}
+
+:root[data-theme='dark'] .bg-\[\#eeeeee\] {
+  background-color: var(--app-surface-hover) !important;
+}
+
+:root[data-theme='dark'] .bg-\[\#f3f3f3\],
+:root[data-theme='dark'] .bg-\[\#e9e9e9\] {
   background-color: var(--app-surface-hover) !important;
 }
 
@@ -408,13 +458,18 @@ select {
   background-color: var(--app-border) !important;
 }
 
-:root[data-theme='dark'] .text-\[\#37352f\],
+:root[data-theme='dark'] .text-\[\#171717\],
 :root[data-theme='dark'] .text-\[\#1f1f1f\],
 :root[data-theme='dark'] .text-\[\#1a1a1a\] {
   color: var(--app-text-primary) !important;
 }
 
+:root[data-theme='dark'] .text-\[\#37352f\] {
+  color: var(--app-text-secondary) !important;
+}
+
 :root[data-theme='dark'] .text-\[\#787774\],
+:root[data-theme='dark'] .text-\[\#5f5f5f\],
 :root[data-theme='dark'] .text-\[\#5f6368\],
 :root[data-theme='dark'] .text-\[\#9b9a97\] {
   color: var(--app-text-secondary) !important;
@@ -436,6 +491,30 @@ select {
 :root[data-theme='dark'] .border-\[\#d3d1cb\],
 :root[data-theme='dark'] .border-\[\#e2e2e2\] {
   border-color: var(--app-border) !important;
+}
+
+:root[data-theme='dark'] .border-t-\[\#e9e9e8\],
+:root[data-theme='dark'] .border-t-\[\#f1f1f0\],
+:root[data-theme='dark'] .border-t-\[\#f0f0ef\] {
+  border-top-color: var(--app-border) !important;
+}
+
+:root[data-theme='dark'] .border-b-\[\#e9e9e8\],
+:root[data-theme='dark'] .border-b-\[\#f1f1f0\],
+:root[data-theme='dark'] .border-b-\[\#f0f0ef\] {
+  border-bottom-color: var(--app-border) !important;
+}
+
+:root[data-theme='dark'] .border-l-\[\#e9e9e8\],
+:root[data-theme='dark'] .border-l-\[\#f1f1f0\],
+:root[data-theme='dark'] .border-l-\[\#f0f0ef\] {
+  border-left-color: var(--app-border) !important;
+}
+
+:root[data-theme='dark'] .border-r-\[\#e9e9e8\],
+:root[data-theme='dark'] .border-r-\[\#f1f1f0\],
+:root[data-theme='dark'] .border-r-\[\#f0f0ef\] {
+  border-right-color: var(--app-border) !important;
 }
 
 :root[data-theme='dark'] .border-\[\#d9d9d8\] {
@@ -644,13 +723,17 @@ select {
 }
 
 :root[data-theme='dark'] .hover\:bg-\[\#f7f7f5\]:hover,
+:root[data-theme='dark'] .hover\:bg-\[\#f7f7f7\]:hover,
+:root[data-theme='dark'] .hover\:bg-\[\#f3f3f3\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#efefef\]:hover,
+:root[data-theme='dark'] .hover\:bg-\[\#eeeeee\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#f1f1f0\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#fbfbfa\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#fcfcfb\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#f5f5f5\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#f2f2f0\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#e8eaed\]:hover,
+:root[data-theme='dark'] .hover\:bg-\[\#e9e9e9\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#e9e9e8\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#ffefef\]:hover,
 :root[data-theme='dark'] .hover\:bg-\[\#fff0f0\]:hover,
@@ -689,6 +772,7 @@ select {
 }
 
 :root[data-theme='dark'] .hover\:text-\[\#37352f\]:hover,
+:root[data-theme='dark'] .hover\:text-\[\#171717\]:hover,
 :root[data-theme='dark'] .hover\:text-\[\#eb5757\]:hover,
 :root[data-theme='dark'] .hover\:text-blue-500:hover,
 :root[data-theme='dark'] .hover\:text-red-500:hover,
@@ -697,6 +781,14 @@ select {
 }
 
 :root[data-theme='dark'] .group:hover .group-hover\:text-\[\#37352f\] {
+  color: var(--app-text-primary) !important;
+}
+
+:root[data-theme='dark'] .hover\:text-\[\#5f5f5f\]:hover {
+  color: var(--app-text-secondary) !important;
+}
+
+:root[data-theme='dark'] .group:hover .group-hover\:text-\[\#171717\] {
   color: var(--app-text-primary) !important;
 }
 
@@ -737,8 +829,144 @@ select {
   --tw-ring-color: rgba(190, 190, 190, 0.14) !important;
 }
 
+:root[data-theme='dark'] .bg-\[var\(--color-primary\)\],
+:root[data-theme='dark'] .bg-\[\#2383e2\],
+:root[data-theme='dark'] .bg-\[\#1d6fce\],
+:root[data-theme='dark'] .bg-\[\#1a73e8\],
+:root[data-theme='dark'] .bg-\[\#2b6de9\],
+:root[data-theme='dark'] .bg-\[\#60a5fa\],
+:root[data-theme='dark'] .bg-blue-500,
+:root[data-theme='dark'] .bg-blue-600,
+:root[data-theme='dark'] .bg-blue-700,
+:root[data-theme='dark'] [style*="background-color: var(--color-primary)"],
+:root[data-theme='dark'] [style*="background-color: #2383e2"],
+:root[data-theme='dark'] [style*="background-color: #1d6fce"],
+:root[data-theme='dark'] [style*="background-color: #1a73e8"],
+:root[data-theme='dark'] [style*="background-color: #2b6de9"],
+:root[data-theme='dark'] [style*="background-color: #60a5fa"],
+:root[data-theme='dark'] [style*="background-color: rgb(35, 131, 226)"],
+:root[data-theme='dark'] [style*="background-color: rgb(29, 111, 206)"],
+:root[data-theme='dark'] [style*="background-color: rgb(26, 115, 232)"],
+:root[data-theme='dark'] [style*="background-color: rgb(43, 109, 233)"],
+:root[data-theme='dark'] [style*="background-color: rgb(96, 165, 250)"] {
+  background-color: var(--app-point-surface) !important;
+}
+
+:root[data-theme='dark'] .bg-\[var\(--color-primary-light\)\],
+:root[data-theme='dark'] .bg-\[\#eef5ff\],
+:root[data-theme='dark'] .bg-\[\#e0ecff\],
+:root[data-theme='dark'] .bg-\[\#ebf5fc\],
+:root[data-theme='dark'] .bg-\[\#f0f9ff\],
+:root[data-theme='dark'] .bg-blue-50,
+:root[data-theme='dark'] .bg-blue-50\/50,
+:root[data-theme='dark'] .bg-blue-100 {
+  background-color: var(--app-point-surface) !important;
+}
+
+:root[data-theme='dark'] .hover\:bg-\[var\(--color-primary-hover\)\]:hover,
+:root[data-theme='dark'] .hover\:bg-\[\#1d6fce\]:hover,
+:root[data-theme='dark'] .hover\:bg-blue-700:hover {
+  background-color: var(--app-point-hover) !important;
+}
+
+:root[data-theme='dark'] .hover\:bg-\[\#e0ecff\]:hover,
+:root[data-theme='dark'] .hover\:bg-\[\#ebf5fc\]:hover,
+:root[data-theme='dark'] .hover\:bg-blue-50:hover {
+  background-color: var(--app-point-soft-hover) !important;
+}
+
+:root[data-theme='dark'] .bg-\[var\(--color-primary-light\)\].text-\[var\(--color-primary\)\],
+:root[data-theme='dark'] .bg-\[var\(--color-primary-light\)\] .text-\[var\(--color-primary\)\] {
+  color: #ffffff !important;
+}
+
+:root[data-theme='dark'] .bg-\[var\(--color-primary\)\].text-white,
+:root[data-theme='dark'] .hover\:bg-\[var\(--color-primary-hover\)\]:hover.text-white {
+  color: #ffffff !important;
+}
+
+:root[data-theme='dark'] .text-\[var\(--color-primary\)\],
+:root[data-theme='dark'] .text-\[\#2383e2\],
+:root[data-theme='dark'] .text-\[\#1d6fce\],
+:root[data-theme='dark'] .text-\[\#1a73e8\],
+:root[data-theme='dark'] .text-\[\#2b6de9\],
+:root[data-theme='dark'] .text-\[\#60a5fa\],
+:root[data-theme='dark'] .text-blue-500,
+:root[data-theme='dark'] .text-blue-600,
+:root[data-theme='dark'] .text-blue-700,
+:root[data-theme='dark'] .hover\:text-\[var\(--color-primary\)\]:hover,
+:root[data-theme='dark'] .hover\:text-blue-500:hover,
+:root[data-theme='dark'] .hover\:text-blue-600:hover,
+:root[data-theme='dark'] .group\/subtask:hover .group-hover\/subtask\:text-blue-600 {
+  color: var(--app-point) !important;
+}
+
+:root[data-theme='dark'] .border-\[var\(--color-primary\)\],
+:root[data-theme='dark'] .border-\[\#2383e2\],
+:root[data-theme='dark'] .border-\[\#1d6fce\],
+:root[data-theme='dark'] .border-\[\#1a73e8\],
+:root[data-theme='dark'] .border-\[\#2b6de9\],
+:root[data-theme='dark'] .border-\[\#60a5fa\],
+:root[data-theme='dark'] .border-\[\#9bbcf3\],
+:root[data-theme='dark'] .border-blue-500,
+:root[data-theme='dark'] .hover\:border-blue-500:hover,
+:root[data-theme='dark'] .group:hover .group-hover\:border-blue-500 {
+  border-color: var(--app-point-border) !important;
+}
+
+:root[data-theme='dark'] .border-t-\[var\(--color-primary\)\] {
+  border-top-color: var(--app-point-border) !important;
+}
+
+:root[data-theme='dark'] .border-r-\[var\(--color-primary\)\] {
+  border-right-color: var(--app-point-border) !important;
+}
+
+:root[data-theme='dark'] .border-b-\[var\(--color-primary\)\] {
+  border-bottom-color: var(--app-point-border) !important;
+}
+
+:root[data-theme='dark'] .border-l-\[var\(--color-primary\)\] {
+  border-left-color: var(--app-point-border) !important;
+}
+
+:root[data-theme='dark'] .border-\[\#e0ecff\],
+:root[data-theme='dark'] .border-\[\#eef5ff\],
+:root[data-theme='dark'] .border-\[\#ebf5fc\],
+:root[data-theme='dark'] .border-\[\#f0f9ff\],
+:root[data-theme='dark'] .border-blue-100 {
+  border-color: var(--app-point-soft-hover) !important;
+}
+
+:root[data-theme='dark'] .focus\:border-\[var\(--color-primary\)\]:focus,
+:root[data-theme='dark'] .focus\:border-\[\#2383e2\]:focus,
+:root[data-theme='dark'] .focus\:border-\[\#1a73e8\]:focus,
+:root[data-theme='dark'] .focus\:border-blue-500:focus {
+  border-color: var(--app-point-border) !important;
+}
+
+:root[data-theme='dark'] .focus\:ring-blue-500:focus,
+:root[data-theme='dark'] .focus\:ring-\[\#2383e2\]\/10:focus,
+:root[data-theme='dark'] .ring-\[\#1a73e8\],
+:root[data-theme='dark'] .ring-\[\#2383e2\],
+:root[data-theme='dark'] .ring-\[\#dce8fd\],
+:root[data-theme='dark'] .ring-blue-100,
+:root[data-theme='dark'] .ring-blue-500 {
+  --tw-ring-color: var(--app-point-ring) !important;
+}
+
+:root[data-theme='dark'] .group:focus-within .group-focus-within\:bg-\[\#2383e2\] {
+  background-color: var(--app-point-surface) !important;
+}
+
+:root[data-theme='dark'] .journal-record-item {
+  font-size: 15px !important;
+  line-height: 1.25rem !important;
+}
+
 :root[data-theme='dark'] .placeholder-\[\#d3d1cb\]::placeholder,
 :root[data-theme='dark'] .placeholder-\[\#b1b0ad\]::placeholder,
+:root[data-theme='dark'] .placeholder-\[\#c8c8c8\]::placeholder,
 :root[data-theme='dark'] .placeholder-\[\#e1e1e0\]::placeholder {
   color: var(--app-text-faint) !important;
 }
@@ -789,6 +1017,78 @@ select {
 
 :root[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
   background: #444;
+}
+
+.todo-filter-tab.is-active {
+  background-color: var(--todo-tab-color);
+  border-color: var(--todo-tab-color);
+  color: #ffffff;
+}
+
+.todo-color-swatch,
+.todo-tab-dot {
+  background-color: var(--todo-tab-color);
+}
+
+.calendar-tag-filter-indicator {
+  background-color: #ffffff;
+  border: 1px solid var(--calendar-tag-muted);
+}
+
+.calendar-tag-filter-indicator.is-active {
+  background-color: var(--calendar-tag-color);
+  border-color: var(--calendar-tag-color);
+}
+
+.calendar-tag-dot,
+.calendar-event-bar {
+  background-color: var(--calendar-tag-color);
+}
+
+:root[data-theme='dark'] .todo-filter-tab.is-active {
+  background-color: var(--todo-tab-dark-color);
+  border-color: var(--todo-tab-dark-color);
+  color: #ffffff;
+}
+
+:root[data-theme='dark'] .todo-filter-tab.is-active:hover {
+  background-color: var(--todo-tab-dark-color);
+  border-color: var(--todo-tab-dark-color);
+}
+
+:root[data-theme='dark'] .todo-color-swatch,
+:root[data-theme='dark'] .todo-tab-dot {
+  background-color: var(--todo-tab-dark-color) !important;
+}
+
+:root[data-theme='dark'] .calendar-tag-filter-item.is-active {
+  background-color: transparent;
+  color: var(--app-text-primary) !important;
+}
+
+:root[data-theme='dark'] .calendar-tag-filter-item.is-active:hover {
+  background-color: var(--app-surface-hover) !important;
+  color: var(--app-text-primary) !important;
+}
+
+:root[data-theme='dark'] .calendar-tag-filter-item:not(.is-active):hover {
+  background-color: var(--app-surface-hover) !important;
+  color: var(--app-text-primary) !important;
+}
+
+:root[data-theme='dark'] .calendar-tag-filter-indicator {
+  background-color: transparent;
+  border-color: var(--app-border-strong);
+}
+
+:root[data-theme='dark'] .calendar-tag-filter-indicator.is-active {
+  background-color: var(--calendar-tag-dark-color);
+  border-color: var(--calendar-tag-dark-color);
+}
+
+:root[data-theme='dark'] .calendar-tag-dot,
+:root[data-theme='dark'] .calendar-event-bar {
+  background-color: var(--calendar-tag-dark-color) !important;
 }
 
 /* Hide scrollbar utility */

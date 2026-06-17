@@ -371,13 +371,13 @@ const JournalView: React.FC<JournalViewProps> = ({
                 </div>
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-0">
                 <input
                   type="text"
                   placeholder="제목을 입력하세요"
                   value={newTitle}
                   onChange={event => setNewTitle(event.target.value)}
-                  className="w-full border-none bg-transparent px-0 py-2 text-[20px] font-medium tracking-normal text-[#171717] placeholder:text-[#c8c8c8] outline-none focus:ring-0"
+                  className="w-full border-x-0 border-t-0 border-b border-[#e9e9e8] bg-transparent px-0 pb-5 pt-2 text-[24px] leading-8 font-medium tracking-normal text-[#171717] placeholder:text-[#c8c8c8] outline-none transition-colors focus:border-[var(--color-primary)] focus:ring-0"
                   autoFocus
                 />
                 <textarea
@@ -385,7 +385,7 @@ const JournalView: React.FC<JournalViewProps> = ({
                   placeholder="내용을 입력하세요..."
                   value={newContent}
                   onChange={event => setNewContent(event.target.value)}
-                  className="min-h-[420px] w-full resize-none overflow-hidden border-none bg-transparent px-0 py-2 text-[15px] font-normal leading-7 text-[#37352f] placeholder:text-[#c8c8c8] outline-none focus:ring-0"
+                  className="min-h-[420px] w-full resize-none overflow-hidden border-none bg-transparent px-0 pb-2 pt-6 text-[15px] font-normal leading-7 text-[#37352f] placeholder:text-[#c8c8c8] outline-none focus:ring-0"
                 />
               </div>
             </div>

@@ -5,13 +5,7 @@ import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
 import { supabase } from './utils/supabase';
 import { useRegisterSW } from 'virtual:pwa-register/react';
-import CalendarView from './views/CalendarView';
-import TodoView from './views/TodoView';
-import JournalView from './views/JournalView';
 import { DEFAULT_AGENTS } from './data/defaultAgents';
-import SettingsView from './views/SettingsView';
-import ChatView from './views/ChatView';
-import AuthView from './views/AuthView';
 import { normalizeKoreanText } from './utils/encodingFix';
 import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncChatSessions, syncPersonaMemories, syncUserData, setOnSyncError, seedSyncSnapshot, clearUserSyncState } from './services/syncService';
 import { debugManualSync } from './utils/debugSync';
@@ -19,6 +13,14 @@ import { useAuthSession } from './hooks/useAuthSession';
 import { clearChatSessionsCache, loadChatSessionsCache, saveChatSessionsCache } from './utils/chatSessionCache';
 import { normalizePersistedImageSource } from './utils/imageAsset';
 import { getAvatarImageStyle, sanitizeAvatarFrame } from './utils/avatarFrame';
+import { getDarkAdaptiveColor } from './utils/colorPalette';
+
+const CalendarView = React.lazy(() => import('./views/CalendarView'));
+const TodoView = React.lazy(() => import('./views/TodoView'));
+const JournalView = React.lazy(() => import('./views/JournalView'));
+const SettingsView = React.lazy(() => import('./views/SettingsView'));
+const ChatView = React.lazy(() => import('./views/ChatView'));
+const AuthView = React.lazy(() => import('./views/AuthView'));
 
 type ChatObservation = {
   text: string;
@@ -54,6 +56,15 @@ const EMPTY_PERSONA_MEMORY_BUCKETS: PersonaMemoryBuckets = {
   preferences: [],
   goals: [],
 };
+
+const ViewLoadingFallback = () => (
+  <div className="flex h-full min-h-[240px] items-center justify-center bg-white">
+    <div
+      className="h-6 w-6 animate-spin rounded-full border border-[#e9e9e8] border-t-[var(--color-primary)]"
+      aria-label="화면 로딩 중"
+    />
+  </div>
+);
 
 const dedupeAgentIds = (ids: Array<string | undefined | null>): string[] =>
   Array.from(
@@ -4071,7 +4082,9 @@ const App: React.FC = () => {
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-white relative animate-in fade-in duration-300">
-        <AuthView initialMode={authMode} onLogin={(user) => setCurrentUser(user)} />
+        <React.Suspense fallback={<ViewLoadingFallback />}>
+          <AuthView initialMode={authMode} onLogin={(user) => setCurrentUser(user)} />
+        </React.Suspense>
       </div>
     );
   }
@@ -4123,18 +4136,21 @@ const App: React.FC = () => {
                         key={tag.id}
                         type="button"
                         onClick={() => toggleCalendarTagFilter(tag.id)}
-                        className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
+                        className={`calendar-tag-filter-item w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
                           isVisible
-                            ? 'text-[#171717] hover:bg-[#f7f7f7]'
+                            ? 'is-active text-[#171717] hover:bg-[#f7f7f7]'
                             : 'text-[#8a8a8a] hover:bg-[#f7f7f7] hover:text-[#5f5f5f]'
                         }`}
+                        style={{
+                          '--calendar-tag-color': tag.color,
+                          '--calendar-tag-dark-color': getDarkAdaptiveColor(tag.color),
+                          '--calendar-tag-muted': `${tag.color}66`,
+                        } as React.CSSProperties}
                       >
                         <span
-                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px]"
-                          style={{
-                            backgroundColor: isVisible ? tag.color : '#ffffff',
-                            border: isVisible ? `1px solid ${tag.color}` : `1px solid ${tag.color}66`,
-                          }}
+                          className={`calendar-tag-filter-indicator flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] ${
+                            isVisible ? 'is-active' : ''
+                          }`}
                         >
                           {isVisible && <Check size={12} className="text-white" strokeWidth={3} />}
                         </span>
@@ -4419,7 +4435,7 @@ const App: React.FC = () => {
                             setSelectedJournalCategory('all');
                             setSelectedJournalId(entry.id);
                           }}
-                          className={`w-full truncate rounded-lg px-3 py-2 text-left text-[15px] leading-5 transition-colors ${
+                          className={`journal-record-item w-full truncate rounded-lg px-3 py-2 text-left text-[15px] leading-5 transition-colors ${
                             isSelected
                               ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium'
                               : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
@@ -4521,7 +4537,9 @@ const App: React.FC = () => {
         <div className={`flex-1 relative scroll-smooth ${['todo', 'journal', 'calendar'].includes(currentView) ? 'overflow-hidden' : 'overflow-y-auto'}`}>
           <div className={`h-full mx-auto ${['todo', 'journal', 'calendar'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1440px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
             <ViewErrorBoundary view={currentView} onRecover={() => setCurrentView('chat')}>
-              {renderView()}
+              <React.Suspense fallback={<ViewLoadingFallback />}>
+                {renderView()}
+              </React.Suspense>
             </ViewErrorBoundary>
           </div>
         </div>
@@ -4587,7 +4605,9 @@ const App: React.FC = () => {
               <X size={17} />
             </button>
             <div className="overflow-y-auto px-4 pt-3 custom-scrollbar sm:px-6">
-              {renderSettingsView()}
+              <React.Suspense fallback={<ViewLoadingFallback />}>
+                {renderSettingsView()}
+              </React.Suspense>
             </div>
           </div>
         </div>

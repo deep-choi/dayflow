@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Todo, TodoList, TodoTab, TodoStep } from '../types';
 import { Check, ChevronRight, MoreVertical, CalendarIcon, Trash2, Plus, GripVertical, AlertCircle, X, Maximize2, CheckSquare, Layout, Edit3 } from '../components/Icons';
 import { format, isToday, isTomorrow, isValid, parseISO } from 'date-fns';
@@ -24,10 +24,11 @@ import {
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
-  horizontalListSortingStrategy,
+  rectSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { getDarkAdaptiveColor, normalizeThemeColorValue, TODO_TAB_COLOR_OPTIONS } from '../utils/colorPalette';
 
 interface TodoViewProps {
   todos: Todo[];
@@ -139,7 +140,13 @@ const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddLi
                     : 'border-transparent bg-gray-50 hover:bg-gray-100'
                     }`}
                 >
-                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tab.color }} />
+                  <div
+                    className="todo-tab-dot w-2.5 h-2.5 rounded-full"
+                    style={{
+                      '--todo-tab-color': tab.color,
+                      '--todo-tab-dark-color': getDarkAdaptiveColor(tab.color),
+                    } as React.CSSProperties}
+                  />
                   <span className="truncate">{tab.name}</span>
                 </button>
               ))}
@@ -180,9 +187,7 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
   const tab = isEditing ? tabs.find((t: TodoTab) => t.id === tabId) : null;
 
   const [name, setName] = useState(tab?.name || '');
-  const [color, setColor] = useState(tab?.color || 'var(--color-primary)');
-
-  const COLORS = ['var(--color-primary)', '#d93025', '#188038', '#f29900', '#9c27b0', '#0097a7', '#5f6368', '#ff4081'];
+  const [color, setColor] = useState(normalizeThemeColorValue(tab?.color || 'var(--color-primary)'));
 
   const handleSave = () => {
     if (isEditing) {
@@ -221,12 +226,17 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-2">테마 색상</label>
             <div className="flex flex-wrap gap-3">
-              {COLORS.map(c => (
+              {TODO_TAB_COLOR_OPTIONS.map(option => (
                 <button
-                  key={c}
-                  onClick={() => setColor(c)}
-                  className={`w-8 h-8 rounded-full transition-transform ${color === c ? 'scale-110 ring-2 ring-offset-2 ring-[#d4d4d4]' : 'hover:scale-105'}`}
-                  style={{ backgroundColor: c }}
+                  key={option.value}
+                  onClick={() => setColor(option.value)}
+                  className={`todo-color-swatch w-8 h-8 rounded-full transition-transform ${
+                    color === option.value ? 'scale-110 ring-2 ring-offset-2 ring-[#d4d4d4]' : 'hover:scale-105'
+                  }`}
+                  style={{
+                    '--todo-tab-color': option.value,
+                    '--todo-tab-dark-color': option.dark,
+                  } as React.CSSProperties}
                 />
               ))}
             </div>
@@ -769,7 +779,7 @@ const SortableList = ({
   const listSteps = steps.filter((s: TodoStep) => s.listId === list.id).sort((a: any, b: any) => a.order - b.order);
   const listTab = tabs?.find((t: any) => t.id === list.tabId);
   const [draft, setDraft] = useState<{ text: string; stepId?: string | null }>({ text: '', stepId: null });
-  const [showCompleted, setShowCompleted] = useState(true);
+  const [showCompleted, setShowCompleted] = useState(false);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [editingStepTitle, setEditingStepTitle] = useState('');
 
@@ -837,8 +847,11 @@ const SortableList = ({
             <div className="flex items-center gap-2">
               {listTab && (
                 <div
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: listTab.color }}
+                  className="todo-tab-dot w-2 h-2 rounded-full flex-shrink-0"
+                  style={{
+                    '--todo-tab-color': listTab.color,
+                    '--todo-tab-dark-color': getDarkAdaptiveColor(listTab.color),
+                  } as React.CSSProperties}
                 />
               )}
               <h3
@@ -1104,9 +1117,46 @@ const TodoView: React.FC<TodoViewProps> = ({
 
   // Infinite Canvas State
   const containerRef = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [masonryColumnCount, setMasonryColumnCount] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
   const [scrollStart, setScrollStart] = useState({ left: 0, top: 0 });
+
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+
+    const updateColumnCount = (width: number) => {
+      const cardWidth = 300;
+      const gap = 24;
+      const nextCount = isMobile
+        ? 1
+        : Math.max(1, Math.min(4, Math.floor((width + gap) / (cardWidth + gap))));
+      setMasonryColumnCount(prev => (prev === nextCount ? prev : nextCount));
+    };
+
+    updateColumnCount(board.clientWidth);
+
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry) updateColumnCount(entry.contentRect.width);
+    });
+    observer.observe(board);
+
+    return () => observer.disconnect();
+  }, [isMobile]);
+
+  const masonryColumns = useMemo(() => {
+    const columnCount = Math.max(1, Math.min(masonryColumnCount, Math.max(sortedLists.length, 1)));
+    const columns: TodoList[][] = Array.from({ length: columnCount }, () => []);
+
+    sortedLists.forEach((list, index) => {
+      columns[index % columnCount].push(list);
+    });
+
+    return columns;
+  }, [masonryColumnCount, sortedLists]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -1328,96 +1378,100 @@ const TodoView: React.FC<TodoViewProps> = ({
           <h1 className="text-lg font-medium text-[#37352f]">할 일</h1>
         </div>
 
-        <div className="px-4 pt-6 pb-5 sm:px-8 flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth">
-          <button
-            onClick={() => setFilterMode('all')}
-            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap border ${filterMode === 'all'
-              ? 'bg-[var(--color-primary)] text-white border-transparent'
-              : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
-              }`}
-          >
-            모두 보기
-          </button>
+        <div className="px-4 pt-7 pb-5 sm:px-8">
+          <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar scroll-smooth">
+            <button
+              onClick={() => setFilterMode('all')}
+              className={`inline-flex h-10 items-center justify-center rounded-lg border px-4 text-sm font-medium whitespace-nowrap transition-colors ${filterMode === 'all'
+                ? 'bg-[var(--color-primary)] text-white border-transparent'
+                : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
+                }`}
+            >
+              모두 보기
+            </button>
 
-          {[...tabs].sort((a, b) => a.order - b.order).map(tab => (
-            <div key={tab.id} className="relative group flex-shrink-0">
-              <button
-                onClick={() => setFilterMode(tab.id)}
-                className={`px-4 py-1.5 rounded-lg text-sm transition-colors whitespace-nowrap flex items-center font-medium border ${filterMode === tab.id
-                  ? ''
-                  : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
-                  }`}
-                style={{
-                  backgroundColor: filterMode === tab.id ? tab.color : undefined,
-                  borderColor: filterMode === tab.id ? tab.color : undefined,
-                  color: filterMode === tab.id ? '#ffffff' : undefined
-                }}
-              >
-                {tab.name}
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); setTabSettingsModal(tab.id); }}
-                className="absolute -top-1 -right-1 w-4 h-4 bg-white border border-gray-200 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <Edit3 size={10} className="text-gray-400" />
-              </button>
-            </div>
-          ))}
+            {[...tabs].sort((a, b) => a.order - b.order).map(tab => (
+              <div key={tab.id} className="relative group flex-shrink-0">
+                <button
+                  onClick={() => setFilterMode(tab.id)}
+                  className={`todo-filter-tab inline-flex h-10 items-center justify-center rounded-lg border px-4 text-sm font-medium whitespace-nowrap transition-colors ${filterMode === tab.id
+                    ? 'is-active'
+                    : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
+                    }`}
+                  style={{
+                    '--todo-tab-color': tab.color,
+                    '--todo-tab-dark-color': getDarkAdaptiveColor(tab.color),
+                  } as React.CSSProperties}
+                >
+                  {tab.name}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setTabSettingsModal(tab.id); }}
+                  className="absolute -top-1 -right-1 w-4 h-4 bg-white border border-gray-200 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <Edit3 size={10} className="text-gray-400" />
+                </button>
+              </div>
+            ))}
 
-          <button
-            onClick={() => setNewTabModal(true)}
-            className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-gray-200 transition-all flex-shrink-0"
-          >
-            <Plus size={16} />
-          </button>
+            <button
+              onClick={() => setNewTabModal(true)}
+              className="h-10 w-10 rounded-lg bg-[#f7f7f7] flex items-center justify-center text-[#8a8a8a] hover:bg-[#eeeeee] hover:text-[#171717] transition-colors flex-shrink-0"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
         </div>
 
         {/* Infinite Canvas Content Area */}
-        <div className="flex-1 pt-2 pb-6 px-3 sm:px-8 min-w-fit min-h-fit">
+        <div className="flex-1 pt-1 pb-8 px-4 sm:px-8 min-w-fit min-h-fit">
           <SortableContext
             items={sortedLists.map(l => l.id)}
-            strategy={horizontalListSortingStrategy}
+            strategy={rectSortingStrategy}
           >
-            <div className="flex flex-col sm:flex-row flex-wrap gap-4 sm:gap-6 items-start">
-              {sortedLists.map((list) => (
-                <SortableList
-                  key={list.id}
-                  list={list}
-                  lists={lists}
-                  todos={filteredTodos}
-                  editingListId={editingListId}
-                  editingListTitle={editingListTitle}
-                  setEditingListTitle={setEditingListTitle}
-                  saveListTitle={saveListTitle}
-                  setEditingListId={setEditingListId}
-                  startEditingList={startEditingList}
-                  handleMoveTodo={handleMoveTodo}
-                  onAddTodo={onAddTodo}
-                  onUpdateTodo={onUpdateTodo}
-                  onToggleTodo={onToggleTodo}
-                  onDeleteTodo={onDeleteTodo}
-                  editingTodoId={editingTodoId}
-                  editingTodoText={editingTodoText}
-                  setEditingTodoText={setEditingTodoText}
-                  setEditingTodoId={setEditingTodoId}
-                  startEditingTodo={startEditingTodo}
-                  saveTodoText={saveTodoText}
-                  setContextMenu={setContextMenu}
-                  setListMenu={setListMenu}
-                  getDueLabel={getDueLabel}
-                  tabs={tabs}
-                  steps={steps}
-                  onAddStep={onAddStep}
-                  onUpdateStep={onUpdateStep}
-                  onDeleteStep={onDeleteStep}
-                  isMobile={isMobile}
-                />
+            <div ref={boardRef} className="flex flex-col items-start gap-4 sm:flex-row sm:gap-6">
+              {masonryColumns.map((column, columnIndex) => (
+                <div key={columnIndex} className="flex w-full flex-col gap-4 sm:w-[300px] sm:shrink-0 sm:gap-6">
+                  {column.map((list) => (
+                    <SortableList
+                      key={list.id}
+                      list={list}
+                      lists={lists}
+                      todos={filteredTodos}
+                      editingListId={editingListId}
+                      editingListTitle={editingListTitle}
+                      setEditingListTitle={setEditingListTitle}
+                      saveListTitle={saveListTitle}
+                      setEditingListId={setEditingListId}
+                      startEditingList={startEditingList}
+                      handleMoveTodo={handleMoveTodo}
+                      onAddTodo={onAddTodo}
+                      onUpdateTodo={onUpdateTodo}
+                      onToggleTodo={onToggleTodo}
+                      onDeleteTodo={onDeleteTodo}
+                      editingTodoId={editingTodoId}
+                      editingTodoText={editingTodoText}
+                      setEditingTodoText={setEditingTodoText}
+                      setEditingTodoId={setEditingTodoId}
+                      startEditingTodo={startEditingTodo}
+                      saveTodoText={saveTodoText}
+                      setContextMenu={setContextMenu}
+                      setListMenu={setListMenu}
+                      getDueLabel={getDueLabel}
+                      tabs={tabs}
+                      steps={steps}
+                      onAddStep={onAddStep}
+                      onUpdateStep={onUpdateStep}
+                      onDeleteStep={onDeleteStep}
+                      isMobile={isMobile}
+                    />
+                  ))}
+                </div>
               ))}
 
-              {/* Add List Placeholder or Button */}
-              <div className="min-w-[50px] h-[50px] flex items-center justify-center opacity-50 hover:opacity-100 transition-opacity">
+              <div className="flex h-[50px] min-w-[50px] items-center justify-center opacity-50 transition-opacity hover:opacity-100">
                 <button
-                  className="w-10 h-10 rounded-full bg-white border border-[#e9e9e8] flex items-center justify-center text-[var(--color-primary)] hover:bg-[#f7f7f7] transition-colors"
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-[#e9e9e8] bg-white text-[var(--color-primary)] transition-colors hover:bg-[#f7f7f7]"
                   onClick={() => setNewListModal(true)}
                 >
                   <Plus />
