@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "life-a01e2"
-  }
+  },
+  "targets": {
+    "life-a01e2": {
+      "hosting": {
+        "app": [
+          "dayflow"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

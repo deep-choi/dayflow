@@ -1,4 +1,4 @@
--- LifeSync AI Supabase Schema Initialization
+-- Dayflow Supabase Schema Initialization
 
 -- Profiles table: 사용자 기본 정보 및 설정
 create table profiles (

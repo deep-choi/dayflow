@@ -16,6 +16,7 @@ interface CalendarViewProps {
 const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, onDeleteEvent, onUpdateEvent }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
+  const [overflowDay, setOverflowDay] = useState<{ date: Date; events: CalendarEvent[] } | null>(null);
   const lastWheelTime = useRef<number>(0);
 
   // Modal State
@@ -181,6 +182,79 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
   // Tag helpers
   const getTag = (tagId: string) => tags?.find(t => t.id === tagId);
+  const getDayEvents = (day: Date) => (events || [])
+    .filter(event => {
+      try {
+        if (!event.date) return false;
+        const eventStart = parseISO(event.date);
+        const eventEnd = parseISO(event.endDate || event.date);
+        const dayTime = day.getTime();
+        return eventStart.getTime() <= dayTime && eventEnd.getTime() >= dayTime;
+      } catch (error) {
+        console.error('Error parsing event date:', event);
+        return false;
+      }
+    })
+    .sort((a, b) => {
+      const timeCompare = (a.startTime || '99:99').localeCompare(b.startTime || '99:99');
+      if (timeCompare !== 0) return timeCompare;
+      return a.title.localeCompare(b.title, 'ko');
+    });
+
+  const getEventTimeLabel = (event: CalendarEvent, day: Date) => {
+    const hideTimeForAutoTodoEvent = Boolean(event.description?.includes('[TODO_LINK:'));
+    if (event.isAllDay || hideTimeForAutoTodoEvent || !event.startTime || !isSameDay(parseISO(event.date), day)) {
+      return null;
+    }
+
+    return event.startTime;
+  };
+
+  const renderEventBar = (event: CalendarEvent, day: Date, compact = false) => {
+    const tag = getTag(event.type);
+    const timeLabel = getEventTimeLabel(event, day);
+
+    return (
+      <button
+        key={event.id}
+        type="button"
+        onClick={(clickEvent) => {
+          clickEvent.stopPropagation();
+          setOverflowDay(null);
+          openEditModal(event);
+        }}
+        style={{
+          '--calendar-tag-color': tag?.color || '#37352f',
+          '--calendar-tag-dark-color': getDarkAdaptiveColor(tag?.color || '#37352f'),
+        } as React.CSSProperties}
+        className={`
+          calendar-event-bar w-full min-w-0 rounded-[4px] text-left font-medium text-white
+          truncate cursor-pointer opacity-90 hover:opacity-100 hover:ring-1 hover:ring-inset hover:ring-[#d3d1cb]
+          ${compact ? 'px-1.5 py-0.5 text-[11px] leading-4' : 'px-2 py-1 text-xs leading-tight'}
+        `}
+      >
+        {timeLabel && <span className="mr-1.5 opacity-80 font-normal">{timeLabel}</span>}
+        {event.title}
+      </button>
+    );
+  };
+
+  const renderMoreButton = (day: Date, dayEvents: CalendarEvent[], hiddenCount: number, compact = false) => (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        setSelectedDate(day);
+        setOverflowDay({ date: day, events: dayEvents });
+      }}
+      className={`
+        w-full rounded-[4px] text-left font-medium text-[#787774] transition-colors hover:bg-[#f1f1f0] hover:text-[#37352f]
+        ${compact ? 'px-1.5 py-0.5 text-[11px] leading-4' : 'px-1.5 py-1 text-xs leading-tight'}
+      `}
+    >
+      +{hiddenCount}개 더보기
+    </button>
+  );
 
   try {
     return (
@@ -228,21 +302,12 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
               return weeks.map((week, weekIdx) => (
                 <div key={weekIdx} className="flex-1 grid grid-cols-7 min-h-0 divide-x divide-[#e9e9e8]">
                   {week.map((day) => {
-                    const dayEvents = (events || []).filter(e => {
-                      try {
-                        if (!e.date) return false;
-                        const eventStart = parseISO(e.date);
-                        const eventEnd = parseISO(e.endDate || e.date);
-                        const dayTime = day.getTime();
-                        return eventStart.getTime() <= dayTime && eventEnd.getTime() >= dayTime;
-                      } catch (e) {
-                        console.error("Error parsing event date:", e);
-                        return false;
-                      }
-                    });
+                    const dayEvents = getDayEvents(day);
                     const isSelected = selectedDate && isSameDay(day, selectedDate);
                     const isCurrentMonth = isSameMonth(day, currentDate);
                     const isToday = dfIsToday(day);
+                    const mobileVisibleCount = dayEvents.length > 2 ? 1 : 2;
+                    const desktopVisibleCount = 3;
 
                     return (
                       <div
@@ -283,36 +348,16 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                         </div>
 
                         {/* Event Bars */}
-                        <div className="flex flex-col gap-0.5">
-                          {dayEvents.slice(0, 4).map(ev => {
-                            const tag = getTag(ev.type);
-                            const hideTimeForAutoTodoEvent = Boolean(ev.description?.includes('[TODO_LINK:'));
-                            return (
-                              <div
-                                key={ev.id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openEditModal(ev);
-                                }}
-                                style={{
-                                  '--calendar-tag-color': tag?.color || '#37352f',
-                                  '--calendar-tag-dark-color': getDarkAdaptiveColor(tag?.color || '#37352f'),
-                                } as React.CSSProperties}
-                                className={`
-                                calendar-event-bar text-xs px-2 py-1 rounded-[4px] truncate cursor-pointer font-medium text-white
-                                opacity-90 hover:opacity-100 hover:ring-1 hover:ring-inset hover:ring-[#d3d1cb] leading-tight
-                              `}
-                              >
-                                {!ev.isAllDay && !hideTimeForAutoTodoEvent && ev.startTime && isSameDay(parseISO(ev.date), day) && <span className="mr-1.5 opacity-80 font-normal text-xs">{ev.startTime}</span>}
-                                {ev.title}
-                              </div>
-                            );
-                          })}
-                          {dayEvents.length > 4 && (
-                            <div className="text-xs text-[#9b9a97] px-1.5 font-medium">
-                              +{dayEvents.length - 4} 더보기
-                            </div>
-                          )}
+                        <div className="min-h-0 flex-1 overflow-hidden">
+                          <div className="flex flex-col gap-0.5 sm:hidden">
+                            {dayEvents.slice(0, mobileVisibleCount).map(event => renderEventBar(event, day, true))}
+                            {dayEvents.length > mobileVisibleCount && renderMoreButton(day, dayEvents, dayEvents.length - mobileVisibleCount, true)}
+                          </div>
+
+                          <div className="hidden min-h-0 flex-col gap-0.5 overflow-hidden sm:flex">
+                            {dayEvents.slice(0, desktopVisibleCount).map(event => renderEventBar(event, day))}
+                            {dayEvents.length > desktopVisibleCount && renderMoreButton(day, dayEvents, dayEvents.length - desktopVisibleCount)}
+                          </div>
                         </div>
                       </div>
                     );
@@ -324,6 +369,81 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
         </div>
 
 
+
+        {overflowDay && (
+          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/35 p-4 backdrop-blur-[2px]">
+            <div className="flex max-h-[82vh] w-full max-w-[420px] flex-col overflow-hidden rounded-2xl bg-white text-[#37352f]">
+              <div className="flex items-center justify-between border-b border-[#f1f1f0] px-5 py-4">
+                <div>
+                  <h3 className="text-[15px] font-medium text-[#171717]">
+                    {format(overflowDay.date, 'M월 d일 일정', { locale: ko })}
+                  </h3>
+                  <p className="mt-0.5 text-[13px] text-[#8a8a8a]">
+                    총 {overflowDay.events.length}개
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOverflowDay(null)}
+                  className="rounded-lg p-2 text-[#9b9a97] transition-colors hover:bg-[#f1f1f0] hover:text-[#37352f]"
+                  aria-label="일정 목록 닫기"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-3 custom-scrollbar">
+                <div className="space-y-1">
+                  {overflowDay.events.map(event => {
+                    const tag = getTag(event.type);
+                    const timeLabel = getEventTimeLabel(event, overflowDay.date);
+
+                    return (
+                      <button
+                        key={event.id}
+                        type="button"
+                        onClick={() => {
+                          setOverflowDay(null);
+                          openEditModal(event);
+                        }}
+                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[#f7f7f7]"
+                      >
+                        <span
+                          className="calendar-tag-dot h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{
+                            '--calendar-tag-color': tag?.color || '#37352f',
+                            '--calendar-tag-dark-color': getDarkAdaptiveColor(tag?.color || '#37352f'),
+                          } as React.CSSProperties}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[14px] font-medium text-[#171717]">{event.title}</span>
+                          <span className="mt-0.5 block text-[12px] text-[#8a8a8a]">
+                            {timeLabel || '하루 종일'}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="border-t border-[#f1f1f0] p-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetDate = overflowDay.date;
+                    setOverflowDay(null);
+                    openAddModal(targetDate);
+                  }}
+                  className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-sm font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
+                >
+                  <Plus size={16} />
+                  이 날짜에 일정 추가
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Modern Modal Overlay */}
         {showModal && (

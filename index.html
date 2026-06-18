@@ -5,6 +5,22 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#ffffff" />
+  <meta name="description" content="Dayflow는 AI와 함께 일정, 할 일, 메모, 대화를 정리하는 개인 생산성 대시보드입니다." />
+  <meta name="application-name" content="Dayflow" />
+  <meta name="keywords" content="Dayflow, AI 일정 관리, 할 일 관리, 메모장, 생산성 대시보드, 개인 관리 앱" />
+  <meta name="robots" content="index, follow" />
+  <link rel="canonical" href="https://dayflow.web.app/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://dayflow.web.app/" />
+  <meta property="og:title" content="Dayflow - AI 일상 관리 대시보드" />
+  <meta property="og:description" content="일정, 할 일, 메모, 대화를 AI와 함께 정리하는 개인 생산성 대시보드입니다." />
+  <meta property="og:site_name" content="Dayflow" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Dayflow - AI 일상 관리 대시보드" />
+  <meta name="twitter:description" content="일정, 할 일, 메모, 대화를 AI와 함께 정리하는 개인 생산성 대시보드입니다." />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="mask-icon" href="/masked-icon.svg" color="#4169E1" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
   <script>
@@ -18,11 +34,11 @@
         }
         if (isLocalDev && window.caches) {
           caches.keys()
-            .then((keys) => keys.filter((key) => /workbox|lifesync|vite-pwa/i.test(key)).forEach((key) => caches.delete(key)))
+            .then((keys) => keys.filter((key) => /workbox|lifesync|dayflow|vite-pwa/i.test(key)).forEach((key) => caches.delete(key)))
             .catch(() => {});
         }
 
-        const key = 'lifesync-ai-theme';
+        const key = 'dayflow-theme';
         const storedTheme = localStorage.getItem(key) || 'system';
         const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
         const resolvedTheme = storedTheme === 'dark' || storedTheme === 'light'
@@ -40,8 +56,8 @@
       }
     })();
   </script>
-  <link rel="apple-touch-icon" href="/pwa-192x192.png" />
-  <title>LifeSync AI</title>
+  <link rel="apple-touch-icon" href="/apple-touch-icon.svg" />
+  <title>Dayflow - AI 일상 관리 대시보드</title>
   <style>
     body {
       font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;

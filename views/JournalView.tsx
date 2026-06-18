@@ -7,6 +7,7 @@ import {
   Edit3,
   Search,
   MoreVertical,
+  ChevronLeft,
 } from 'lucide-react';
 import { format, parseISO, isValid } from 'date-fns';
 import { ko } from 'date-fns/locale';
@@ -79,6 +80,7 @@ const JournalView: React.FC<JournalViewProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showActions, setShowActions] = useState(false);
   const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [showMobileDetail, setShowMobileDetail] = useState(false);
   const [categoryInput, setCategoryInput] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
@@ -128,8 +130,13 @@ const JournalView: React.FC<JournalViewProps> = ({
 
     if (selectedId !== null) {
       onSelectId(null);
+      setShowMobileDetail(false);
     }
   }, [filteredEntries, isWriting, onSelectId, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) setShowMobileDetail(false);
+  }, [selectedId]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -164,11 +171,14 @@ const JournalView: React.FC<JournalViewProps> = ({
     resetDraft();
     setNewCategory(selectedCategory !== 'all' ? selectedCategory : defaultCategoryName);
     setShowActions(false);
+    setShowMobileDetail(true);
     setIsWriting(true);
   };
 
   const cancelWriting = () => {
+    const wasEditing = Boolean(editingId);
     resetDraft();
+    setShowMobileDetail(wasEditing);
     setIsWriting(false);
   };
 
@@ -184,6 +194,7 @@ const JournalView: React.FC<JournalViewProps> = ({
     }
 
     resetDraft();
+    setShowMobileDetail(true);
     setIsWriting(false);
   };
 
@@ -202,6 +213,7 @@ const JournalView: React.FC<JournalViewProps> = ({
     if (window.confirm('정말로 이 메모를 삭제하시겠습니까?')) {
       onDeleteEntry(selectedId);
       onSelectId(null);
+      setShowMobileDetail(false);
       setShowActions(false);
     }
   };
@@ -221,13 +233,13 @@ const JournalView: React.FC<JournalViewProps> = ({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
-      <header className="flex min-h-16 flex-col gap-3 border-b border-[#e9e9e8] px-4 py-3 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
-        <div>
+      <header className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} min-h-16 flex-col gap-3 border-b border-[#e9e9e8] px-4 py-3 sm:px-8 lg:flex-row lg:items-center lg:justify-between`}>
+        <div className="hidden lg:block">
           <h1 className="text-lg font-medium text-[#171717]">메모장</h1>
         </div>
 
-        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
-          <div className="relative w-full sm:w-64">
+        <div className="flex w-full items-center gap-2 lg:w-auto">
+          <div className="relative min-w-0 flex-1 lg:w-64 lg:flex-none">
             <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9b9a97]" />
             <input
               type="text"
@@ -241,16 +253,18 @@ const JournalView: React.FC<JournalViewProps> = ({
           <button
             type="button"
             onClick={startWriting}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[var(--color-primary)] px-4 text-sm font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-[var(--color-primary)] text-sm font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)] lg:w-auto lg:px-4"
+            aria-label="새 메모"
+            title="새 메모"
           >
             <Plus size={18} />
-            새 메모
+            <span className="hidden lg:inline">새 메모</span>
           </button>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        <aside className="h-[34vh] min-h-[220px] w-full overflow-y-auto border-b border-[#e9e9e8] bg-[#fbfbfa] custom-scrollbar lg:h-auto lg:min-h-0 lg:w-[360px] lg:border-b-0 lg:border-r">
+        <aside className={`${isWriting || showMobileDetail ? 'hidden lg:block' : 'block'} h-full min-h-0 w-full overflow-y-auto border-b border-[#e9e9e8] bg-[#fbfbfa] custom-scrollbar lg:h-auto lg:w-[360px] lg:border-b-0 lg:border-r`}>
           {filteredEntries.map(entry => {
             const isSelected = selectedId === entry.id;
             return (
@@ -259,11 +273,12 @@ const JournalView: React.FC<JournalViewProps> = ({
                 type="button"
                 onClick={() => {
                   onSelectId(entry.id);
+                  setShowMobileDetail(true);
                   setIsWriting(false);
                 }}
-                className={`w-full border-b border-l-2 border-b-[#e9e9e8] p-4 text-left transition-colors sm:p-5 ${
+                className={`w-full border-b border-l-0 border-b-[#e9e9e8] p-4 text-left transition-colors sm:p-5 lg:border-l-2 ${
                   isSelected
-                    ? 'border-l-[var(--color-primary)] bg-white'
+                    ? 'lg:border-l-[var(--color-primary)] lg:bg-white'
                     : 'border-l-transparent border-t-transparent border-r-transparent hover:bg-white/50'
                 }`}
               >
@@ -295,9 +310,20 @@ const JournalView: React.FC<JournalViewProps> = ({
           )}
         </aside>
 
-        <main className="min-h-0 flex-1 overflow-y-auto bg-white custom-scrollbar">
+        <main className={`${!isWriting && !showMobileDetail ? 'hidden lg:block' : 'block'} min-h-0 flex-1 overflow-y-auto bg-white custom-scrollbar`}>
           {isWriting ? (
-            <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col px-4 py-8 sm:px-8 sm:py-10">
+            <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col px-4 py-5 sm:px-8 sm:py-10">
+              <div className="mb-5 flex items-center justify-between lg:hidden">
+                <button
+                  type="button"
+                  onClick={cancelWriting}
+                  className="inline-flex h-9 items-center gap-1 rounded-lg pr-3 text-sm font-medium text-[#5f5f5f]"
+                >
+                  <ChevronLeft size={18} />
+                  목록
+                </button>
+              </div>
+
               <div className="mb-8 flex flex-col gap-5 border-b border-[#e9e9e8] pb-6 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-3">
@@ -390,7 +416,21 @@ const JournalView: React.FC<JournalViewProps> = ({
               </div>
             </div>
           ) : selectedEntry ? (
-            <div className="mx-auto max-w-[720px] px-4 py-8 sm:px-8 sm:py-10">
+            <div className="mx-auto max-w-[720px] px-4 py-5 sm:px-8 sm:py-10">
+              <div className="mb-5 flex items-center justify-between lg:hidden">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMobileDetail(false);
+                    setShowActions(false);
+                  }}
+                  className="inline-flex h-9 items-center gap-1 rounded-lg pr-3 text-sm font-medium text-[#5f5f5f]"
+                >
+                  <ChevronLeft size={18} />
+                  목록
+                </button>
+              </div>
+
               <div className="mb-8 flex items-center justify-between gap-3">
                 <span className={`inline-flex rounded px-2.5 py-1 text-[13px] leading-5 font-medium ${getCategoryClassName(selectedEntry.category)}`}>
                   {selectedEntry.category || DEFAULT_CATEGORY_NAME}

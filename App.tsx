@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
-import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu } from 'lucide-react';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
 import { supabase } from './utils/supabase';
@@ -687,7 +687,8 @@ const DEFAULT_TODO_LISTS: TodoList[] = [
   { id: DEFAULT_ROUTINE_LIST_ID, title: '루틴 목록', order: 2, tabId: 'tab_routine' },
 ];
 
-const THEME_STORAGE_KEY = 'lifesync-ai-theme';
+const THEME_STORAGE_KEY = 'dayflow-theme';
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'dayflow-sidebar-collapsed';
 const THEME_META_COLOR = {
   light: '#ffffff',
   dark: '#0a0a0a',
@@ -871,7 +872,7 @@ const buildSettingsPatch = (previous: AppSettings, next: AppSettings): Partial<A
 const isMissingUserDataResourceError = (error: any): boolean =>
   error?.code === '42P01' || error?.code === '42703';
 
-const CACHE_PREFIX = 'lifesync_cache';
+const CACHE_PREFIX = 'dayflow_cache';
 const CACHE_VERSION = 'v2';
 const CACHE_KEYS = [
   'events',
@@ -1123,6 +1124,10 @@ const App: React.FC = () => {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error'>('idle');
   const [currentView, setCurrentView] = useState<ViewState>(() => resolveViewFromUrl());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+  });
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
   useEffect(() => {
@@ -1143,6 +1148,10 @@ const App: React.FC = () => {
       }
     });
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
 
   useEffect(() => {
     if (!isSettingsModalOpen) return;
@@ -2836,7 +2845,7 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `lifesync-export-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `dayflow-export-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -4095,11 +4104,22 @@ const App: React.FC = () => {
     <div className="flex h-[100dvh] bg-[#fbfbfa] font-sans selection:bg-black/10 relative overflow-x-hidden">
       {/* Full Page Loading Overlay Removed in v2.6 for "Instant" feel */}
       {/* Sidebar Navigation */}
-      <aside className="hidden lg:flex lg:w-[280px] xl:w-[300px] bg-white border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0">
+      <aside className={`hidden lg:flex ${isSidebarCollapsed ? 'lg:w-[76px] xl:w-[76px]' : 'lg:w-[280px] xl:w-[300px]'} bg-white border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0`}>
         <div>
           {/* Logo Section */}
-          <div className="h-16 px-6 flex items-center">
-            <span className="text-[15px] leading-5 font-medium text-[#171717]">LifeSync AI</span>
+          <div className={`h-[72px] flex items-center ${isSidebarCollapsed ? 'justify-center px-3' : 'justify-between gap-3 px-6'}`}>
+            {!isSidebarCollapsed && (
+              <span className="text-[20px] leading-7 font-medium text-[#171717]">Dayflow</span>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsSidebarCollapsed(prev => !prev)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
+              aria-label={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
+              title={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
+            >
+              {isSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
           </div>
 
           <nav className="px-3 space-y-1">
@@ -4108,21 +4128,25 @@ const App: React.FC = () => {
                 key={item.id}
                 onClick={() => item.id === 'chat' ? handleNewChat() : setCurrentView(item.id)}
                 className={`
-                  w-full flex items-center px-3 py-2.5 rounded-lg transition-colors group
+                  w-full flex items-center ${isSidebarCollapsed ? 'justify-center px-0 py-3' : 'px-3 py-2.5'} rounded-lg transition-colors group
                   ${currentView === item.id
                     ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'
                     : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}
                 `}
+                aria-label={item.label}
+                title={isSidebarCollapsed ? item.label : undefined}
               >
                 <item.icon size={18} className={currentView === item.id ? 'text-[var(--color-primary)]' : 'text-[#8a8a8a] group-hover:text-[#171717]'} strokeWidth={currentView === item.id ? 2.5 : 2} />
-                <span className={`ml-3 text-[15px] leading-5 ${currentView === item.id ? 'font-medium text-[var(--color-primary)]' : 'font-normal'}`}>
-                  {item.label}
-                </span>
+                {!isSidebarCollapsed && (
+                  <span className={`ml-3 text-[15px] leading-5 ${currentView === item.id ? 'font-medium text-[var(--color-primary)]' : 'font-normal'}`}>
+                    {item.label}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
           {
-            currentView === 'calendar' && (
+            !isSidebarCollapsed && currentView === 'calendar' && (
               <div className="hidden lg:block mt-6 pt-4 border-t border-[#e9e9e8] px-3">
                 <div className="px-3 mb-2">
                   <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">태그 필터</span>
@@ -4163,7 +4187,7 @@ const App: React.FC = () => {
             )
           }
           {
-            currentView === 'chat' && (
+            !isSidebarCollapsed && currentView === 'chat' && (
               <div className="hidden lg:block mt-6 pt-4 border-t border-[#e9e9e8] px-3">
                 <div className="flex items-center justify-between px-3 mb-2 group">
                   <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">채팅 기록</span>
@@ -4230,7 +4254,7 @@ const App: React.FC = () => {
           }
 
           {
-            currentView === 'board' && (
+            !isSidebarCollapsed && currentView === 'board' && (
               <div className="hidden lg:block mt-4 pt-4 border-t border-[#e9e9e8] px-3 space-y-6">
                 {/* AI Agents (Categories) */}
                 <div className="space-y-0.5">
@@ -4377,7 +4401,7 @@ const App: React.FC = () => {
           }
 
           {
-            currentView === 'journal' && (
+            !isSidebarCollapsed && currentView === 'journal' && (
               <div className="px-3 overflow-hidden">
                 <div className="border-t border-[#e9e9e8] pt-6 mt-6 mb-2 px-3">
                   <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">카테고리</span>
@@ -4454,16 +4478,16 @@ const App: React.FC = () => {
         </div>
 
         {/* Bottom Section: Pro & Auth */}
-        <div className="p-4 space-y-3">
+        <div className={isSidebarCollapsed ? 'p-3' : 'p-4 space-y-3'}>
           {currentUser ? (
             <button
               type="button"
               onClick={() => setIsSettingsModalOpen(true)}
-              className="w-full rounded-[14px] bg-white p-3 text-left transition-colors hover:bg-[#f7f7f7]"
+              className={`${isSidebarCollapsed ? 'mx-auto flex h-11 w-11 items-center justify-center rounded-xl p-0' : 'w-full rounded-[14px] p-3 text-left'} bg-white transition-colors hover:bg-[#f7f7f7]`}
               title="설정"
               aria-label="설정 열기"
             >
-              <div className="flex items-center gap-3 min-w-0">
+              <div className={`flex items-center min-w-0 ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
                 <div className="w-9 h-9 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[14px] leading-5 font-medium text-[#171717] flex-shrink-0 overflow-hidden">
                   {currentUser?.avatar ? (
                     <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
@@ -4471,25 +4495,31 @@ const App: React.FC = () => {
                     currentUser?.name?.[0] || 'J'
                   )}
                 </div>
-                <div className="min-w-0 flex-1 text-left">
-                  <div className="text-[14px] leading-5 font-medium text-[#171717] truncate">{currentUser?.name || 'JNMED'}</div>
-                  <div className="text-[13px] leading-5 font-normal text-[#8a8a8a] truncate mt-0.5">내 계정</div>
-                </div>
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
-                  <SettingsIcon size={16} />
-                </span>
+                {!isSidebarCollapsed && (
+                  <>
+                    <div className="min-w-0 flex-1 text-left">
+                      <div className="text-[14px] leading-5 font-medium text-[#171717] truncate">{currentUser?.name || 'JNMED'}</div>
+                      <div className="text-[13px] leading-5 font-normal text-[#8a8a8a] truncate mt-0.5">내 계정</div>
+                    </div>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
+                      <SettingsIcon size={16} />
+                    </span>
+                  </>
+                )}
               </div>
             </button>
           ) : (
-            <div className="px-1">
+            <div className={isSidebarCollapsed ? 'flex justify-center' : 'px-1'}>
               <button
                 onClick={() => {
                   setAuthMode('login');
                 }}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-[14px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all"
+                className={`${isSidebarCollapsed ? 'h-11 w-11 px-0' : 'w-full gap-2 px-3 py-2'} flex items-center justify-center border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-[14px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all`}
+                aria-label="로그인 / 가입하기"
+                title="로그인 / 가입하기"
               >
                 <UserIcon size={14} strokeWidth={3} />
-                로그인 / 가입하기
+                {!isSidebarCollapsed && '로그인 / 가입하기'}
               </button>
             </div>
           )}

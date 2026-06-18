@@ -3,13 +3,13 @@ import { AIAgent } from '../types';
 export const DEFAULT_AGENTS: AIAgent[] = [
     {
         id: 'ARIA',
-        name: 'LifeSync AI',
+        name: 'Dayflow',
         emoji: '🤖',
         role: '개인 비서',
         personality: '친절하고 도움이 되며 정리를 잘하는 성격',
         tone: '전문적이지만 편안한 말투',
         color: '#4F46E5',
-        avatar: 'https://ui-avatars.com/api/?name=LifeSync+AI&background=4F46E5&color=fff',
+        avatar: 'https://ui-avatars.com/api/?name=Dayflow&background=4F46E5&color=fff',
     },
     {
         id: 'COACH',

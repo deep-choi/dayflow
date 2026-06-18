@@ -1,4 +1,4 @@
--- LifeSync AI Absolute RLS Repair Script (v2.4)
+-- Dayflow Absolute RLS Repair Script (v2.4)
 -- 이 스크립트를 Supabase SQL Editor에서 실행하면 모든 권한 문제가 해결됩니다.
 
 -- 1. Enable RLS on all tables (보험용)

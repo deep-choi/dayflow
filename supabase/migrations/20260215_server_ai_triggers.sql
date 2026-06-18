@@ -1,4 +1,4 @@
--- Server-side AI trigger automation for LifeSync AI
+-- Server-side AI trigger automation for Dayflow
 -- Run this migration in Supabase SQL editor.
 
 create extension if not exists pgcrypto;

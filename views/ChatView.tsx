@@ -307,7 +307,7 @@ const ChatView: React.FC<ChatViewProps> = ({
             return {
                 id: 'onboarding-1',
                 role: 'assistant',
-                content: `${getTimeBasedGreeting()}\n\n처음 오셨네요! 저는 ${agent?.name || 'LifeSync AI'}예요. ${agent?.emoji || '💬'}\n당신의 일상을 함께 정리하고 더 나은 하루를 만들어 드릴게요.\n\n먼저, 뭐라고 불러드리면 될까요?`,
+                content: `${getTimeBasedGreeting()}\n\n처음 오셨네요! 저는 ${agent?.name || 'Dayflow'}예요. ${agent?.emoji || '💬'}\n당신의 일상을 함께 정리하고 더 나은 하루를 만들어 드릴게요.\n\n먼저, 뭐라고 불러드리면 될까요?`,
                 timestamp: new Date().toISOString(),
                 agentId: agent?.id,
                 action: { type: 'onboarding' },
@@ -1037,7 +1037,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             <div className={`flex flex-col min-w-0 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'} gap-2`}>
                                 {msg.role === 'assistant' && (
                                     <span className="text-xs font-medium text-[#9b9a97] mb-0 ml-1">
-                                        {messageAgent?.name || 'LifeSync AI'}
+                                        {messageAgent?.name || 'Dayflow'}
                                     </span>
                                 )}
 
@@ -1115,7 +1115,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             <span className="text-xs font-medium text-[#9b9a97] mb-1.5 ml-1">
                                 {activeAgents.length > 1
                                     ? `${activeAgents.length}명 페르소나 응답 생성 중`
-                                    : (primaryAgent?.name || 'LifeSync AI')}
+                                    : (primaryAgent?.name || 'Dayflow')}
                             </span>
                             <div className="bg-white text-[#9b9a97] p-4 rounded-2xl border border-[#e9e9e8] flex items-center gap-2">
                                 <div className="flex gap-1">
@@ -1212,13 +1212,13 @@ const ChatView: React.FC<ChatViewProps> = ({
                         </div>
                     )}
 
-                    <div className="flex items-center min-w-0 h-14 rounded-2xl border border-[#e9e9e8] bg-white focus-within:border-[#d4d4d4] transition-all">
+                    <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-2xl border border-[#e9e9e8] bg-white shadow-[0_8px_18px_rgba(15,23,42,0.045)] focus-within:border-[#d4d4d4] transition-all">
                         <button
                             type="button"
                             onClick={() => setShowToolbar(prev => !prev)}
                             className="shrink-0 w-12 h-full flex items-center justify-center text-[#787774] hover:text-[#37352f] transition-colors"
                             aria-label="대화 도구 열기"
-                            title={activeAgents.map((activeAgent) => activeAgent.name).join(', ') || 'LifeSync AI'}
+                            title={activeAgents.map((activeAgent) => activeAgent.name).join(', ') || 'Dayflow'}
                         >
                             <Plus size={17} />
                         </button>
@@ -1228,7 +1228,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             onChange={(e) => setInputValue(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                             placeholder={onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요..."}
-                            className="flex-1 min-w-0 h-full pr-5 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
+                            className="chat-input-field flex-1 min-w-0 h-full pr-5 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
                             disabled={isProcessing}
                         />
                     </div>

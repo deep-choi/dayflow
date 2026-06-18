@@ -16,7 +16,7 @@ const LandingView: React.FC<LandingViewProps> = ({ onGetStarted, onLogin }) => {
                         <div className="w-10 h-10 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-[14px] flex items-center justify-center transition-transform group-hover:rotate-6">
                             <Sparkles size={20} />
                         </div>
-                        <span className="text-xl font-normal tracking-tight">LifeSync AI</span>
+                        <span className="text-xl font-normal tracking-tight">Dayflow</span>
                     </div>
                     <div className="flex items-center gap-8">
                         <button
@@ -49,7 +49,7 @@ const LandingView: React.FC<LandingViewProps> = ({ onGetStarted, onLogin }) => {
                             <span className="text-[#171717]">연결하세요.</span>
                         </h1>
                         <p className="text-xl lg:text-2xl text-[#787774] max-w-2xl mx-auto font-normal animate-in fade-in slide-in-from-bottom-4 duration-700 delay-200">
-                            LifeSync AI는 단순한 노트를 넘어, 당신의 일정과 메모를 <br className="hidden lg:block" />
+                            Dayflow는 단순한 노트를 넘어, 당신의 일정과 메모를 <br className="hidden lg:block" />
                             분석하고 AI 동료들과 소통하는 새로운 경험을 제공합니다.
                         </p>
                         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
@@ -135,7 +135,7 @@ const LandingView: React.FC<LandingViewProps> = ({ onGetStarted, onLogin }) => {
                             <div className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center text-[#37352f] border border-[#e9e9e8] group-hover:scale-110 transition-transform">
                                 <Calendar size={24} />
                             </div>
-                            <h3 className="text-2xl font-normal tracking-tight">라이프 싱크 캘린더</h3>
+                            <h3 className="text-2xl font-normal tracking-tight">데이플로우 캘린더</h3>
                             <p className="text-[#787774] leading-relaxed">
                                 모든 일정과 일기, 할 일이 하나의 타임라인에서 만납니다. 과거를 회상하고 미래를 계획하는 가장 완벽한 방법입니다.
                             </p>
@@ -151,7 +151,7 @@ const LandingView: React.FC<LandingViewProps> = ({ onGetStarted, onLogin }) => {
                             동기화 하세요.
                         </h2>
                         <p className="text-xl text-[#787774] max-w-xl mx-auto">
-                            수천 명의 사용자가 LifeSync AI와 함께 더 나은 일상을 만들고 있습니다. <br />
+                            수천 명의 사용자가 Dayflow와 함께 더 나은 일상을 만들고 있습니다. <br />
                             첫 30일간 모든 프로 기능을 무료로 체험하세요.
                         </p>
                         <div className="pt-8">
@@ -173,7 +173,7 @@ const LandingView: React.FC<LandingViewProps> = ({ onGetStarted, onLogin }) => {
                         <div className="w-8 h-8 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-[10px] flex items-center justify-center">
                             <Sparkles size={16} />
                         </div>
-                        <span className="text-lg font-normal tracking-tight">LifeSync AI</span>
+                        <span className="text-lg font-normal tracking-tight">Dayflow</span>
                     </div>
                     <div className="flex gap-12 text-sm font-normal text-[#9b9a97]">
                         <span className="hover:text-[#37352f] cursor-pointer">기능 소개</span>
@@ -181,7 +181,7 @@ const LandingView: React.FC<LandingViewProps> = ({ onGetStarted, onLogin }) => {
                         <span className="hover:text-[#37352f] cursor-pointer">개인정보보호</span>
                         <span className="hover:text-[#37352f] cursor-pointer">고객지원</span>
                     </div>
-                    <p className="text-xs font-normal text-[#9b9a97]">© 2026 LifeSync AI. All rights reserved.</p>
+                    <p className="text-xs font-normal text-[#9b9a97]">© 2026 Dayflow. All rights reserved.</p>
                 </div>
             </footer>
         </div>

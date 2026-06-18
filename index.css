@@ -33,9 +33,9 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
   accent-color: var(--color-primary);
-  --color-primary: #a21caf;
-  --color-primary-hover: #c026d3;
-  --color-primary-light: #a21caf;
+  --color-primary: #0f766e;
+  --color-primary-hover: #0d9488;
+  --color-primary-light: #0f766e;
   --app-bg: #121212;
   --app-text: #e0e0e0;
   --app-surface: #1e1e1e;
@@ -54,12 +54,12 @@
   --app-accent-strong: #cecece;
   --app-point-surface: var(--color-primary);
   --app-point-hover: var(--color-primary-hover);
-  --app-point: #c026d3;
-  --app-point-strong: #d946ef;
+  --app-point: #5eead4;
+  --app-point-strong: #99f6e4;
   --app-point-soft: var(--color-primary-light);
-  --app-point-soft-hover: #c026d3;
-  --app-point-border: #c026d3;
-  --app-point-ring: rgba(192, 38, 211, 0.28);
+  --app-point-soft-hover: #0d9488;
+  --app-point-border: #2dd4bf;
+  --app-point-ring: rgba(45, 212, 191, 0.28);
   --app-success-surface: #1a1a1a;
   --app-danger-surface: #1a1a1a;
   --app-info-surface: #1a1a1a;
@@ -1005,6 +1005,39 @@ select {
   color: var(--app-text-faint) !important;
 }
 
+:root[data-theme='dark'] .chat-input-shell {
+  background-color: #232323 !important;
+  border-color: rgba(240, 240, 240, 0.14) !important;
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+:root[data-theme='dark'] .chat-input-shell:focus-within {
+  border-color: rgba(94, 234, 212, 0.34) !important;
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.2),
+    0 0 0 1px rgba(94, 234, 212, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme='dark'] .chat-input-shell .chat-input-field {
+  background-color: transparent !important;
+  border-color: transparent !important;
+}
+
+:root[data-theme='dark'] .chat-input-shell .chat-input-field::placeholder {
+  color: var(--app-text-muted) !important;
+}
+
+:root[data-theme='dark'] .chat-input-shell button {
+  color: var(--app-text-secondary) !important;
+}
+
+:root[data-theme='dark'] .chat-input-shell button:hover {
+  color: var(--app-text-primary) !important;
+}
+
 :root[data-theme='dark'] ::selection,
 :root[data-theme='dark'] *::selection {
   background: rgba(190, 190, 190, 0.12) !important;
@@ -1059,6 +1092,30 @@ select {
 :root[data-theme='dark'] .todo-color-swatch,
 :root[data-theme='dark'] .todo-tab-dot {
   background-color: var(--todo-tab-dark-color) !important;
+}
+
+:root[data-theme='dark'] .todo-check-control.is-unchecked {
+  background-color: rgba(255, 255, 255, 0.035) !important;
+  border-color: rgba(240, 240, 240, 0.58) !important;
+  box-shadow: inset 0 0 0 1px rgba(240, 240, 240, 0.08);
+}
+
+:root[data-theme='dark'] .todo-check-control.is-unchecked:hover {
+  background-color: rgba(45, 212, 191, 0.12) !important;
+  border-color: var(--app-point-border) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(45, 212, 191, 0.2),
+    0 0 0 3px rgba(45, 212, 191, 0.08);
+}
+
+:root[data-theme='dark'] .todo-subtask-check.is-unchecked {
+  background-color: rgba(255, 255, 255, 0.025) !important;
+  border-color: rgba(240, 240, 240, 0.44) !important;
+}
+
+:root[data-theme='dark'] .group\/subtask:hover .todo-subtask-check.is-unchecked {
+  background-color: rgba(45, 212, 191, 0.1) !important;
+  border-color: var(--app-point-border) !important;
 }
 
 :root[data-theme='dark'] .calendar-tag-filter-item.is-active {

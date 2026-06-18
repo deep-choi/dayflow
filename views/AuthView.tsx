@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Sparkles, Mail, Lock, User, ArrowRight, Github, Loader2 } from 'lucide-react';
+import { Mail, Lock, User, ArrowRight, Github, Loader2, KeyRound } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 
 interface AuthViewProps {
@@ -20,6 +20,25 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
         setIsLogin(initialMode !== 'signup');
         setError(null);
     }, [initialMode]);
+
+    useEffect(() => {
+        const readAuthError = () => {
+            const searchParams = new URLSearchParams(window.location.search);
+            const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+            return (
+                searchParams.get('error_description') ||
+                searchParams.get('error') ||
+                hashParams.get('error_description') ||
+                hashParams.get('error')
+            );
+        };
+
+        const authError = readAuthError();
+        if (!authError) return;
+
+        setError(decodeURIComponent(authError.replace(/\+/g, ' ')));
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -122,21 +141,20 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
     };
 
     return (
-        <div className="min-h-screen bg-[#fbfbfa] flex items-center justify-center p-6 font-sans">
-            <div className="max-w-[400px] w-full space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-1000">
-                {/* Logo & Header */}
-                <div className="text-center space-y-4">
-                    <div className="inline-flex items-center justify-center w-16 h-16 bg-[#f7f7f7] text-[#171717] rounded-[22px] mb-2 rotate-3 hover:rotate-0 transition-transform duration-500">
-                        <Sparkles size={32} />
-                    </div>
-                    <div className="space-y-1">
-                        <h1 className="text-[26px] leading-8 font-medium tracking-tight text-[#37352f]">LifeSync AI</h1>
-                        <p className="text-[#787774] font-medium">인공지능과 함께하는 완벽한 일상 기록</p>
-                    </div>
-                </div>
+        <div className="min-h-screen bg-[#fbfbfa] flex items-center justify-center px-6 py-10 font-sans">
+            <div className="grid w-full max-w-6xl items-center gap-10 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-20 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                <section className="space-y-4 text-center lg:text-left">
+                    <h1 className="text-[46px] leading-[1.05] font-medium text-[#171717] sm:text-[60px] lg:text-[76px]">
+                        Dayflow
+                    </h1>
+                    <p className="mx-auto max-w-[360px] text-[16px] leading-7 font-normal text-[#787774] lg:mx-0">
+                        인공지능과 함께하는 완벽한 일상 기록
+                    </p>
+                </section>
 
                 {/* Auth Card */}
-                <div className="bg-white border border-[#e9e9e8] rounded-3xl p-8 space-y-6">
+                <section className="w-full max-w-[400px] justify-self-center space-y-10 lg:justify-self-end">
+                    <div className="bg-white border border-[#e9e9e8] rounded-3xl p-8 space-y-6">
                     <div className="flex p-1 bg-[#f1f1f0] rounded-xl mb-4">
                         <button
                             onClick={() => setIsLogin(true)}
@@ -204,7 +222,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                             <div className="space-y-1.5">
                                 <label className="text-[13px] leading-5 font-medium text-[#787774] uppercase tracking-wider ml-1">API Key (선택)</label>
                                 <div className="relative">
-                                    <Sparkles size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9b9a97]" />
+                                    <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9b9a97]" />
                                     <input
                                         type="password"
                                         placeholder="AIza..."
@@ -262,13 +280,14 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                             <div className="w-4 h-4 bg-[#4285F4] rounded-sm flex items-center justify-center text-[13px] leading-4 text-white font-medium">G</div> Google
                         </button>
                     </div>
-                </div>
+                    </div>
 
                 {/* Footer */}
-                <p className="text-center text-[13px] leading-5 text-[#9b9a97] font-medium">
-                    계속 진행함으로써 LifeSync AI의 서비스 이용약관 및 <br />
-                    개인정보 처리방침에 동의하게 됩니다.
-                </p>
+                    <p className="text-center text-[13px] leading-5 text-[#9b9a97] font-medium">
+                        계속 진행함으로써 Dayflow의 서비스 이용약관 및 <br />
+                        개인정보 처리방침에 동의하게 됩니다.
+                    </p>
+                </section>
             </div>
         </div>
     );

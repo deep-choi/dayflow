@@ -18,7 +18,7 @@ const puppeteer = require('puppeteer');
     console.log('CURRENT URL AFTER LOAD:', currentUrl);
 
     const content = await page.content();
-    console.log('PAGE HAS AUTH VIEW:', content.includes('AuthView') || content.includes('로그인 / 가입하기') || content.includes('LifeSync AI') ? 'YES' : 'NO');
+    console.log('PAGE HAS AUTH VIEW:', content.includes('AuthView') || content.includes('로그인 / 가입하기') || content.includes('Dayflow') ? 'YES' : 'NO');
 
     await browser.close();
 })();

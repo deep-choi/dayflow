@@ -58,14 +58,14 @@ const Checkbox = ({ checked, onClick }: { checked: boolean; onClick: (e: React.M
   <button
     type="button"
     aria-pressed={checked}
-    className={`w-4 h-4 mt-0.5 rounded-full border flex-shrink-0 cursor-pointer transition-all flex items-center justify-center
+    className={`todo-check-control ${checked ? 'is-checked' : 'is-unchecked'} w-[18px] h-[18px] mt-0.5 rounded-full border flex-shrink-0 cursor-pointer transition-all flex items-center justify-center
       ${checked
         ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
         : 'border-[#5f6368] hover:bg-[#e8eaed]'
       }`}
     onClick={onClick}
   >
-    {checked && <Check size={10} className="text-white stroke-[3px]" />}
+    {checked && <Check size={11} className="text-white stroke-[3px]" />}
   </button>
 );
 
@@ -535,7 +535,7 @@ const SortableTodoItem = ({
                       <Check size={10} className="text-white stroke-[3px]" />
                     </div>
                   ) : (
-                    <div className="w-3.5 h-3.5 rounded border border-gray-300 group-hover/subtask:border-[#9bbcf3] bg-white transition-colors" />
+                    <div className="todo-subtask-check is-unchecked w-3.5 h-3.5 rounded border border-gray-300 group-hover/subtask:border-[#9bbcf3] bg-white transition-colors" />
                   )}
                 </div>
                 <span
@@ -1023,7 +1023,7 @@ const SortableList = ({
                                     <Check size={8} className="text-white stroke-[3px]" />
                                   </div>
                                 ) : (
-                                  <div className="w-3 h-3 rounded border border-gray-400 bg-transparent" />
+                                  <div className="todo-subtask-check is-unchecked w-3 h-3 rounded border border-gray-400 bg-transparent" />
                                 )}
                               </div>
                               <span className={`text-[11.5px] leading-snug ${st.completed ? 'text-gray-400 line-through' : 'text-gray-500'}`}>

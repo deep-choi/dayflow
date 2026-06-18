@@ -50,7 +50,7 @@ const estimateTokens = (text: string): number => {
 const logPromptBudget = (label: string, payload: Record<string, unknown>): void => {
   try {
     if (!(import.meta as any)?.env?.DEV) return;
-    console.info(`[LifeSync AI prompt budget] ${label}`, payload);
+    console.info(`[Dayflow prompt budget] ${label}`, payload);
   } catch {
     // Dev-only diagnostics should never affect chat generation.
   }
@@ -485,7 +485,7 @@ export const generateLifeInsight = async (
   };
 
   const prompt = `
-You are the LifeSync analysis assistant.
+You are the Dayflow analysis assistant.
 Write in Korean.
 
 Analyze this context:
@@ -613,7 +613,7 @@ export const generateChatResponse = async (
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const latestUserText = [...messageHistory].reverse().find((m) => m.role === "user")?.content || "";
 
-  const agentName = agent?.name || "LifeSync AI";
+  const agentName = agent?.name || "Dayflow";
   const agentRole = agent?.role || "인공지능 비서";
   const rawAgentPersonality = agent?.personality || "도움이 되고 관찰력이 좋으며 실용적인 성격";
   const rawAgentTone = agent?.tone?.trim() || "설정된 별도 말투 없음";
@@ -989,7 +989,7 @@ export const generateGroupChatResponses = async (
     .join("\n\n");
 
   const systemInstruction = `
-당신은 LifeSync의 다중 페르소나 채팅 조율자입니다.
+당신은 Dayflow의 다중 페르소나 채팅 조율자입니다.
 나열된 각 페르소나 id마다 정확히 하나의 답변을 생성하세요.
 
 대화 상황:

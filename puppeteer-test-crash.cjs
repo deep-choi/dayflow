@@ -18,7 +18,7 @@ const puppeteer = require('puppeteer');
     await new Promise(r => setTimeout(r, 2000));
 
     const content = await page.content();
-    console.log('IS PAGE BLANK?', content.includes('id="root"></div>') && !content.includes('LifeSync AI') ? 'YES BLANK' : 'NO');
+    console.log('IS PAGE BLANK?', content.includes('id="root"></div>') && !content.includes('Dayflow') ? 'YES BLANK' : 'NO');
     console.log('IS AUTH VIEW?', content.includes('AuthView') || content.includes('로그인') ? 'YES' : 'NO');
 
     await browser.close();

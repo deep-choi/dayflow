@@ -1,6 +1,6 @@
 import { ChatSession } from '../types';
 
-const DB_NAME = 'lifesync_local_cache';
+const DB_NAME = 'dayflow_local_cache';
 const DB_VERSION = 1;
 const CHAT_SESSION_STORE = 'chat_sessions_by_user';
 

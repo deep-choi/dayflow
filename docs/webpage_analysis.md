@@ -1,4 +1,4 @@
-# LifeSync AI Webpage Analysis (Static Code Analysis)
+# Dayflow Webpage Analysis (Static Code Analysis)
 
 본 문서는 로컬 웹 서버(`npm run dev`)를 직접 실행할 수 없는 환경에서, 프로젝트의 주요 뷰(`views/`) 컴포넌트 소스코드를 기반으로 UI 구조와 사용자 경험(UX) 기능을 역산하여 분석한 결과입니다.
 
