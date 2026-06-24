@@ -1,19 +1,21 @@
 import { AppSettings, ApiConnection } from '../types';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
-export const DEFAULT_XAI_MODEL = 'grok-4-1-fast-non-reasoning';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
+export const DEFAULT_XAI_MODEL = 'grok-4.3';
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 
-export interface GeminiModelOption {
+export interface ModelOption {
     id: string;
     label: string;
 }
 
-export interface XaiModelOption {
-    id: string;
-    label: string;
-}
-
-export const XAI_MODEL_OPTIONS: XaiModelOption[] = [
+export const XAI_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'grok-4.3', label: 'Grok 4.3' },
+    { id: 'grok-build-0.1', label: 'Grok Build 0.1' },
+    { id: 'grok-4.20-multi-agent', label: 'Grok 4.20 Multi-Agent' },
+    { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning (0309)' },
+    { id: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning (0309)' },
     { id: 'grok-4-1-fast-reasoning', label: 'Grok 4.1 Fast Reasoning' },
     { id: 'grok-4-1-fast-non-reasoning', label: 'Grok 4.1 Fast Non-Reasoning' },
     { id: 'grok-code-fast-1', label: 'Grok Code Fast 1' },
@@ -22,30 +24,54 @@ export const XAI_MODEL_OPTIONS: XaiModelOption[] = [
     { id: 'grok-4-0709', label: 'Grok 4 (0709)' },
     { id: 'grok-3-mini', label: 'Grok 3 Mini' },
     { id: 'grok-3', label: 'Grok 3' },
-    { id: 'grok-2-vision-1212', label: 'Grok 2 Vision (1212)' },
 ];
 
-export const GEMINI_MODEL_OPTIONS: GeminiModelOption[] = [
-    { id: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' },
+export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview' },
+    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite' },
     { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
-    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite Preview' },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
-    { id: 'gemini-2.5-flash-lite-preview-09-2025', label: 'Gemini 2.5 Flash-Lite Preview (09-2025)' },
     { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
     { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite' },
-    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+];
+
+export const OPENAI_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'gpt-5.5', label: 'GPT-5.5' },
+    { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
+    { id: 'gpt-5.4', label: 'GPT-5.4' },
+    { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro' },
+    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano' },
+    { id: 'gpt-5-mini', label: 'GPT-5 Mini' },
+    { id: 'gpt-5-nano', label: 'GPT-5 Nano' },
+    { id: 'gpt-4.1', label: 'GPT-4.1' },
+    { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+    { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano' },
+];
+
+export const ANTHROPIC_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'claude-fable-5', label: 'Claude Fable 5' },
+    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5' },
+    { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
 ];
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
+    'gemini-3.5': 'gemini-3.5-flash',
     'gemini-3.0-pro': 'gemini-3-pro-preview',
     'gemini-3.0-flash': 'gemini-3-flash-preview',
-    'gemini-3-pro': 'gemini-3-pro-preview',
+    'gemini-3-pro': 'gemini-3.1-pro-preview',
+    'gemini-3-pro-preview': 'gemini-3.1-pro-preview',
     'gemini-3-flash': 'gemini-3-flash-preview',
-    'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
-    'gemini-3.1-flashlite': 'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-flashlite': 'gemini-3.1-flash-lite',
+    'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite',
     'gemini-2.5-flashlite': 'gemini-2.5-flash-lite',
     'gemini-2.5-flash-lite-preview': 'gemini-2.5-flash-lite',
 };
@@ -62,10 +88,40 @@ export const normalizeGeminiModelName = (modelName?: string): string => {
     return isMediaGenerationModelName(aliased) ? DEFAULT_GEMINI_MODEL : aliased;
 };
 
+export const getDefaultModelForProvider = (provider: ApiConnection['provider']): string => {
+    if (provider === 'gemini') return DEFAULT_GEMINI_MODEL;
+    if (provider === 'xai') return DEFAULT_XAI_MODEL;
+    if (provider === 'openai') return DEFAULT_OPENAI_MODEL;
+    if (provider === 'anthropic') return DEFAULT_ANTHROPIC_MODEL;
+    return '';
+};
+
+export const getModelOptionsForProvider = (provider: ApiConnection['provider']): ModelOption[] => {
+    if (provider === 'gemini') return GEMINI_MODEL_OPTIONS;
+    if (provider === 'xai') return XAI_MODEL_OPTIONS;
+    if (provider === 'openai') return OPENAI_MODEL_OPTIONS;
+    if (provider === 'anthropic') return ANTHROPIC_MODEL_OPTIONS;
+    return [];
+};
+
+export const hasProviderModelOptions = (provider: ApiConnection['provider']): boolean => {
+    return getModelOptionsForProvider(provider).length > 0;
+};
+
+export const normalizeProviderModelName = (
+    provider: ApiConnection['provider'],
+    modelName?: string
+): string => {
+    const normalized = provider === 'gemini'
+        ? normalizeGeminiModelName(modelName)
+        : (modelName || '').trim();
+    const fallback = getDefaultModelForProvider(provider);
+    if (!normalized) return fallback;
+    return isMediaGenerationModelName(normalized) ? fallback : normalized;
+};
+
 const normalizeConnectionModelName = (connection: ApiConnection): string => {
-    if (connection.provider === 'gemini') return normalizeGeminiModelName(connection.modelName);
-    if (connection.provider === 'xai' && isMediaGenerationModelName(connection.modelName)) return DEFAULT_XAI_MODEL;
-    return connection.modelName;
+    return normalizeProviderModelName(connection.provider, connection.modelName);
 };
 
 export interface ActiveGeminiConfig {
@@ -81,7 +137,7 @@ export interface ActiveAIConfig {
     modelName: string;
 }
 
-const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini'];
+const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'xai', 'openai', 'anthropic'];
 
 export const isChatSupportedProvider = (provider: ApiConnection['provider']): boolean => {
     return CHAT_SUPPORTED_PROVIDERS.includes(provider);
@@ -99,6 +155,7 @@ export const getActiveAIConfig = (settings: AppSettings): ActiveAIConfig | null 
         c =>
             c.id === settings.activeConnectionId &&
             c.isActive &&
+            isChatSupportedProvider(c.provider) &&
             hasUsableKey(c)
     );
 
@@ -112,7 +169,7 @@ export const getActiveAIConfig = (settings: AppSettings): ActiveAIConfig | null 
     }
 
     // 2. Fallback to first active connection
-    const firstActive = connections.find(c => c.isActive && hasUsableKey(c));
+    const firstActive = connections.find(c => c.isActive && isChatSupportedProvider(c.provider) && hasUsableKey(c));
     if (firstActive) {
         return {
             connectionId: firstActive.id,

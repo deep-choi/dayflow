@@ -1,6 +1,17 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { CalendarEvent, JournalEntry, Todo, AiPost, AIAgent, ApiConnection } from "../types";
+import {
+  CalendarEvent,
+  JournalEntry,
+  Todo,
+  AiPost,
+  AIAgent,
+  ApiConnection,
+  ChatGeneratedAction,
+  ChatSingleGeneratedAction,
+} from "../types";
 import { DEFAULT_GEMINI_MODEL, normalizeGeminiModelName } from "../utils/aiConfig";
+import { callAnthropicChatAPI, callAnthropicChatJSON } from "./anthropicService";
+import { callOpenAIChatAPI, callOpenAIChatJSON } from "./openaiService";
 import { callXaiChatAPI, callXaiChatJSON } from "./xaiService";
 
 const CHAT_HISTORY_LIMIT = 8;
@@ -13,6 +24,8 @@ const CHAT_CONTINUATION_OUTPUT_TOKENS = 4096;
 const GROUP_CHAT_MAX_OUTPUT_TOKENS = 8192;
 const AGENT_TONE_CHAR_LIMIT = 1200;
 const AGENT_PROFILE_CHAR_LIMIT = 12000;
+const PERSONAL_CONTEXT_CHAR_LIMIT = 9000;
+const ACTION_JSON_MAX_ACTIONS = 5;
 const DEFAULT_USER_HONORIFIC = "사용자님";
 const LEGACY_USER_HONORIFIC_PATTERN = /주인님|오라버니/g;
 
@@ -361,6 +374,377 @@ const truncateForModel = (text: string, maxChars: number): string => {
   return `${normalized.slice(0, maxChars)}...`;
 };
 
+const clampText = (value: unknown, maxChars: number): string => {
+  if (typeof value !== "string") return "";
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars).trim()}...` : normalized;
+};
+
+const toLocalYmd = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseLocalYmd = (value?: string): Date | null => {
+  const match = (value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(year, month - 1, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+  return parsed;
+};
+
+const addLocalDays = (date: Date, days: number): Date => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const isYmdInRange = (value: string | undefined, start: string, end: string): boolean => {
+  if (!value || !parseLocalYmd(value)) return false;
+  return value >= start && value <= end;
+};
+
+const normalizeActionDate = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return parseLocalYmd(trimmed) ? trimmed : undefined;
+};
+
+const normalizeActionTime = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const match = value.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return undefined;
+  return `${match[1].padStart(2, "0")}:${match[2]}`;
+};
+
+const normalizeTodoCategory = (value: unknown): Todo["category"] | undefined => {
+  if (value === "work" || value === "personal" || value === "shopping" || value === "health") {
+    return value;
+  }
+  return undefined;
+};
+
+const normalizeJournalMood = (value: unknown): JournalEntry["mood"] | undefined => {
+  if (value === "good" || value === "neutral" || value === "bad") return value;
+  return undefined;
+};
+
+const getPersonalContextWindow = (latestUserText: string, today: Date): { start: string; end: string; label: string } => {
+  const text = latestUserText || "";
+  const explicitDate = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/)?.[1];
+  if (explicitDate && parseLocalYmd(explicitDate)) {
+    return { start: explicitDate, end: explicitDate, label: "명시 날짜" };
+  }
+  if (/어제/.test(text)) {
+    const y = toLocalYmd(addLocalDays(today, -1));
+    return { start: y, end: y, label: "어제" };
+  }
+  if (/내일/.test(text)) {
+    const t = toLocalYmd(addLocalDays(today, 1));
+    return { start: t, end: t, label: "내일" };
+  }
+  if (/오늘|지금|현재/.test(text)) {
+    const t = toLocalYmd(today);
+    return { start: t, end: t, label: "오늘" };
+  }
+  if (/다음\s*(주|주간)/.test(text)) {
+    return {
+      start: toLocalYmd(addLocalDays(today, 7)),
+      end: toLocalYmd(addLocalDays(today, 13)),
+      label: "다음 주",
+    };
+  }
+  if (/이번\s*(주|주간)|일주일|주간/.test(text)) {
+    return {
+      start: toLocalYmd(today),
+      end: toLocalYmd(addLocalDays(today, 6)),
+      label: "이번 주",
+    };
+  }
+  if (/다음\s*(달|월)/.test(text)) {
+    const start = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const end = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+    return { start: toLocalYmd(start), end: toLocalYmd(end), label: "다음 달" };
+  }
+  if (/이번\s*(달|월)/.test(text)) {
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    return { start: toLocalYmd(start), end: toLocalYmd(end), label: "이번 달" };
+  }
+  return {
+    start: toLocalYmd(today),
+    end: toLocalYmd(addLocalDays(today, 14)),
+    label: "다가오는 14일",
+  };
+};
+
+const shouldIncludePersonalDataContext = (latestUserText: string): boolean =>
+  /(일정|캘린더|스케줄|할\s*일|할일|투두|todo|마감|기한|메모|메모장|일기|기록|노트|오늘|내일|어제|이번|다음|계획|추가|넣어|등록|저장|작성|정리|뭐\s*있|뭐해|해야\s*할)/i.test(latestUserText || "");
+
+const formatEventForContext = (event: CalendarEvent): string => {
+  const time = event.isAllDay
+    ? "종일"
+    : [event.startTime, event.endTime].filter(Boolean).join("-") || "시간 없음";
+  const endDate = event.endDate && event.endDate !== event.date ? `~${event.endDate}` : "";
+  const description = event.description ? ` | ${clampText(event.description, 90)}` : "";
+  return `- ${event.date}${endDate} ${time} | ${clampText(event.title, 80)}${description}`;
+};
+
+const formatTodoForContext = (todo: Todo): string => {
+  const status = todo.completed ? "완료" : "미완료";
+  const due = todo.dueDate ? ` | 마감 ${todo.dueDate}` : "";
+  const category = todo.category ? ` | ${todo.category}` : "";
+  return `- [${status}] ${clampText(todo.text, 90)}${due}${category}`;
+};
+
+const formatJournalForContext = (entry: JournalEntry): string => {
+  const date = (entry.date || "").slice(0, 10) || "날짜 없음";
+  const category = entry.category ? ` | ${entry.category}` : "";
+  return `- ${date} | ${clampText(entry.title, 80)}${category} | ${clampText(entry.content, 160)}`;
+};
+
+const buildPersonalDataContext = (
+  events: CalendarEvent[],
+  todos: Todo[],
+  journalEntries: JournalEntry[],
+  latestUserText: string,
+  now: Date
+): string => {
+  if (!shouldIncludePersonalDataContext(latestUserText)) return "";
+
+  const today = toLocalYmd(now);
+  const window = getPersonalContextWindow(latestUserText, now);
+  const relevantEvents = (events || [])
+    .filter((event) => {
+      const eventStart = event.date;
+      const eventEnd = event.endDate || event.date;
+      return isYmdInRange(eventStart, window.start, window.end) || isYmdInRange(eventEnd, window.start, window.end);
+    })
+    .slice()
+    .sort((a, b) => `${a.date} ${a.startTime || ""}`.localeCompare(`${b.date} ${b.startTime || ""}`))
+    .slice(0, 14);
+
+  const relevantTodos = (todos || [])
+    .filter((todo) => {
+      if (!todo.completed) return true;
+      const todoDate = todo.dueDate || todo.startDate || todo.date;
+      return isYmdInRange(todoDate, window.start, window.end);
+    })
+    .slice()
+    .sort((a, b) => {
+      const aDate = a.dueDate || a.startDate || a.date || "9999-12-31";
+      const bDate = b.dueDate || b.startDate || b.date || "9999-12-31";
+      return aDate.localeCompare(bDate);
+    })
+    .slice(0, 18);
+
+  const recentJournal = (journalEntries || [])
+    .slice()
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+    .slice(0, 8);
+
+  const sections = [
+    `[사용자 데이터 요약]`,
+    `- 오늘 날짜: ${today}`,
+    `- 참고 범위: ${window.label} (${window.start} ~ ${window.end})`,
+    ``,
+    `관련 일정:`,
+    relevantEvents.length > 0 ? relevantEvents.map(formatEventForContext).join("\n") : "- 없음",
+    ``,
+    `할 일:`,
+    relevantTodos.length > 0 ? relevantTodos.map(formatTodoForContext).join("\n") : "- 없음",
+    ``,
+    `최근 메모장 기록:`,
+    recentJournal.length > 0 ? recentJournal.map(formatJournalForContext).join("\n") : "- 없음",
+  ];
+
+  return truncateForModel(sections.join("\n"), PERSONAL_CONTEXT_CHAR_LIMIT);
+};
+
+const buildChatActionInstruction = (today: string, currentTime: string): string => `
+앱 액션:
+- 사용자가 일정, 할 일, 메모장 기록을 "추가", "넣어", "등록", "저장", "작성"해 달라고 명확히 요청한 경우에만 액션을 만드세요.
+- 조회, 요약, 상담, 계획 정리 요청은 일반 답변만 하고 액션을 만들지 마세요.
+- 삭제와 수정은 아직 지원하지 않습니다. 삭제/수정 요청에는 직접 화면에서 처리하라고 안내하고 액션을 만들지 마세요.
+- 액션이 필요하면 일반 문장 대신 JSON 객체 하나만 반환하세요.
+- 현재 날짜는 ${today}, 현재 시간은 ${currentTime}입니다. 상대 날짜는 반드시 YYYY-MM-DD로 변환하세요.
+- 일정에 시간이 없으면 "isAllDay": true로 두세요. 할 일의 마감일이 불명확하면 dueDate를 생략하세요.
+- 여러 개를 한 번에 추가해야 하면 batch 액션을 사용하고 actions는 최대 ${ACTION_JSON_MAX_ACTIONS}개까지만 넣으세요.
+
+액션 JSON 형식:
+{"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"add_event","data":{"title":"런닝","date":"YYYY-MM-DD","startTime":"07:00","endTime":"08:00","isAllDay":false,"description":"선택"}}}
+{"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"add_todo","data":{"text":"포트폴리오 수정","dueDate":"YYYY-MM-DD","category":"personal","listName":"선택"}}}
+{"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"add_journal_entry","data":{"title":"아이디어","content":"기록할 내용","category":"메모장","mood":"neutral"}}}
+{"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"batch","actions":[{"type":"add_todo","data":{"text":"예시"}}]}}
+`;
+
+const extractJsonObjectText = (text: string): string | null => {
+  const value = (text || "").trim();
+  if (!value) return null;
+
+  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const source = fenced?.[1]?.trim() || value;
+  const start = source.indexOf("{");
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i];
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (ch === "\\") {
+        escaping = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") depth -= 1;
+    if (depth === 0) return source.slice(start, i + 1);
+  }
+
+  return null;
+};
+
+const normalizeSingleGeneratedAction = (raw: any): ChatSingleGeneratedAction | null => {
+  const type = String(raw?.type || raw?.action || "").trim();
+  const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+
+  if (type === "add_event") {
+    const title = clampText(data?.title, 120);
+    const date = normalizeActionDate(data?.date);
+    if (!title || !date) return null;
+    const startTime = normalizeActionTime(data?.startTime ?? data?.start_time);
+    const endTime = normalizeActionTime(data?.endTime ?? data?.end_time);
+    const endDate = normalizeActionDate(data?.endDate ?? data?.end_date);
+    return {
+      type: "add_event",
+      data: {
+        title,
+        date,
+        ...(endDate ? { endDate } : {}),
+        ...(startTime ? { startTime } : {}),
+        ...(endTime ? { endTime } : {}),
+        isAllDay: typeof data?.isAllDay === "boolean" ? data.isAllDay : !startTime,
+        ...(clampText(data?.description, 300) ? { description: clampText(data.description, 300) } : {}),
+        ...(clampText(data?.type, 60) ? { type: clampText(data.type, 60) } : {}),
+      },
+    };
+  }
+
+  if (type === "add_todo") {
+    const text = clampText(data?.text || data?.title, 160);
+    if (!text) return null;
+    const dueDate = normalizeActionDate(data?.dueDate ?? data?.due_date);
+    const category = normalizeTodoCategory(data?.category);
+    const listName = clampText(data?.listName ?? data?.list_name, 80);
+    return {
+      type: "add_todo",
+      data: {
+        text,
+        ...(dueDate ? { dueDate } : {}),
+        ...(category ? { category } : {}),
+        ...(listName ? { listName } : {}),
+      },
+    };
+  }
+
+  if (type === "add_journal_entry") {
+    const title = clampText(data?.title, 120) || "새 메모";
+    const content = clampText(data?.content || data?.text || data?.body, 1800);
+    if (!content) return null;
+    const category = clampText(data?.category, 80);
+    const mood = normalizeJournalMood(data?.mood);
+    return {
+      type: "add_journal_entry",
+      data: {
+        title,
+        content,
+        ...(category ? { category } : {}),
+        ...(mood ? { mood } : {}),
+      },
+    };
+  }
+
+  return null;
+};
+
+const normalizeGeneratedAction = (raw: any): ChatGeneratedAction => {
+  if (!raw || typeof raw !== "object") return { type: "none" };
+
+  const rawActions = Array.isArray(raw?.actions)
+    ? raw.actions
+    : (raw?.type === "batch" && Array.isArray(raw?.actions) ? raw.actions : null);
+
+  if (rawActions) {
+    const actions = rawActions
+      .slice(0, ACTION_JSON_MAX_ACTIONS)
+      .map((item: any) => normalizeSingleGeneratedAction(item))
+      .filter(Boolean) as ChatSingleGeneratedAction[];
+    if (actions.length === 0) return { type: "none" };
+    if (actions.length === 1) return actions[0];
+    return { type: "batch", actions };
+  }
+
+  const single = normalizeSingleGeneratedAction(raw);
+  return single || { type: "none" };
+};
+
+const parseChatActionEnvelope = (rawReply: string): { reply: string; action: ChatGeneratedAction } | null => {
+  const jsonText = extractJsonObjectText(rawReply);
+  if (!jsonText) return null;
+
+  try {
+    const parsed = JSON.parse(jsonText);
+    if (!parsed || typeof parsed !== "object") return null;
+    const actionSource = parsed.action || (Array.isArray(parsed.actions) ? { type: "batch", actions: parsed.actions } : parsed);
+    const action = normalizeGeneratedAction(actionSource);
+    const reply = clampText(parsed.reply || parsed.message || parsed.text, 2400);
+    if (action.type === "none" && !reply) return null;
+    return { reply, action };
+  } catch {
+    return null;
+  }
+};
+
+const finalizeChatResult = (
+  rawReply: string,
+  agentName: string,
+  otherPersonaNames: string[]
+): ChatActionResult => {
+  const envelope = parseChatActionEnvelope(rawReply || "");
+  const visibleRaw = envelope?.reply || rawReply || "";
+  const cleanedReply = stripCrossPersonaSpeech(
+    sanitizeAssistantReply(visibleRaw, agentName),
+    agentName,
+    otherPersonaNames
+  );
+  const finalReply = normalizeDefaultUserHonorific(formatVisibleReply(cleanedReply));
+  return {
+    reply: typeof finalReply === "string" && finalReply.trim() ? finalReply : "도와드릴게요.",
+    action: envelope?.action || sanitizeAction(),
+  };
+};
+
 const toModelContents = (
   messageHistory: { role: "user" | "assistant"; content: string }[],
   maxMessages: number,
@@ -370,6 +754,35 @@ const toModelContents = (
     role: msg.role === "user" ? "user" : "model",
     parts: [{ text: truncateForModel(msg.content, maxChars) }],
   }));
+
+type ProviderChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+const toProviderChatMessages = (
+  contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }>
+): ProviderChatMessage[] =>
+  contents.map((msg): ProviderChatMessage => ({
+    role: msg.role === "model" ? "assistant" : "user",
+    content: msg.parts.map((part) => part.text || "").join("").trim(),
+  })).filter((message) => message.content.length > 0);
+
+const callTextProviderChatAPI = async (
+  provider: ApiConnection["provider"],
+  apiKey: string,
+  messages: ProviderChatMessage[],
+  modelName: string,
+  options: { temperature?: number; maxTokens?: number } = {}
+): Promise<string> => {
+  if (provider === "xai") {
+    return callXaiChatAPI(apiKey, messages, undefined, modelName, options);
+  }
+  if (provider === "openai") {
+    return callOpenAIChatAPI(apiKey, messages, undefined, modelName, options);
+  }
+  if (provider === "anthropic") {
+    return callAnthropicChatAPI(apiKey, messages, undefined, modelName, options);
+  }
+  throw new Error(`${provider} provider is not supported for chat.`);
+};
 
 const readGeminiResponseText = (response: unknown): { text: string; finishReason?: string } => {
   const resp = response as any;
@@ -473,7 +886,6 @@ export const generateLifeInsight = async (
     throw new Error("API Key is required.");
   }
 
-  const ai = new GoogleGenAI({ apiKey });
   const today = new Date().toISOString().split("T")[0];
 
   const contextData = {
@@ -517,6 +929,43 @@ Output JSON with:
       };
     }
 
+    if (provider === 'openai') {
+      const parsed = await callOpenAIChatJSON(
+        apiKey,
+        `${prompt}\n\n반드시 "title", "content", "tags" 키를 가진 JSON 객체로만 답하세요.`,
+        [{ role: 'user', content: 'Generate the insight now.' }],
+        modelName,
+        { temperature: 0.5, maxTokens: 900 }
+      );
+      return {
+        id: crypto.randomUUID(),
+        title: parsed.title || "오늘의 인사이트",
+        content: parsed.content || "분석 결과를 생성하지 못했습니다.",
+        tags: Array.isArray(parsed.tags) ? parsed.tags : ["Insight", "Daily"],
+        date: new Date().toISOString(),
+        type: "analysis",
+      };
+    }
+
+    if (provider === 'anthropic') {
+      const parsed = await callAnthropicChatJSON(
+        apiKey,
+        `${prompt}\n\n반드시 "title", "content", "tags" 키를 가진 JSON 객체로만 답하세요.`,
+        [{ role: 'user', content: 'Generate the insight now.' }],
+        modelName,
+        { temperature: 0.5, maxTokens: 900 }
+      );
+      return {
+        id: crypto.randomUUID(),
+        title: parsed.title || "오늘의 인사이트",
+        content: parsed.content || "분석 결과를 생성하지 못했습니다.",
+        tags: Array.isArray(parsed.tags) ? parsed.tags : ["Insight", "Daily"],
+        date: new Date().toISOString(),
+        type: "analysis",
+      };
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
     const response = await generateGeminiContentWithRetry(ai, {
       model: normalizeGeminiModelName(modelName),
       contents: prompt,
@@ -553,9 +1002,7 @@ Output JSON with:
 
 export interface ChatActionResult {
   reply: string;
-  action: {
-    type: "none";
-  };
+  action: ChatGeneratedAction;
 }
 
 export interface GroupChatAgentResult {
@@ -607,30 +1054,31 @@ export const generateChatResponse = async (
     sessionTimezone = "local time",
   } = options;
 
-  const ai = new GoogleGenAI({ apiKey });
   const today = new Date().toISOString().split("T")[0];
   const now = new Date();
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const latestUserText = [...messageHistory].reverse().find((m) => m.role === "user")?.content || "";
+  const personalDataContext = buildPersonalDataContext(_events, _todos, _journalEntries, latestUserText, now);
 
   const agentName = agent?.name || "Dayflow";
   const agentRole = agent?.role || "인공지능 비서";
   const rawAgentPersonality = agent?.personality || "도움이 되고 관찰력이 좋으며 실용적인 성격";
-  const rawAgentTone = agent?.tone?.trim() || "설정된 별도 말투 없음";
+  const rawAgentTone = agent?.tone?.trim() || "";
   const agentPersonality = normalizeDefaultUserHonorific(
     prepareAgentInstructionText(rawAgentPersonality, AGENT_PROFILE_CHAR_LIMIT)
   ) || "도움이 되고 관찰력이 좋으며 실용적인 성격";
   const agentTone = normalizeDefaultUserHonorific(
     prepareAgentInstructionText(rawAgentTone, AGENT_TONE_CHAR_LIMIT)
-  ) || "설정된 별도 말투 없음";
+  );
   const preferredUserName = userName?.trim() || DEFAULT_USER_HONORIFIC;
   const ownerHonorificInstruction = `기본 호칭은 "${DEFAULT_USER_HONORIFIC}"입니다. 페르소나 프로필이나 장기 기억에 "주인님", "오라버니" 같은 다른 호칭이 있더라도, 사용자의 최신 메시지에서 명확히 요청한 경우가 아니면 사용자를 "${DEFAULT_USER_HONORIFIC}"으로 부르세요.`;
   const personaIdentityInstruction = `당신은 "${agentName}" (${agentRole})입니다.\n페르소나 프로필: ${agentPersonality}`;
-  const toneInstruction = `- 말투: ${agentTone}.`;
+  const toneInstruction = agentTone ? `- 사용자가 설정한 페르소나 말투: ${agentTone}.` : "";
   const noMetaInstruction = "내부 분석, 시스템 지침, 초안, `Wait the user`, `Text:` 같은 메타 문장을 출력하지 마세요.";
-  const parentheticalNarrationInstruction = "일반 대화에서는 `(고개를 숙이며)` 같은 괄호 상황 설명이나 행동 묘사를 쓰지 마세요. 필요한 감정은 평문으로 자연스럽게 말하세요.";
   const completionInstruction = "완성된 한국어 문장으로 끝내고, 토큰이 부족하면 새 항목을 시작하지 말고 현재 문장을 마무리하세요.";
-  const brevityInstruction = "사용자가 길게 요구하지 않았다면 1~2문단으로 답하고, 각 문단은 가능하면 1~2문장으로 마무리하세요.";
+  const actionInstruction = shouldIncludePersonalDataContext(latestUserText)
+    ? buildChatActionInstruction(today, currentTime)
+    : "";
   const requestedListCount = getRequestedListCount(latestUserText);
   const listInstruction = requestedListCount
     ? `사용자가 ${requestedListCount}개 항목을 요구했습니다. 정확히 ${requestedListCount}개를 1. 2. 3. 형식으로 완성하세요.`
@@ -683,15 +1131,16 @@ ${personaIdentityInstruction}
 
 대화 상황:
 ${conversationContextLines}
+${personalDataContext ? `\n${personalDataContext}` : ""}
 
 규칙:
 - ${ownerHonorificInstruction}
 ${toneInstruction}
 - ${noMetaInstruction}
-- ${parentheticalNarrationInstruction}
-- ${brevityInstruction}
 - ${completionInstruction}
 ${optionalInstructionLines}
+
+${actionInstruction}
 `;
 
   const xaiSystemInstruction = geminiSystemInstruction;
@@ -725,44 +1174,36 @@ ${optionalInstructionLines}
       maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
     });
 
-    // --- XAI branch ---
-    if (provider === 'xai') {
-      const xaiMessages = validContents.map(msg => ({
-        role: (msg.role === 'model' ? 'assistant' : msg.role) as 'user' | 'assistant',
-        content: msg.parts.map((p: any) => p.text).join(''),
-      }));
+    // --- OpenAI-compatible / Anthropic text providers ---
+    if (provider !== 'gemini') {
+      const providerMessages = toProviderChatMessages(validContents);
+      const systemMessage: ProviderChatMessage = {
+        role: "system",
+        content: `${xaiSystemInstruction}\n\n일반 답변은 텍스트만 반환하세요. 앱 액션이 필요한 경우에만 위의 액션 JSON 형식을 사용하세요.`,
+      };
 
       try {
-        let rawReply = await callXaiChatAPI(
+        let rawReply = await callTextProviderChatAPI(
+          provider,
           apiKey,
-          [
-            {
-              role: "system",
-              content: `${xaiSystemInstruction}\n\n대화 답변 텍스트만 반환하세요. JSON으로 감싸지 마세요.`,
-            },
-            ...xaiMessages,
-          ],
-          undefined,
+          [systemMessage, ...providerMessages],
           modelName,
           { temperature: 0.68, maxTokens: CHAT_MAX_OUTPUT_TOKENS }
         );
 
         if (rawReply && shouldRepairStructuredReply(latestUserText, rawReply)) {
-          const repairedReply = await callXaiChatAPI(
+          const repairedReply = await callTextProviderChatAPI(
+            provider,
             apiKey,
             [
-              {
-                role: "system",
-                content: `${xaiSystemInstruction}\n\n대화 답변 텍스트만 반환하세요. JSON으로 감싸지 마세요.`,
-              },
-              ...xaiMessages,
+              systemMessage,
+              ...providerMessages,
               { role: "assistant", content: rawReply },
               {
                 role: "user",
                 content: buildStructuredRepairPrompt(latestUserText, rawReply),
               },
             ],
-            undefined,
             modelName,
             { temperature: 0.55, maxTokens: CHAT_MAX_OUTPUT_TOKENS }
           );
@@ -778,26 +1219,23 @@ ${optionalInstructionLines}
           const replyBeforeContinuation = stripDanglingReplyTail(rawReply) || rawReply;
           let continuation = "";
           try {
-            continuation = await callXaiChatAPI(
+            continuation = await callTextProviderChatAPI(
+              provider,
               apiKey,
               [
-                {
-                  role: "system",
-                  content: `${xaiSystemInstruction}\n\n대화 답변 텍스트만 반환하세요. JSON으로 감싸지 마세요.`,
-                },
-                ...xaiMessages,
+                systemMessage,
+                ...providerMessages,
                 { role: "assistant", content: replyBeforeContinuation },
                 {
                   role: "user",
                   content: buildContinuationPrompt(latestUserText, replyBeforeContinuation),
                 },
               ],
-              undefined,
               modelName,
               { temperature: 0.35, maxTokens: CHAT_CONTINUATION_OUTPUT_TOKENS }
             );
           } catch (error) {
-            console.warn("XAI chat continuation failed:", error);
+            console.warn(`${provider} chat continuation failed:`, error);
             rawReply = replyBeforeContinuation;
             break;
           }
@@ -808,22 +1246,15 @@ ${optionalInstructionLines}
             break;
           }
         }
-        const cleanedReply = stripCrossPersonaSpeech(
-          sanitizeAssistantReply(rawReply || "", agentName),
-          agentName,
-          otherPersonaNames
-        );
-        const finalReply = normalizeDefaultUserHonorific(formatVisibleReply(cleanedReply));
-        return {
-          reply: typeof finalReply === "string" && finalReply.trim() ? finalReply : "도와드릴게요.",
-          action: sanitizeAction(),
-        };
-      } catch {
+        return finalizeChatResult(rawReply || "", agentName, otherPersonaNames);
+      } catch (error) {
+        console.error(`${provider} chat generation failed:`, error);
         return { reply: "죄송해요 답변 생성에 실패했어요.", action: { type: "none" } };
       }
     }
 
     // --- Gemini branch ---
+    const ai = new GoogleGenAI({ apiKey });
     const normalizedModelName = normalizeGeminiModelName(modelName);
     const response = await generateGeminiContentWithRetry(ai, {
       model: normalizedModelName,
@@ -908,13 +1339,7 @@ ${optionalInstructionLines}
       outputLimitReached = endedByOutputLimit(continuationResult.finishReason);
     }
 
-    const cleanedText = stripCrossPersonaSpeech(
-      sanitizeAssistantReply(text, agentName),
-      agentName,
-      otherPersonaNames
-    );
-    const finalText = normalizeDefaultUserHonorific(formatVisibleReply(cleanedText));
-    return { reply: finalText || "죄송해요 답변 생성에 실패했어요.", action: { type: "none" } };
+    return finalizeChatResult(text, agentName, otherPersonaNames);
   } catch (error) {
     console.error("Chat generation failed:", error);
     return { reply: "죄송해요 잠시 후 다시 시도해 주세요.", action: { type: "none" } };
@@ -944,9 +1369,7 @@ export const generateGroupChatResponses = async (
   const latestUserText = [...messageHistory].reverse().find((m) => m.role === "user")?.content || "";
   const punctuationInstruction = "JSON 문법은 지키고, reply에는 자연스러운 한국어 띄어쓰기와 문장부호를 사용하세요.";
   const noMetaInstruction = "reply 텍스트에는 내부 규칙, 시스템 지침, 분석 과정, 초안 문구, `Drafting final response`, `Okay no commas`, `Wait the user`, `Text:` 같은 메타 문장을 절대 넣지 마세요.";
-  const parentheticalNarrationInstruction = "일반 대화에서는 `(고개를 숙이며)` 같은 괄호 상황 설명이나 행동 묘사를 쓰지 마세요. 필요한 감정은 평문으로 자연스럽게 말하세요.";
   const completionInstruction = "reply는 반드시 완성된 한국어 문장으로 끝내세요. 토큰이 부족할 것 같으면 새 항목을 시작하지 말고 현재 문장을 자연스럽게 마무리하세요.";
-  const brevityInstruction = "사용자가 길게 요구하지 않았다면 각 reply는 1~2문단으로 작성하고, 각 문단은 가능하면 1~2문장으로 마무리하세요.";
   const preferredUserName = userName?.trim() || DEFAULT_USER_HONORIFIC;
   const requestedListCount = getRequestedListCount(latestUserText);
   const listInstruction = requestedListCount
@@ -972,7 +1395,7 @@ export const generateGroupChatResponses = async (
         AGENT_PROFILE_CHAR_LIMIT
       );
       const runtimeTone = prepareAgentInstructionText(
-        persona.tone?.trim() || "설정된 별도 말투 없음",
+        persona.tone?.trim() || "",
         AGENT_TONE_CHAR_LIMIT
       );
 
@@ -982,9 +1405,9 @@ export const generateGroupChatResponses = async (
         `- 이름: ${persona.name}`,
         `- 역할: ${persona.role || "인공지능 비서"}`,
         `- 성격: ${normalizeDefaultUserHonorific(runtimePersonality) || "도움이 되고 실용적인 성격"}`,
-        `- 말투: ${normalizeDefaultUserHonorific(runtimeTone) || "설정된 별도 말투 없음"}`,
+        runtimeTone ? `- 말투: ${normalizeDefaultUserHonorific(runtimeTone)}` : "",
         memory ? `- 기억:\n${memory}` : "- 기억: 없음",
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     })
     .join("\n\n");
 
@@ -997,8 +1420,6 @@ ${conversationContextLines}
 
 문장부호 규칙: ${punctuationInstruction}
 메타 출력 금지: ${noMetaInstruction}
-괄호 묘사 규칙: ${parentheticalNarrationInstruction}
-분량 규칙: ${brevityInstruction}
 완결성 규칙: ${completionInstruction}
 사용자가 최신 메시지에서 다른 호칭을 명확히 요청하지 않는 한 사용자를 "${DEFAULT_USER_HONORIFIC}"으로 부르세요. 페르소나 프로필이나 기억에 "주인님", "오라버니" 같은 다른 호칭이 있어도 이 기본 호칭 규칙을 우선하세요.
 ${optionalInstructionLines}

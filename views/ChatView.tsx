@@ -1,5 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { CalendarEvent, Todo, JournalEntry, AiPost, TodoList, AppSettings, AIAgent, ChatMessage, ChatSession } from '../types';
+import {
+    CalendarEvent,
+    Todo,
+    JournalEntry,
+    AiPost,
+    TodoList,
+    AppSettings,
+    AIAgent,
+    ChatMessage,
+    ChatSession,
+    ChatGeneratedAction,
+    ChatMessageAction,
+    ChatSingleGeneratedAction,
+} from '../types';
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
 import { Sparkles, Plus } from '../components/Icons';
 import { Edit3, Save, X } from 'lucide-react';
@@ -15,10 +28,10 @@ interface ChatViewProps {
     entries: JournalEntry[];
     posts: AiPost[];
     todoLists: TodoList[];
-    onAddEvent: (event: CalendarEvent) => void;
+    onAddEvent: (event: CalendarEvent) => void | Promise<void>;
     onDeleteEvent: (id: string) => void;
-    onAddTodo: (text: string, listId?: string, dueDate?: string, category?: Todo['category']) => void;
-    onAddEntry: (title: string, content: string, category?: string, mood?: JournalEntry['mood']) => void;
+    onAddTodo: (text: string, listId?: string, dueDate?: string, stepId?: string, category?: Todo['category']) => void | Promise<void>;
+    onAddEntry: (title: string, content: string, category?: string, mood?: JournalEntry['mood']) => void | Promise<void>;
     onAddPost: (post: AiPost) => void;
     requireConfirm?: boolean;
     settings: AppSettings;
@@ -257,6 +270,71 @@ const renderRichMessage = (content: string): React.ReactNode => {
     return <div className="space-y-1">{nodes}</div>;
 };
 
+const isExecutableAction = (action?: ChatMessageAction | null): action is Exclude<ChatMessageAction, { type: 'onboarding' }> =>
+    Boolean(action && action.type !== 'onboarding');
+
+const toPendingMessageAction = (action: ChatGeneratedAction | null | undefined): ChatMessageAction | null => {
+    if (!action || action.type === 'none') return null;
+    if (action.type === 'batch') {
+        const actions = action.actions.filter(Boolean).slice(0, 5).map((item) => ({
+            ...item,
+            status: item.status || 'pending',
+            executed: Boolean(item.executed),
+        })) as ChatSingleGeneratedAction[];
+        if (actions.length === 0) return null;
+        if (actions.length === 1) return { ...actions[0], status: 'pending', executed: false };
+        return { type: 'batch', actions, status: 'pending', executed: false };
+    }
+    return { ...action, status: action.status || 'pending', executed: Boolean(action.executed) };
+};
+
+const getActionItems = (action: ChatMessageAction): ChatSingleGeneratedAction[] => {
+    if (action.type === 'batch') return action.actions || [];
+    if (action.type === 'add_event' || action.type === 'add_todo' || action.type === 'add_journal_entry') return [action];
+    return [];
+};
+
+const getActionKindLabel = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') return '일정';
+    if (action.type === 'add_todo') return '할 일';
+    return '메모';
+};
+
+const formatDateTimeSummary = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') {
+        const { date, endDate, startTime, endTime, isAllDay } = action.data;
+        const dateText = endDate && endDate !== date ? `${date} ~ ${endDate}` : date;
+        if (isAllDay || !startTime) return `${dateText} · 종일`;
+        return `${dateText} · ${startTime}${endTime ? `-${endTime}` : ''}`;
+    }
+    if (action.type === 'add_todo') {
+        return action.data.dueDate ? `마감 ${action.data.dueDate}` : '마감일 없음';
+    }
+    return action.data.category || '메모장';
+};
+
+const getActionPrimaryText = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') return action.data.title;
+    if (action.type === 'add_todo') return action.data.text;
+    return action.data.title;
+};
+
+const getActionSecondaryText = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') return action.data.description || '';
+    if (action.type === 'add_todo') {
+        const parts = [action.data.category, action.data.listName].filter(Boolean);
+        return parts.join(' · ');
+    }
+    return action.data.content;
+};
+
+const getActionStatusLabel = (action: ChatMessageAction): string => {
+    if (action.status === 'completed') return '추가 완료';
+    if (action.status === 'cancelled') return '취소됨';
+    if (action.status === 'failed') return '실패';
+    return '확인 대기';
+};
+
 // Helper: Get time-based greeting
 const getTimeBasedGreeting = (): string => {
     const hour = new Date().getHours();
@@ -337,6 +415,7 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [agentEditorTab, setAgentEditorTab] = useState<PersonaEditorTab>('profile');
     const [isSavingAgent, setIsSavingAgent] = useState(false);
     const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
+    const [executingActionMessageId, setExecutingActionMessageId] = useState<string | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const pendingSessionHydrationRef = useRef(false);
     const hydratingSessionIdRef = useRef<string | null>(null);
@@ -360,7 +439,7 @@ const ChatView: React.FC<ChatViewProps> = ({
         : (availableAgents.length > 0 ? [availableAgents[0]] : []);
     const primaryAgent = activeAgents[0] || agent || availableAgents[0];
     const supportedChatConnections = (settings.apiConnections || []).filter(
-        (connection) => connection.provider === 'gemini'
+        (connection) => isChatSupportedProvider(connection.provider)
     );
     const updateApiUsage = (stats?: Partial<ApiUsageStats>, context?: UsageContext) => {
         if (!stats || !onUpdateSettings) return;
@@ -607,24 +686,115 @@ const ChatView: React.FC<ChatViewProps> = ({
         return null;
     };
 
-    const mapGeminiActionToChatAction = (action: ChatActionResult['action'] | null | undefined): ChatMessage['action'] | null => {
-        if (!action || action.type === 'none') return null;
-        return null;
+    const mapGeminiActionToChatAction = (action: ChatActionResult['action'] | null | undefined): ChatMessage['action'] | null =>
+        toPendingMessageAction(action);
+
+    const resolveTodoListId = (listName?: string): string | undefined => {
+        const normalized = (listName || '').trim().toLowerCase();
+        if (!normalized) return todoLists[0]?.id;
+        const matched = todoLists.find((list) => {
+            const title = (list.title || '').trim().toLowerCase();
+            return Boolean(title) && (title === normalized || title.includes(normalized) || normalized.includes(title));
+        });
+        return matched?.id || todoLists[0]?.id;
     };
 
-    const executeAction = async (action: ChatMessage['action']) => {
-        if (!action) return;
+    const executeSingleAction = async (action: ChatSingleGeneratedAction): Promise<ChatSingleGeneratedAction> => {
+        try {
+            if (action.type === 'add_event') {
+                const event: CalendarEvent = {
+                    id: crypto.randomUUID(),
+                    title: action.data.title,
+                    date: action.data.date,
+                    endDate: action.data.endDate,
+                    startTime: action.data.isAllDay ? undefined : action.data.startTime,
+                    endTime: action.data.isAllDay ? undefined : action.data.endTime,
+                    isAllDay: action.data.isAllDay ?? !action.data.startTime,
+                    description: action.data.description,
+                    type: action.data.type || 'tag_1',
+                };
+                await onAddEvent(event);
+                return { ...action, status: 'completed', executed: true };
+            }
 
-        switch (action.type) {
-            case 'onboarding':
-                if (action.data?.step === 1) {
-                    setUserName(action.data.name);
-                    setOnboardingStep(1);
-                } else if (action.data?.step === 2) {
-                    setOnboardingStep(-1); // Onboarding complete
-                }
-                break;
+            if (action.type === 'add_todo') {
+                await onAddTodo(
+                    action.data.text,
+                    resolveTodoListId(action.data.listName),
+                    action.data.dueDate,
+                    undefined,
+                    action.data.category || 'personal'
+                );
+                return { ...action, status: 'completed', executed: true };
+            }
+
+            await onAddEntry(
+                action.data.title,
+                action.data.content,
+                action.data.category || '메모장',
+                action.data.mood || 'neutral'
+            );
+            return { ...action, status: 'completed', executed: true };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '알 수 없는 오류';
+            return { ...action, status: 'failed', executed: false, error: message };
         }
+    };
+
+    const executeAction = async (action: ChatMessage['action']): Promise<ChatMessage['action']> => {
+        if (!action) return action;
+
+        if (action.type === 'onboarding') {
+            if (action.data?.step === 1) {
+                setUserName(action.data.name);
+                setOnboardingStep(1);
+            } else if (action.data?.step === 2) {
+                setOnboardingStep(-1); // Onboarding complete
+            }
+            return { ...action, status: 'completed', executed: true };
+        }
+
+        if (action.type === 'batch') {
+            const executedActions = [];
+            for (const item of action.actions || []) {
+                executedActions.push(await executeSingleAction(item));
+            }
+            const hasFailure = executedActions.some((item) => item.status === 'failed');
+            return {
+                ...action,
+                actions: executedActions,
+                status: hasFailure ? 'failed' : 'completed',
+                executed: !hasFailure,
+                error: hasFailure ? '일부 항목을 추가하지 못했어요.' : undefined,
+            };
+        }
+
+        return executeSingleAction(action);
+    };
+
+    const handleConfirmMessageAction = async (messageId: string, action: ChatMessageAction) => {
+        if (!isExecutableAction(action) || executingActionMessageId) return;
+        setExecutingActionMessageId(messageId);
+        try {
+            const updatedAction = await executeAction(action);
+            setMessages((prev) => prev.map((message) =>
+                message.id === messageId ? { ...message, action: updatedAction || undefined } : message
+            ));
+        } finally {
+            setExecutingActionMessageId(null);
+        }
+    };
+
+    const handleCancelMessageAction = (messageId: string, action: ChatMessageAction) => {
+        if (!isExecutableAction(action)) return;
+        const cancelledAction: ChatMessageAction = {
+            ...action,
+            status: 'cancelled',
+            executed: false,
+        };
+        setMessages((prev) => prev.map((message) =>
+            message.id === messageId ? { ...message, action: cancelledAction } : message
+        ));
     };
 
     const getResponseForAction = (action: ChatMessage['action'] | null, userText: string): { content: string; quickReplies?: string[] } => {
@@ -895,7 +1065,10 @@ const ChatView: React.FC<ChatViewProps> = ({
                             }
                         );
 
-                        mapGeminiActionToChatAction(result.action);
+                        let chatAction = index === 0 ? mapGeminiActionToChatAction(result.action) : null;
+                        if (chatAction && !requireConfirm) {
+                            chatAction = await executeAction(chatAction);
+                        }
                         updateApiUsage({
                             totalRequests: 1,
                             totalTokens: 0,
@@ -913,6 +1086,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             content: result.reply || (index === 0 ? '도와드릴게요 사용자님.' : `${currentAgent.name}입니다. 이어서 도와드릴게요.`),
                             timestamp: new Date().toISOString(),
                             agentId: currentAgent.id,
+                            action: chatAction || undefined,
                         };
 
                         return { message: withConfigMeta(assistantMessage, agentConfig), config: agentConfig };
@@ -960,7 +1134,10 @@ const ChatView: React.FC<ChatViewProps> = ({
                         }
                     );
 
-                    mapGeminiActionToChatAction(result.action);
+                    let chatAction = mapGeminiActionToChatAction(result.action);
+                    if (chatAction && !requireConfirm) {
+                        chatAction = await executeAction(chatAction);
+                    }
                     updateApiUsage({
                         totalRequests: 1,
                         totalTokens: 0,
@@ -978,6 +1155,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                         content: result.reply || '도와드릴게요 사용자님.',
                         timestamp: new Date().toISOString(),
                         agentId: singleAgent?.id,
+                        action: chatAction || undefined,
                     };
                     setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
                 }
@@ -1009,6 +1187,92 @@ const ChatView: React.FC<ChatViewProps> = ({
 
     const handleQuickReply = (reply: string) => {
         handleSend(reply);
+    };
+
+    const renderActionCard = (msg: ChatMessage): React.ReactNode => {
+        const action = msg.action;
+        if (!isExecutableAction(action)) return null;
+
+        const items = getActionItems(action);
+        if (items.length === 0) return null;
+
+        const isPending = !action.status || action.status === 'pending';
+        const isBusy = executingActionMessageId === msg.id;
+        const statusLabel = getActionStatusLabel(action);
+
+        return (
+            <div className="w-full max-w-full rounded-2xl border border-[#e9e9e8] bg-[#fbfbfa] p-3.5 shadow-[0_4px_12px_rgba(15,23,42,0.035)]">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="text-sm font-medium text-[#37352f]">
+                            {items.length > 1 ? `${items.length}개 항목 추가` : `${getActionKindLabel(items[0])} 추가`}
+                        </div>
+                        <div className="mt-0.5 text-xs text-[#9b9a97]">{statusLabel}</div>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${action.status === 'completed'
+                        ? 'bg-[#edf7f1] text-[#2f7d4f]'
+                        : action.status === 'failed'
+                            ? 'bg-[#fff1f0] text-[#b42318]'
+                            : action.status === 'cancelled'
+                                ? 'bg-[#f1f1f0] text-[#787774]'
+                                : 'bg-white text-[#787774] border border-[#e9e9e8]'}`}
+                    >
+                        {statusLabel}
+                    </span>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                    {items.map((item, idx) => {
+                        const secondary = getActionSecondaryText(item);
+                        return (
+                            <div key={`${item.type}-${idx}`} className="rounded-xl border border-[#eeeeec] bg-white px-3 py-2.5">
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-[#9b9a97]">
+                                    <span>{getActionKindLabel(item)}</span>
+                                    <span>·</span>
+                                    <span>{formatDateTimeSummary(item)}</span>
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-[#37352f] break-words">
+                                    {getActionPrimaryText(item)}
+                                </div>
+                                {secondary && (
+                                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-[#787774] break-words">
+                                        {secondary}
+                                    </div>
+                                )}
+                                {item.status === 'failed' && item.error && (
+                                    <div className="mt-1 text-xs text-[#b42318]">{item.error}</div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {action.status === 'failed' && action.error && (
+                    <div className="mt-2 text-xs text-[#b42318]">{action.error}</div>
+                )}
+
+                {isPending && (
+                    <div className="mt-3 flex justify-end gap-2">
+                        <button
+                            type="button"
+                            onClick={() => handleCancelMessageAction(msg.id, action)}
+                            disabled={isBusy}
+                            className="px-3 py-1.5 rounded-lg border border-[#dcdcd9] bg-white text-sm text-[#37352f] hover:bg-[#f7f7f5] transition-colors disabled:opacity-60"
+                        >
+                            취소
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleConfirmMessageAction(msg.id, action)}
+                            disabled={isBusy}
+                            className="px-3 py-1.5 rounded-lg bg-[var(--color-primary)] text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-60"
+                        >
+                            {isBusy ? '추가 중...' : '추가하기'}
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
     };
 
     return (
@@ -1077,6 +1341,9 @@ const ChatView: React.FC<ChatViewProps> = ({
                                         />
                                     </div>
                                 )}
+
+                                {msg.role === 'assistant' && renderActionCard(msg)}
+
                                 {/* Quick Replies - Only for the first message */}
                                 {msg.role === 'assistant' && index === 0 && msg.quickReplies && msg.quickReplies.length > 0 && (
                                     <div className="flex flex-wrap gap-2 mt-1 max-w-full">

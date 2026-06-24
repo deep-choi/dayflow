@@ -5,6 +5,7 @@ import { DEFAULT_AGENTS } from '../data/defaultAgents';
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
 import AvatarCropperModal from '../components/AvatarCropperModal';
+import { isChatSupportedProvider } from '../utils/aiConfig';
 
 interface PersonaSettingsViewProps {
   agents: AIAgent[];
@@ -64,7 +65,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   const [memoryPanelAgentId, setMemoryPanelAgentId] = useState<string | null>(null);
   const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
   const supportedChatConnections = (settings.apiConnections || []).filter(
-    (connection) => connection.provider === 'gemini'
+    (connection) => isChatSupportedProvider(connection.provider)
   );
 
   const editingTarget = useMemo(

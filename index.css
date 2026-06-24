@@ -964,6 +964,26 @@ select {
   line-height: 1.25rem !important;
 }
 
+:root[data-theme='dark'] .journal-entry-list-item {
+  background-color: transparent !important;
+}
+
+:root[data-theme='dark'] .journal-entry-list-item:not(.is-selected):hover {
+  background-color: rgba(255, 255, 255, 0.035) !important;
+}
+
+:root[data-theme='dark'] .journal-entry-list-item.is-selected {
+  background-color: rgba(15, 118, 110, 0.16) !important;
+  border-left-color: var(--app-point-border) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(45, 212, 191, 0.14),
+    inset 4px 0 0 rgba(45, 212, 191, 0.34);
+}
+
+:root[data-theme='dark'] .journal-entry-list-item.is-selected:hover {
+  background-color: rgba(15, 118, 110, 0.2) !important;
+}
+
 :root[data-theme='dark'] .placeholder-\[\#d3d1cb\]::placeholder,
 :root[data-theme='dark'] .placeholder-\[\#b1b0ad\]::placeholder,
 :root[data-theme='dark'] .placeholder-\[\#c8c8c8\]::placeholder,

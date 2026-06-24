@@ -179,11 +179,7 @@ const isSameChatMessageList = (a: ChatMessage[], b: ChatMessage[]): boolean => {
     const rightAction = right.action;
     if (Boolean(leftAction) !== Boolean(rightAction)) return false;
     if (leftAction && rightAction) {
-      if (
-        leftAction.type !== rightAction.type ||
-        leftAction.executed !== rightAction.executed ||
-        JSON.stringify(leftAction.data ?? null) !== JSON.stringify(rightAction.data ?? null)
-      ) {
+      if (JSON.stringify(leftAction) !== JSON.stringify(rightAction)) {
         return false;
       }
     }
@@ -952,13 +948,7 @@ const compactChatSessionsForCache = (
               .slice(0, CHAT_CACHE_MAX_QUICK_REPLIES)
               .map((reply) => truncateText(reply || '', CHAT_CACHE_MAX_QUICK_REPLY_CHARS))
             : undefined,
-          action: message.action
-            ? {
-              ...message.action,
-              // Runtime action payloads can be very large and are not required for cache hydration.
-              data: undefined,
-            }
-            : undefined,
+          action: message.action || undefined,
         }));
 
       return {
@@ -4109,7 +4099,15 @@ const App: React.FC = () => {
           {/* Logo Section */}
           <div className={`h-[72px] flex items-center ${isSidebarCollapsed ? 'justify-center px-3' : 'justify-between gap-3 px-6'}`}>
             {!isSidebarCollapsed && (
-              <span className="text-[20px] leading-7 font-medium text-[#171717]">Dayflow</span>
+              <button
+                type="button"
+                onClick={handleNewChat}
+                className="rounded-lg text-left text-[23px] leading-8 font-medium text-[#171717] transition-colors hover:text-[var(--color-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                aria-label="홈 화면으로 이동"
+                title="홈 화면으로 이동"
+              >
+                Dayflow
+              </button>
             )}
             <button
               type="button"

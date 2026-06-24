@@ -276,9 +276,9 @@ const JournalView: React.FC<JournalViewProps> = ({
                   setShowMobileDetail(true);
                   setIsWriting(false);
                 }}
-                className={`w-full border-b border-l-0 border-b-[#e9e9e8] p-4 text-left transition-colors sm:p-5 lg:border-l-2 ${
+                className={`journal-entry-list-item w-full border-b border-l-0 border-b-[#e9e9e8] p-4 text-left transition-colors sm:p-5 lg:border-l-2 ${
                   isSelected
-                    ? 'lg:border-l-[var(--color-primary)] lg:bg-white'
+                    ? 'is-selected lg:border-l-[var(--color-primary)] lg:bg-white'
                     : 'border-l-transparent border-t-transparent border-r-transparent hover:bg-white/50'
                 }`}
               >

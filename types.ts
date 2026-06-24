@@ -191,6 +191,54 @@ export interface ApiUsageStats {
   lastRequestDate?: string;
 }
 
+export type ChatActionStatus = 'pending' | 'completed' | 'cancelled' | 'failed';
+
+export interface ChatAddEventActionData {
+  title: string;
+  date: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
+  startTime?: string; // HH:mm
+  endTime?: string; // HH:mm
+  isAllDay?: boolean;
+  description?: string;
+  type?: string;
+}
+
+export interface ChatAddTodoActionData {
+  text: string;
+  dueDate?: string; // YYYY-MM-DD
+  category?: Todo['category'];
+  listName?: string;
+}
+
+export interface ChatAddJournalEntryActionData {
+  title: string;
+  content: string;
+  category?: string;
+  mood?: JournalEntry['mood'];
+}
+
+export interface ChatActionState {
+  executed?: boolean;
+  status?: ChatActionStatus;
+  error?: string;
+}
+
+export type ChatSingleGeneratedAction =
+  | ({ type: 'add_event'; data: ChatAddEventActionData } & ChatActionState)
+  | ({ type: 'add_todo'; data: ChatAddTodoActionData } & ChatActionState)
+  | ({ type: 'add_journal_entry'; data: ChatAddJournalEntryActionData } & ChatActionState);
+
+export type ChatGeneratedAction =
+  | { type: 'none' }
+  | ChatSingleGeneratedAction
+  | ({ type: 'batch'; actions: ChatSingleGeneratedAction[] } & ChatActionState);
+
+export type ChatMessageAction =
+  | ({ type: 'onboarding'; data?: any } & ChatActionState)
+  | ChatSingleGeneratedAction
+  | ({ type: 'batch'; actions: ChatSingleGeneratedAction[] } & ChatActionState);
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -202,11 +250,7 @@ export interface ChatMessage {
   connectionId?: string;
   imageUrl?: string;
   videoUrl?: string;
-  action?: {
-    type: 'onboarding';
-    data?: any;
-    executed?: boolean;
-  };
+  action?: ChatMessageAction;
   quickReplies?: string[];
 }
 

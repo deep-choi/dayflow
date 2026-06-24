@@ -12,11 +12,11 @@ const LandingView: React.FC<LandingViewProps> = ({ onGetStarted, onLogin }) => {
             {/* Navigation */}
             <nav className="fixed top-0 w-full z-50 bg-white/70 backdrop-blur-xl border-b border-[#e9e9e8]">
                 <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-                    <div className="flex items-center gap-2.5 group cursor-pointer">
-                        <div className="w-10 h-10 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-[14px] flex items-center justify-center transition-transform group-hover:rotate-6">
-                            <Sparkles size={20} />
+                    <div className="flex items-center gap-3 group cursor-pointer">
+                        <div className="w-11 h-11 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-[15px] flex items-center justify-center transition-transform group-hover:rotate-6">
+                            <Sparkles size={22} />
                         </div>
-                        <span className="text-xl font-normal tracking-tight">Dayflow</span>
+                        <span className="text-[22px] leading-7 font-normal tracking-tight">Dayflow</span>
                     </div>
                     <div className="flex items-center gap-8">
                         <button

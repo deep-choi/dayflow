@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Mail, Lock, User, ArrowRight, Github, Loader2, KeyRound } from 'lucide-react';
+import { Mail, Lock, User, ArrowRight, Loader2, KeyRound } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 
 interface AuthViewProps {
@@ -257,27 +257,20 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                         </button>
                     </form>
 
-                    <div className="relative py-4">
-                        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-[#f1f1f0]"></div></div>
-                        <div className="relative flex justify-center text-[13px] leading-5 uppercase tracking-widest text-[#9b9a97]"><span className="bg-white px-3 font-medium">또는 소셜 로그인</span></div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                        <button
-                            type="button"
-                            disabled
-                            title="GitHub 로그인은 준비 중입니다."
-                            className="flex items-center justify-center gap-2 py-2.5 border border-[#e9e9e8] rounded-xl text-[13px] leading-5 font-medium text-[#9b9a97] bg-[#f7f7f5] cursor-not-allowed"
-                        >
-                            <Github size={16} /> GitHub 준비 중
-                        </button>
+                    <div className="space-y-3 pt-1">
+                        <div className="relative flex items-center py-2">
+                            <div className="h-px flex-1 bg-[#f1f1f0]"></div>
+                            <span className="px-3 text-[13px] leading-5 font-medium text-[#9b9a97]">또는</span>
+                            <div className="h-px flex-1 bg-[#f1f1f0]"></div>
+                        </div>
                         <button
                             type="button"
                             onClick={handleGoogleLogin}
                             disabled={loading}
-                            className="flex items-center justify-center gap-2 py-2.5 border border-[#e9e9e8] rounded-xl hover:bg-[#f7f7f5] transition-colors text-[13px] leading-5 font-medium text-[#37352f] disabled:opacity-50"
+                            className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-[#e1e1df] bg-white px-4 text-[15px] leading-5 font-medium text-[#171717] shadow-[0_1px_2px_rgba(15,15,15,0.04)] transition-colors hover:border-[#d3d1cb] hover:bg-[#f7f7f5] disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            <div className="w-4 h-4 bg-[#4285F4] rounded-sm flex items-center justify-center text-[13px] leading-4 text-white font-medium">G</div> Google
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#4285F4] text-[13px] leading-none font-semibold text-white" aria-hidden="true">G</span>
+                            <span>Google로 계속하기</span>
                         </button>
                     </div>
                     </div>

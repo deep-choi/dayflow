@@ -56,20 +56,33 @@ export const clearUserSyncState = (userId: string) => {
     clearSyncSnapshots(userId);
 };
 
+const normalizeChatActionData = (data: any) => {
+    if (!data || typeof data !== 'object') return undefined;
+    const normalized: any = {};
+    for (const key of ['title', 'text', 'content', 'date', 'endDate', 'startTime', 'endTime', 'description', 'type', 'dueDate', 'category', 'listName', 'mood']) {
+        const value = data[key];
+        if (typeof value === 'string') normalized[key] = value.slice(0, key === 'content' ? 1800 : 300);
+    }
+    if (typeof data.isAllDay === 'boolean') normalized.isAllDay = data.isAllDay;
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+};
+
 const normalizeChatAction = (action: any) => {
     if (!action || typeof action !== 'object') return undefined;
     const normalized: any = {
         type: action.type,
         executed: Boolean(action.executed),
     };
+    if (typeof action.status === 'string') normalized.status = action.status;
+    if (typeof action.error === 'string') normalized.error = action.error.slice(0, 300);
 
-    const data = action.data;
-    if (data && typeof data === 'object') {
-        // Keep payload small and stable for persistence.
-        if (typeof data.prompt === 'string') normalized.data = { prompt: data.prompt.slice(0, 1000) };
-        else if (typeof data.id === 'string') normalized.data = { id: data.id };
-        else if (typeof data.title === 'string') normalized.data = { title: data.title.slice(0, 240) };
+    if (action.type === 'batch' && Array.isArray(action.actions)) {
+        normalized.actions = action.actions.slice(0, 5).map(normalizeChatAction).filter(Boolean);
+        return normalized;
     }
+
+    const data = normalizeChatActionData(action.data);
+    if (data) normalized.data = data;
 
     return normalized;
 };
