@@ -141,21 +141,21 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
     };
 
     return (
-        <div className="min-h-screen bg-[#fbfbfa] flex items-center justify-center px-6 py-10 font-sans">
-            <div className="grid w-full max-w-6xl items-center gap-10 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-20 animate-in fade-in slide-in-from-bottom-4 duration-1000">
-                <section className="space-y-4 text-center lg:text-left">
-                    <h1 className="text-[46px] leading-[1.05] font-medium text-[#171717] sm:text-[60px] lg:text-[76px]">
+        <div className="min-h-dvh bg-[#fbfbfa] flex justify-center px-6 py-6 font-sans sm:py-10">
+            <div className="my-auto grid w-full max-w-6xl items-start gap-6 lg:grid-cols-[minmax(0,1fr)_400px] lg:items-center lg:gap-20 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                <section className="space-y-2 text-center lg:text-left">
+                    <h1 className="text-[42px] leading-none font-medium text-[#171717] sm:text-[60px] lg:text-[76px]">
                         Dayflow
                     </h1>
-                    <p className="mx-auto max-w-[360px] text-[16px] leading-7 font-normal text-[#787774] lg:mx-0">
+                    <p className="mx-auto max-w-[360px] text-[15px] leading-6 font-normal text-[#787774] sm:text-[16px] sm:leading-7 lg:mx-0">
                         인공지능과 함께하는 완벽한 일상 기록
                     </p>
                 </section>
 
                 {/* Auth Card */}
-                <section className="w-full max-w-[400px] justify-self-center space-y-10 lg:justify-self-end">
-                    <div className="bg-white border border-[#e9e9e8] rounded-3xl p-8 space-y-6">
-                    <div className="flex p-1 bg-[#f1f1f0] rounded-xl mb-4">
+                <section className="w-full max-w-[320px] justify-self-center space-y-4 sm:max-w-[400px] sm:space-y-8 lg:justify-self-end">
+                    <div className="space-y-4 sm:space-y-6 sm:rounded-3xl sm:border sm:border-[#e9e9e8] sm:bg-white sm:p-8">
+                    <div className="flex p-1 bg-[#f1f1f0] rounded-xl">
                         <button
                             onClick={() => setIsLogin(true)}
                             className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${isLogin ? 'bg-white text-[#37352f]' : 'text-[#787774] hover:text-[#37352f]'}`}
@@ -170,7 +170,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                         </button>
                     </div>
 
-                    <form onSubmit={handleSubmit} className="space-y-4">
+                    <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-4">
                         {!isLogin && (
                             <div className="space-y-1.5">
                                 <label className="text-[13px] leading-5 font-medium text-[#787774] uppercase tracking-wider ml-1">이름</label>
@@ -182,7 +182,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                                         value={name}
                                         onChange={e => setName(e.target.value)}
                                         required={!isLogin}
-                                        className="w-full pl-11 pr-4 py-3 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm"
+                                        className="w-full pl-11 pr-4 py-2.5 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm sm:py-3"
                                     />
                                 </div>
                             </div>
@@ -198,7 +198,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                                     value={email}
                                     onChange={e => setEmail(e.target.value)}
                                     required
-                                    className="w-full pl-11 pr-4 py-3 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm"
+                                    className="w-full pl-11 pr-4 py-2.5 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm sm:py-3"
                                 />
                             </div>
                         </div>
@@ -213,7 +213,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                                     value={password}
                                     onChange={e => setPassword(e.target.value)}
                                     required
-                                    className="w-full pl-11 pr-4 py-3 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm"
+                                    className="w-full pl-11 pr-4 py-2.5 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm sm:py-3"
                                 />
                             </div>
                         </div>
@@ -228,7 +228,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                                         placeholder="AIza..."
                                         value={apiKey}
                                         onChange={e => setApiKey(e.target.value)}
-                                        className="w-full pl-11 pr-4 py-3 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm font-mono placeholder:font-sans"
+                                        className="w-full pl-11 pr-4 py-2.5 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm font-mono placeholder:font-sans sm:py-3"
                                     />
                                 </div>
                                 <p className="text-[13px] leading-5 text-[#9b9a97] ml-1">설정에서 나중에 등록할 수 있습니다.</p>
@@ -244,7 +244,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                         <button
                             type="submit"
                             disabled={loading}
-                            className="w-full bg-[var(--color-primary)] text-white border-none py-3.5 rounded-xl font-medium text-sm hover:bg-[var(--color-primary-hover)] transition-all flex items-center justify-center gap-2 group mt-4 disabled:opacity-70 disabled:cursor-not-allowed"
+                            className="w-full bg-[var(--color-primary)] text-white border-none py-3 rounded-xl font-medium text-sm hover:bg-[var(--color-primary-hover)] transition-all flex items-center justify-center gap-2 group mt-2 disabled:opacity-70 disabled:cursor-not-allowed sm:mt-4 sm:py-3.5"
                         >
                             {loading ? (
                                 <Loader2 size={18} className="animate-spin" />
@@ -257,8 +257,8 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                         </button>
                     </form>
 
-                    <div className="space-y-3 pt-1">
-                        <div className="relative flex items-center py-2">
+                    <div className="space-y-2 sm:space-y-3 sm:pt-1">
+                        <div className="relative flex items-center py-1 sm:py-2">
                             <div className="h-px flex-1 bg-[#f1f1f0]"></div>
                             <span className="px-3 text-[13px] leading-5 font-medium text-[#9b9a97]">또는</span>
                             <div className="h-px flex-1 bg-[#f1f1f0]"></div>
@@ -267,7 +267,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                             type="button"
                             onClick={handleGoogleLogin}
                             disabled={loading}
-                            className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-[#e1e1df] bg-white px-4 text-[15px] leading-5 font-medium text-[#171717] shadow-[0_1px_2px_rgba(15,15,15,0.04)] transition-colors hover:border-[#d3d1cb] hover:bg-[#f7f7f5] disabled:cursor-not-allowed disabled:opacity-60"
+                            className="flex h-11 w-full items-center justify-center gap-3 rounded-xl border border-[#e1e1df] bg-white px-4 text-[15px] leading-5 font-medium text-[#171717] shadow-[0_1px_2px_rgba(15,15,15,0.04)] transition-colors hover:border-[#d3d1cb] hover:bg-[#f7f7f5] disabled:cursor-not-allowed disabled:opacity-60 sm:h-12"
                         >
                             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#4285F4] text-[13px] leading-none font-semibold text-white" aria-hidden="true">G</span>
                             <span>Google로 계속하기</span>
@@ -276,7 +276,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login' }) =
                     </div>
 
                 {/* Footer */}
-                    <p className="text-center text-[13px] leading-5 text-[#9b9a97] font-medium">
+                    <p className="text-center text-[12px] leading-5 text-[#9b9a97] font-medium sm:text-[13px]">
                         계속 진행함으로써 Dayflow의 서비스 이용약관 및 <br />
                         개인정보 처리방침에 동의하게 됩니다.
                     </p>
