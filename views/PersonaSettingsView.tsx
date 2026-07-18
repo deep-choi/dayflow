@@ -20,6 +20,12 @@ interface PersonaSettingsViewProps {
 
 type PersonaEditorTab = 'profile' | 'api';
 
+const RESPONSE_LENGTH_OPTIONS = [
+  { value: 'short', label: '짧게' },
+  { value: 'medium', label: '보통' },
+  { value: 'long', label: '길게' },
+] as const;
+
 const MEMORY_TYPE_LABEL: Record<PersonaMemory['type'], string> = {
   fact: '사실',
   preference: '선호',
@@ -480,21 +486,36 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                 )}
 
                 {editorTab === 'api' && (
-                  <label className="block">
-                    <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API 연결</span>
-                    <select
-                      value={draft.connectionId || ''}
-                      onChange={(e) => setDraft({ ...draft, connectionId: e.target.value || undefined })}
-                      className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
-                    >
-                      <option value="" disabled>연결을 선택하세요</option>
-                      {supportedChatConnections.map(conn => (
-                        <option key={conn.id} value={conn.id}>
-                          {conn.provider.toUpperCase()} · {conn.modelName}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <div className="space-y-4">
+                    <label className="block">
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API 연결</span>
+                      <select
+                        value={draft.connectionId || ''}
+                        onChange={(e) => setDraft({ ...draft, connectionId: e.target.value || undefined })}
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                      >
+                        <option value="" disabled>연결을 선택하세요</option>
+                        {supportedChatConnections.map(conn => (
+                          <option key={conn.id} value={conn.id}>
+                            {conn.provider.toUpperCase()} · {conn.modelName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">채팅 응답 길이</span>
+                      <select
+                        value={draft.responseLength || 'medium'}
+                        onChange={(e) => setDraft({ ...draft, responseLength: e.target.value as AIAgent['responseLength'] })}
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                      >
+                        {RESPONSE_LENGTH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
                 )}
               </div>
             </div>

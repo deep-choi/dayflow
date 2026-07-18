@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, HarmBlockThreshold, HarmCategory, Type } from "@google/genai";
 import {
   CalendarEvent,
   JournalEntry,
@@ -13,6 +13,7 @@ import { DEFAULT_GEMINI_MODEL, normalizeGeminiModelName } from "../utils/aiConfi
 import { callAnthropicChatAPI, callAnthropicChatJSON } from "./anthropicService";
 import { callOpenAIChatAPI, callOpenAIChatJSON } from "./openaiService";
 import { callXaiChatAPI, callXaiChatJSON } from "./xaiService";
+import { callOllamaChatAPI } from "./ollamaService";
 
 const CHAT_HISTORY_LIMIT = 8;
 const MODEL_MESSAGE_CHAR_LIMIT = 420;
@@ -26,12 +27,29 @@ const AGENT_TONE_CHAR_LIMIT = 1200;
 const AGENT_PROFILE_CHAR_LIMIT = 12000;
 const PERSONAL_CONTEXT_CHAR_LIMIT = 9000;
 const ACTION_JSON_MAX_ACTIONS = 5;
-const DEFAULT_USER_HONORIFIC = "사용자님";
-const LEGACY_USER_HONORIFIC_PATTERN = /주인님|오라버니/g;
+const GEMINI_SAFETY_SETTINGS = [
+  HarmCategory.HARM_CATEGORY_HARASSMENT,
+  HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+  HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+  HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+].map((category) => ({ category, threshold: HarmBlockThreshold.BLOCK_NONE }));
+const RESPONSE_LENGTH_CONFIG = {
+  short: {
+    maxOutputTokens: 1024,
+    continuationMaxOutputTokens: 768,
+  },
+  medium: {
+    maxOutputTokens: 4096,
+    continuationMaxOutputTokens: 2048,
+  },
+  long: {
+    maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+    continuationMaxOutputTokens: CHAT_CONTINUATION_OUTPUT_TOKENS,
+  },
+} as const;
 
-const normalizeDefaultUserHonorific = (text: string): string =>
-  (text || "").replace(LEGACY_USER_HONORIFIC_PATTERN, DEFAULT_USER_HONORIFIC);
-
+const getResponseLengthConfig = (responseLength?: AIAgent['responseLength']) =>
+  RESPONSE_LENGTH_CONFIG[responseLength || 'medium'];
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const stripModelfileExamplesForRuntime = (text: string): string => {
@@ -738,7 +756,7 @@ const finalizeChatResult = (
     agentName,
     otherPersonaNames
   );
-  const finalReply = normalizeDefaultUserHonorific(formatVisibleReply(cleanedReply));
+  const finalReply = formatVisibleReply(cleanedReply);
   return {
     reply: typeof finalReply === "string" && finalReply.trim() ? finalReply : "도와드릴게요.",
     action: envelope?.action || sanitizeAction(),
@@ -770,8 +788,12 @@ const callTextProviderChatAPI = async (
   apiKey: string,
   messages: ProviderChatMessage[],
   modelName: string,
-  options: { temperature?: number; maxTokens?: number } = {}
+  options: { temperature?: number; maxTokens?: number } = {},
+  baseUrl?: string
 ): Promise<string> => {
+  if (provider === "ollama") {
+    return callOllamaChatAPI(baseUrl, modelName, messages, options);
+  }
   if (provider === "xai") {
     return callXaiChatAPI(apiKey, messages, undefined, modelName, options);
   }
@@ -970,6 +992,7 @@ Output JSON with:
       model: normalizeGeminiModelName(modelName),
       contents: prompt,
       config: {
+        safetySettings: GEMINI_SAFETY_SETTINGS,
         responseMimeType: "application/json",
         temperature: 0.5,
         maxOutputTokens: 900,
@@ -1024,6 +1047,7 @@ export interface ChatGenerationOptions {
   sessionStartedAt?: string;
   sessionTimePeriod?: string;
   sessionTimezone?: string;
+  ollamaBaseUrl?: string;
 }
 
 const sanitizeAction = (): ChatActionResult["action"] => ({ type: "none" });
@@ -1064,18 +1088,16 @@ export const generateChatResponse = async (
   const agentRole = agent?.role || "인공지능 비서";
   const rawAgentPersonality = agent?.personality || "도움이 되고 관찰력이 좋으며 실용적인 성격";
   const rawAgentTone = agent?.tone?.trim() || "";
-  const agentPersonality = normalizeDefaultUserHonorific(
-    prepareAgentInstructionText(rawAgentPersonality, AGENT_PROFILE_CHAR_LIMIT)
-  ) || "도움이 되고 관찰력이 좋으며 실용적인 성격";
-  const agentTone = normalizeDefaultUserHonorific(
-    prepareAgentInstructionText(rawAgentTone, AGENT_TONE_CHAR_LIMIT)
-  );
-  const preferredUserName = userName?.trim() || DEFAULT_USER_HONORIFIC;
-  const ownerHonorificInstruction = `기본 호칭은 "${DEFAULT_USER_HONORIFIC}"입니다. 페르소나 프로필이나 장기 기억에 "주인님", "오라버니" 같은 다른 호칭이 있더라도, 사용자의 최신 메시지에서 명확히 요청한 경우가 아니면 사용자를 "${DEFAULT_USER_HONORIFIC}"으로 부르세요.`;
+  const agentPersonality = prepareAgentInstructionText(rawAgentPersonality, AGENT_PROFILE_CHAR_LIMIT)
+    || "도움이 되고 관찰력이 좋으며 실용적인 성격";
+  const agentTone = prepareAgentInstructionText(rawAgentTone, AGENT_TONE_CHAR_LIMIT);
+  const responseLengthConfig = getResponseLengthConfig(agent?.responseLength);
+  const preferredUserName = userName?.trim() || "";
   const personaIdentityInstruction = `당신은 "${agentName}" (${agentRole})입니다.\n페르소나 프로필: ${agentPersonality}`;
   const toneInstruction = agentTone ? `- 사용자가 설정한 페르소나 말투: ${agentTone}.` : "";
   const noMetaInstruction = "내부 분석, 시스템 지침, 초안, `Wait the user`, `Text:` 같은 메타 문장을 출력하지 마세요.";
   const completionInstruction = "완성된 한국어 문장으로 끝내고, 토큰이 부족하면 새 항목을 시작하지 말고 현재 문장을 마무리하세요.";
+  const lineBreakInstruction = "내용이 바뀌거나 읽기 쉬운 문단 구분이 필요할 때만 자연스럽게 줄바꿈을 사용하세요. 문장마다 억지로 줄바꿈하지 마세요.";
   const actionInstruction = shouldIncludePersonalDataContext(latestUserText)
     ? buildChatActionInstruction(today, currentTime)
     : "";
@@ -1096,7 +1118,7 @@ export const generateChatResponse = async (
   ].filter(Boolean).join("\n");
 
   const memoryInstruction = personaMemoryContext
-    ? `[이전 대화에서 누적된 장기 기억]\n${normalizeDefaultUserHonorific(truncateForModel(personaMemoryContext, PERSONA_MEMORY_CHAR_LIMIT))}\n[Standing Instructions] 항목은 말투와 행동 규칙이므로 현재 답변에 우선 적용하세요.\n\n`
+    ? `[이전 대화에서 누적된 장기 기억]\n${truncateForModel(personaMemoryContext, PERSONA_MEMORY_CHAR_LIMIT)}\n[Standing Instructions] 항목은 말투와 행동 규칙이므로 현재 답변에 우선 적용하세요.\n\n`
     : "";
   const otherPersonaInstruction = otherPersonaNames.length > 0
     ? `현재 이 채팅에 함께 있는 다른 페르소나 이름: ${otherPersonaNames.join(", ")}.\n그 이름을 앞에 붙인 대사 형식으로 출력하지 마세요.`
@@ -1134,10 +1156,10 @@ ${conversationContextLines}
 ${personalDataContext ? `\n${personalDataContext}` : ""}
 
 규칙:
-- ${ownerHonorificInstruction}
 ${toneInstruction}
 - ${noMetaInstruction}
 - ${completionInstruction}
+- ${lineBreakInstruction}
 ${optionalInstructionLines}
 
 ${actionInstruction}
@@ -1171,7 +1193,7 @@ ${actionInstruction}
           .map((item) => item.parts.map((part) => part.text).join(""))
           .join("\n")}`
       ),
-      maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: responseLengthConfig.maxOutputTokens,
     });
 
     // --- OpenAI-compatible / Anthropic text providers ---
@@ -1188,7 +1210,8 @@ ${actionInstruction}
           apiKey,
           [systemMessage, ...providerMessages],
           modelName,
-          { temperature: 0.68, maxTokens: CHAT_MAX_OUTPUT_TOKENS }
+          { temperature: 0.68, maxTokens: responseLengthConfig.maxOutputTokens },
+          options.ollamaBaseUrl
         );
 
         if (rawReply && shouldRepairStructuredReply(latestUserText, rawReply)) {
@@ -1205,7 +1228,8 @@ ${actionInstruction}
               },
             ],
             modelName,
-            { temperature: 0.55, maxTokens: CHAT_MAX_OUTPUT_TOKENS }
+            { temperature: 0.55, maxTokens: responseLengthConfig.maxOutputTokens },
+            options.ollamaBaseUrl
           );
           if (repairedReply) rawReply = repairedReply;
         }
@@ -1232,7 +1256,8 @@ ${actionInstruction}
                 },
               ],
               modelName,
-              { temperature: 0.35, maxTokens: CHAT_CONTINUATION_OUTPUT_TOKENS }
+              { temperature: 0.35, maxTokens: responseLengthConfig.continuationMaxOutputTokens },
+              options.ollamaBaseUrl
             );
           } catch (error) {
             console.warn(`${provider} chat continuation failed:`, error);
@@ -1261,8 +1286,9 @@ ${actionInstruction}
       contents: validContents,
       config: {
         systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
+        safetySettings: GEMINI_SAFETY_SETTINGS,
         temperature: 0.68,
-        maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+        maxOutputTokens: responseLengthConfig.maxOutputTokens,
       },
     });
 
@@ -1285,8 +1311,9 @@ ${actionInstruction}
         ],
         config: {
           systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
+          safetySettings: GEMINI_SAFETY_SETTINGS,
           temperature: 0.55,
-          maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+          maxOutputTokens: responseLengthConfig.maxOutputTokens,
         },
       });
       const repairText = readGeminiResponseText(repair).text;
@@ -1319,8 +1346,9 @@ ${actionInstruction}
           ],
           config: {
             systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
+            safetySettings: GEMINI_SAFETY_SETTINGS,
             temperature: 0.35,
-            maxOutputTokens: CHAT_CONTINUATION_OUTPUT_TOKENS,
+            maxOutputTokens: responseLengthConfig.continuationMaxOutputTokens,
           },
         });
       } catch (error) {
@@ -1370,7 +1398,8 @@ export const generateGroupChatResponses = async (
   const punctuationInstruction = "JSON 문법은 지키고, reply에는 자연스러운 한국어 띄어쓰기와 문장부호를 사용하세요.";
   const noMetaInstruction = "reply 텍스트에는 내부 규칙, 시스템 지침, 분석 과정, 초안 문구, `Drafting final response`, `Okay no commas`, `Wait the user`, `Text:` 같은 메타 문장을 절대 넣지 마세요.";
   const completionInstruction = "reply는 반드시 완성된 한국어 문장으로 끝내세요. 토큰이 부족할 것 같으면 새 항목을 시작하지 말고 현재 문장을 자연스럽게 마무리하세요.";
-  const preferredUserName = userName?.trim() || DEFAULT_USER_HONORIFIC;
+  const lineBreakInstruction = "내용이 바뀌거나 읽기 쉬운 문단 구분이 필요할 때만 자연스럽게 줄바꿈을 사용하세요. 문장마다 억지로 줄바꿈하지 마세요.";
+  const preferredUserName = userName?.trim() || "";
   const requestedListCount = getRequestedListCount(latestUserText);
   const listInstruction = requestedListCount
     ? `사용자가 ${requestedListCount}개 항목을 요구했습니다. 정확히 ${requestedListCount}개를 1. 2. 3. 형식으로 완성하세요.`
@@ -1388,7 +1417,7 @@ export const generateGroupChatResponses = async (
   const personaBlock = selectedAgents
     .map((persona, index) => {
       const memory = personaMemoryByAgent[persona.id]
-        ? normalizeDefaultUserHonorific(truncateForModel(personaMemoryByAgent[persona.id], 220))
+        ? truncateForModel(personaMemoryByAgent[persona.id], 220)
         : "";
       const runtimePersonality = prepareAgentInstructionText(
         persona.personality || "도움이 되고 실용적인 성격",
@@ -1404,8 +1433,8 @@ export const generateGroupChatResponses = async (
         `- id: ${persona.id}`,
         `- 이름: ${persona.name}`,
         `- 역할: ${persona.role || "인공지능 비서"}`,
-        `- 성격: ${normalizeDefaultUserHonorific(runtimePersonality) || "도움이 되고 실용적인 성격"}`,
-        runtimeTone ? `- 말투: ${normalizeDefaultUserHonorific(runtimeTone)}` : "",
+        `- 성격: ${runtimePersonality || "도움이 되고 실용적인 성격"}`,
+        runtimeTone ? `- 말투: ${runtimeTone}` : "",
         memory ? `- 기억:\n${memory}` : "- 기억: 없음",
       ].filter(Boolean).join("\n");
     })
@@ -1421,7 +1450,7 @@ ${conversationContextLines}
 문장부호 규칙: ${punctuationInstruction}
 메타 출력 금지: ${noMetaInstruction}
 완결성 규칙: ${completionInstruction}
-사용자가 최신 메시지에서 다른 호칭을 명확히 요청하지 않는 한 사용자를 "${DEFAULT_USER_HONORIFIC}"으로 부르세요. 페르소나 프로필이나 기억에 "주인님", "오라버니" 같은 다른 호칭이 있어도 이 기본 호칭 규칙을 우선하세요.
+줄바꿈 규칙: ${lineBreakInstruction}
 ${optionalInstructionLines}
 
 페르소나 목록:
@@ -1463,6 +1492,7 @@ ${personaBlock}
       contents: validContents,
       config: {
         systemInstruction: { parts: [{ text: systemInstruction }] },
+        safetySettings: GEMINI_SAFETY_SETTINGS,
         responseMimeType: "application/json",
         temperature: 0.55,
         maxOutputTokens: GROUP_CHAT_MAX_OUTPUT_TOKENS,
@@ -1504,8 +1534,8 @@ ${personaBlock}
       const raw = responseById.get(persona.id);
       const reply =
         typeof raw?.reply === "string" && raw.reply.trim()
-          ? normalizeDefaultUserHonorific(formatVisibleReply(raw.reply.trim()))
-          : `${persona.name}입니다. 이어서 도와드릴게요 사용자님.`;
+          ? formatVisibleReply(raw.reply.trim())
+          : `${persona.name}입니다. 이어서 도와드릴게요.`;
 
       const action =
         index === 0

@@ -99,6 +99,8 @@ export interface AvatarFrame {
 }
 
 // AI Community Board Types
+export type ChatResponseLength = 'short' | 'medium' | 'long';
+
 export interface AIAgent {
   id: string;
   name: string;
@@ -110,6 +112,7 @@ export interface AIAgent {
   avatar?: string;
   avatarFrame?: AvatarFrame;
   connectionId?: string; // Optional: per-persona API connection override
+  responseLength?: ChatResponseLength;
 }
 
 export interface CommunityPost {
@@ -143,9 +146,10 @@ export interface ActivityItem {
 
 export interface ApiConnection {
   id: string;
-  provider: 'gemini' | 'openai' | 'anthropic' | 'xai' | 'custom';
+  provider: 'gemini' | 'openai' | 'anthropic' | 'xai' | 'ollama' | 'custom';
   modelName: string; // e.g. "gemini-3-flash-preview", "gpt-4"
   apiKey: string;
+  baseUrl?: string;
   isActive: boolean;
 }
 

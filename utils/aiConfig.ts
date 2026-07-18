@@ -4,6 +4,7 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_XAI_MODEL = 'grok-4.3';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
 export interface ModelOption {
     id: string;
@@ -135,15 +136,19 @@ export interface ActiveAIConfig {
     provider: ApiConnection['provider'];
     apiKey: string;
     modelName: string;
+    baseUrl?: string;
 }
 
-const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'xai', 'openai', 'anthropic'];
+const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'xai', 'openai', 'anthropic', 'ollama'];
 
 export const isChatSupportedProvider = (provider: ApiConnection['provider']): boolean => {
     return CHAT_SUPPORTED_PROVIDERS.includes(provider);
 };
 
-const hasUsableKey = (connection: ApiConnection): boolean => {
+const hasUsableCredentials = (connection: ApiConnection): boolean => {
+    if (connection.provider === 'ollama') {
+        return typeof connection.baseUrl === 'string' && connection.baseUrl.trim().length > 0;
+    }
     return typeof connection.apiKey === 'string' && connection.apiKey.trim().length > 0;
 };
 
@@ -156,7 +161,7 @@ export const getActiveAIConfig = (settings: AppSettings): ActiveAIConfig | null 
             c.id === settings.activeConnectionId &&
             c.isActive &&
             isChatSupportedProvider(c.provider) &&
-            hasUsableKey(c)
+            hasUsableCredentials(c)
     );
 
     if (selected) {
@@ -165,17 +170,19 @@ export const getActiveAIConfig = (settings: AppSettings): ActiveAIConfig | null 
             provider: selected.provider,
             apiKey: selected.apiKey,
             modelName: normalizeConnectionModelName(selected),
+            baseUrl: selected.baseUrl,
         };
     }
 
     // 2. Fallback to first active connection
-    const firstActive = connections.find(c => c.isActive && isChatSupportedProvider(c.provider) && hasUsableKey(c));
+    const firstActive = connections.find(c => c.isActive && isChatSupportedProvider(c.provider) && hasUsableCredentials(c));
     if (firstActive) {
         return {
             connectionId: firstActive.id,
             provider: firstActive.provider,
             apiKey: firstActive.apiKey,
             modelName: normalizeConnectionModelName(firstActive),
+            baseUrl: firstActive.baseUrl,
         };
     }
 
@@ -206,8 +213,8 @@ export const getAgentAIConfig = (settings: AppSettings, agentConnectionId?: stri
     const agentConnection = connections.find(c => c.id === agentConnectionId);
 
     if (agentConnection) {
-        if (!hasUsableKey(agentConnection)) {
-            console.warn('[aiConfig] Agent connection has no usable apiKey:', agentConnectionId);
+        if (!hasUsableCredentials(agentConnection)) {
+            console.warn('[aiConfig] Agent connection has no usable credentials:', agentConnectionId);
             return null;
         }
         if (!isChatSupportedProvider(agentConnection.provider)) {
@@ -220,6 +227,7 @@ export const getAgentAIConfig = (settings: AppSettings, agentConnectionId?: stri
             provider: agentConnection.provider,
             apiKey: agentConnection.apiKey,
             modelName: normalizeConnectionModelName(agentConnection),
+            baseUrl: agentConnection.baseUrl,
         };
     }
 
@@ -237,7 +245,7 @@ export const getActiveGeminiConfig = (settings: AppSettings): ActiveGeminiConfig
     }
     // Fallback: look for any active Gemini connection
     const connections = settings.apiConnections || [];
-    const gemini = connections.find(c => c.provider === 'gemini' && c.isActive && hasUsableKey(c));
+    const gemini = connections.find(c => c.provider === 'gemini' && c.isActive && hasUsableCredentials(c));
     if (gemini) {
         return { connectionId: gemini.id, apiKey: gemini.apiKey, modelName: normalizeGeminiModelName(gemini.modelName) };
     }

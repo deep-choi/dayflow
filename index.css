@@ -1058,6 +1058,32 @@ select {
   color: var(--app-text-primary) !important;
 }
 
+.chat-input-shell .chat-send-button {
+  color: #fff !important;
+  background: #4169e1;
+}
+
+.chat-input-shell .chat-send-button:hover:not(:disabled) {
+  color: #fff !important;
+  background: #355ac9;
+  transform: translateY(-1px);
+}
+
+.chat-input-shell .chat-send-button:disabled {
+  color: #a7a7a4 !important;
+  background: #eeeeec;
+}
+
+:root[data-theme='dark'] .chat-input-shell .chat-send-button {
+  color: #fff !important;
+  background: #4169e1 !important;
+}
+
+:root[data-theme='dark'] .chat-input-shell .chat-send-button:disabled {
+  color: #777 !important;
+  background: #383838 !important;
+}
+
 :root[data-theme='dark'] ::selection,
 :root[data-theme='dark'] *::selection {
   background: rgba(190, 190, 190, 0.12) !important;

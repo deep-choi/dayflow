@@ -565,6 +565,7 @@ export const syncAgents = (userId: string, agents: AIAgent[]) => {
             color: a.color,
             avatar: a.avatar || null,
             connection_id: a.connectionId || null,
+            response_length: a.responseLength || 'medium',
             order: i,
         }));
         const rowIds = rows.map((row) => row.id);

@@ -497,6 +497,9 @@ const normalizeAIAgent = (agent: any, fallbackOrder: number = 0): AIAgent => {
     avatar,
     avatarFrame: avatar ? sanitizeAvatarFrame(agent?.avatarFrame) : undefined,
     connectionId: typeof agent?.connection_id === 'string' ? agent.connection_id : (typeof agent?.connectionId === 'string' ? agent.connectionId : undefined),
+    responseLength: agent?.response_length === 'short' || agent?.response_length === 'medium' || agent?.response_length === 'long'
+      ? agent.response_length
+      : (agent?.responseLength === 'short' || agent?.responseLength === 'medium' || agent?.responseLength === 'long' ? agent.responseLength : 'medium'),
   };
 };
 

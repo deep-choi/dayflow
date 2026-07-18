@@ -106,6 +106,7 @@ export const debugManualSync = async (
                 tone: a.tone,
                 color: a.color,
                 avatar: a.avatar || null,
+                response_length: a.responseLength || 'medium',
                 order: i,
             }));
             const { error: insAgentErr } = await supabase.from('ai_agents').upsert(agentRows, { onConflict: 'id' });

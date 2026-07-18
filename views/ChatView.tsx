@@ -15,7 +15,7 @@ import {
 } from '../types';
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
 import { Sparkles, Plus } from '../components/Icons';
-import { Edit3, Save, X } from 'lucide-react';
+import { ArrowUp, Edit3, Save, X } from 'lucide-react';
 import { getAgentAIConfig, isChatSupportedProvider } from '../utils/aiConfig';
 import { ApiUsageStats } from '../types';
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
@@ -64,8 +64,6 @@ interface ChatViewProps {
 
 const CHAT_HISTORY_LIMIT = 12;
 const MAX_GROUP_AGENTS = 4;
-const DEFAULT_USER_HONORIFIC = '사용자님';
-const LEGACY_USER_HONORIFIC_PATTERN = /주인님|오라버니/g;
 const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
     [/페르소나 설정에서\s*Gemini\/xAI를\s*지정해 주세요/g, '페르소나 설정에서 모델을 지정해 주세요'],
     [/페르소나 설정에서\s*Gemini를\s*연결해 주세요/g, '페르소나 설정에서 채팅용 모델을 지정해 주세요'],
@@ -73,6 +71,12 @@ const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
     [/Gemini API Key/g, 'API Key'],
 ];
 type PersonaEditorTab = 'profile' | 'api';
+
+const RESPONSE_LENGTH_OPTIONS = [
+    { value: 'short', label: '짧게' },
+    { value: 'medium', label: '보통' },
+    { value: 'long', label: '길게' },
+] as const;
 
 type UsageContext = {
     agentId?: string;
@@ -135,7 +139,7 @@ const isSameChatMessageList = (a: ChatMessage[], b: ChatMessage[]): boolean => {
 };
 
 const normalizeAssistantContent = (text: string): string => {
-    let normalized = (text || '').replace(LEGACY_USER_HONORIFIC_PATTERN, DEFAULT_USER_HONORIFIC);
+    let normalized = text || '';
     for (const [pattern, replacement] of LEGACY_MODEL_COPY_REPLACEMENTS) {
         normalized = normalized.replace(pattern, replacement);
     }
@@ -423,6 +427,7 @@ const ChatView: React.FC<ChatViewProps> = ({
     const suppressAutoScrollRef = useRef(false);
     const lastSyncedSignatureRef = useRef<string>('');
     const onUpdateMessagesRef = useRef(onUpdateMessages);
+
     const availableAgents = agents.length > 0 ? agents : (agent ? [agent] : []);
     const selectedAgentPool = selectedAgents.length > 0
         ? selectedAgents
@@ -532,6 +537,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                 avatar: (agentDraft.avatar || '').trim() || undefined,
                 avatarFrame: agentDraft.avatar ? agentDraft.avatarFrame : undefined,
                 connectionId: agentDraft.connectionId || undefined,
+                responseLength: agentDraft.responseLength || 'medium',
             }));
             closeAgentEditor(true);
         } catch (error) {
@@ -1062,6 +1068,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 sessionStartedAt,
                                 sessionTimePeriod,
                                 sessionTimezone,
+                                ollamaBaseUrl: agentConfig.baseUrl,
                             }
                         );
 
@@ -1131,6 +1138,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             sessionStartedAt,
                             sessionTimePeriod,
                             sessionTimezone,
+                            ollamaBaseUrl: singleAgentConfig.baseUrl,
                         }
                     );
 
@@ -1184,6 +1192,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
         setIsProcessing(false);
     };
+
 
     const handleQuickReply = (reply: string) => {
         handleSend(reply);
@@ -1495,9 +1504,19 @@ const ChatView: React.FC<ChatViewProps> = ({
                             onChange={(e) => setInputValue(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                             placeholder={onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요..."}
-                            className="chat-input-field flex-1 min-w-0 h-full pr-5 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
+                            className="chat-input-field flex-1 min-w-0 h-full px-2 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
                             disabled={isProcessing}
                         />
+                        <button
+                            type="button"
+                            onClick={() => handleSend()}
+                            disabled={!inputValue.trim() || isProcessing}
+                            className="chat-send-button mr-2 shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
+                            aria-label="메시지 전송"
+                            title="메시지 전송"
+                        >
+                            <ArrowUp size={18} strokeWidth={2.4} />
+                        </button>
                     </div>
                 </div>
             </div>
@@ -1617,21 +1636,35 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 )}
 
                                 {agentEditorTab === 'api' && (
-                                    <label className="block">
-                                        <span className="text-xs font-normal text-[#787774] ml-1">API 연결</span>
-                                        <select
-                                            value={agentDraft.connectionId || ''}
-                                            onChange={(e) => setAgentDraft({ ...agentDraft, connectionId: e.target.value || undefined })}
-                                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
-                                        >
-                                            <option value="">연결 선택 안 함</option>
-                                            {supportedChatConnections.map((connection) => (
-                                                <option key={connection.id} value={connection.id}>
-                                                    {connection.provider.toUpperCase()} · {connection.modelName}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </label>
+                                    <div className="space-y-4">
+                                        <label className="block">
+                                            <span className="text-xs font-normal text-[#787774] ml-1">API 연결</span>
+                                            <select
+                                                value={agentDraft.connectionId || ''}
+                                                onChange={(e) => setAgentDraft({ ...agentDraft, connectionId: e.target.value || undefined })}
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                                            >
+                                                <option value="">연결 선택 안 함</option>
+                                                {supportedChatConnections.map((connection) => (
+                                                    <option key={connection.id} value={connection.id}>
+                                                        {connection.provider.toUpperCase()} · {connection.modelName}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        <label className="block">
+                                            <span className="text-xs font-normal text-[#787774] ml-1">채팅 응답 길이</span>
+                                            <select
+                                                value={agentDraft.responseLength || 'medium'}
+                                                onChange={(e) => setAgentDraft({ ...agentDraft, responseLength: e.target.value as AIAgent['responseLength'] })}
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                                            >
+                                                {RESPONSE_LENGTH_OPTIONS.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    </div>
                                 )}
                             </div>
                         </div>
