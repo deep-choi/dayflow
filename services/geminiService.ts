@@ -183,8 +183,35 @@ const isInternalMetaLine = (line: string): boolean => {
   );
 };
 
+const stripEnglishContinuationLeadIn = (reply: string): string => {
+  let result = (reply || "").trim();
+  const leadInPatterns = [
+    // Some local models narrate their continuation before producing it, e.g.
+    // "Drawing from the end point ... So the continuation is: ...".
+    /^\s*(?:drawing|continuing|picking|resuming)\s+(?:from|at|on)\s+(?:the\s+)?(?:end(?:\s+point)?|previous(?:\s+(?:output|response))?|last\s+(?:sentence|line|point)|cut[-\s]?off\s+point)\b[\s\S]{0,500}?(?:so\s*,?\s*)?(?:the\s+)?continuation\s+(?:is|starts|would be)\s*:\s*/i,
+    /^\s*(?:the\s+)?(?:previous\s+)?(?:output|response)\s+(?:ended|stopped)\b[\s\S]{0,300}?(?:continuation\s+(?:is|starts)|continue\s+from)\s*:\s*/i,
+    /^\s*(?:here(?:'s| is)\s+)?(?:the\s+)?continuation\s*:\s*/i,
+  ];
+
+  let stripped = false;
+  for (const pattern of leadInPatterns) {
+    const next = result.replace(pattern, "").trim();
+    if (next !== result) {
+      result = next;
+      stripped = true;
+      break;
+    }
+  }
+
+  // The leaked explanation frequently wraps only the actual continuation in
+  // quotes. Remove those wrapper quotes after a known lead-in was stripped.
+  return stripped
+    ? result.replace(/^\s*["“”'‘’]\s*/, "").replace(/\s*["“”'‘’]\s*$/, "").trim()
+    : result;
+};
+
 const stripInternalMetaLeakage = (reply: string): string => {
-  const lines = (reply || "").split("\n");
+  const lines = stripEnglishContinuationLeadIn(reply || "").split("\n");
   const markerIndex = [...lines]
     .map((line, index) => ({ line, index }))
     .reverse()
@@ -297,7 +324,7 @@ const buildContinuationPrompt = (latestUserText: string, reply: string): string 
     ].join(" ");
   }
 
-  return "방금 멈춘 지점에서 그대로 이어서 마무리하세요. 처음부터 다시 쓰거나 요약하거나 안내 문구를 붙이지 마세요. 분석 과정 없이 사용자에게 보일 이어지는 본문만 출력하세요. 답변 전체를 한국어로 작성하고 자연스러운 띄어쓰기와 마침표를 사용하세요.";
+  return "직전 assistant 본문의 마지막 글자 바로 다음에 붙일 문장만 출력하세요. 처음부터 다시 쓰거나 요약하거나 안내 문구를 붙이지 마세요. 영어, 번역, 인용, `Drawing from`, `previous output`, `continuation` 같은 설명은 절대 출력하지 마세요. 분석 과정 없이 사용자에게 보일 이어지는 본문만 출력하세요. 답변 전체를 한국어로 작성하고 자연스러운 띄어쓰기와 마침표를 사용하세요.";
 };
 
 const buildStructuredRepairPrompt = (latestUserText: string, reply: string): string => {
