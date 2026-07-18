@@ -66,6 +66,7 @@ export interface CalendarEvent {
   id: string;
   title: string;
   date: string; // ISO date string YYYY-MM-DD
+  endDate?: string; // ISO date string YYYY-MM-DD
   startTime?: string; // HH:mm
   endTime?: string; // HH:mm
   isAllDay?: boolean;
@@ -91,7 +92,15 @@ export interface Comment {
   timestamp: string;
 }
 
+export interface AvatarFrame {
+  zoom: number;
+  x: number;
+  y: number;
+}
+
 // AI Community Board Types
+export type ChatResponseLength = 'short' | 'medium' | 'long';
+
 export interface AIAgent {
   id: string;
   name: string;
@@ -101,7 +110,9 @@ export interface AIAgent {
   tone: string;
   color: string;
   avatar?: string;
+  avatarFrame?: AvatarFrame;
   connectionId?: string; // Optional: per-persona API connection override
+  responseLength?: ChatResponseLength;
 }
 
 export interface CommunityPost {
@@ -135,19 +146,39 @@ export interface ActivityItem {
 
 export interface ApiConnection {
   id: string;
-  provider: 'gemini' | 'openai' | 'anthropic' | 'xai' | 'custom';
+  provider: 'gemini' | 'openai' | 'anthropic' | 'xai' | 'ollama' | 'custom';
   modelName: string; // e.g. "gemini-3-flash-preview", "gpt-4"
   apiKey: string;
+  baseUrl?: string;
   isActive: boolean;
 }
+
+export interface AgentUsageStats extends ApiUsageStats {
+  textResponses: number;
+  lastProvider?: ApiConnection['provider'];
+  lastModelName?: string;
+}
+
+export interface RoutineProgress {
+  completedOn?: string;
+  subTaskCompletedOn?: Record<string, string>;
+}
+
+export type ThemeMode = 'system' | 'light' | 'dark';
 
 export interface AppSettings {
   autoAiReactions: boolean;
   chatActionConfirm: boolean;
+  theme: ThemeMode;
   geminiApiKey?: string; // @deprecated use apiConnections
   apiConnections: ApiConnection[];
   activeConnectionId?: string;
   apiUsage?: ApiUsageStats;
+  agentProfiles?: Record<string, Partial<AIAgent>>;
+  agentUsageById?: Record<string, AgentUsageStats>;
+  pinnedPersonaMemoryIds?: string[];
+  lastRoutineResetDate?: string; // YYYY-MM-DD
+  routineProgress?: Record<string, RoutineProgress>;
 }
 
 export interface User {
@@ -164,6 +195,54 @@ export interface ApiUsageStats {
   lastRequestDate?: string;
 }
 
+export type ChatActionStatus = 'pending' | 'completed' | 'cancelled' | 'failed';
+
+export interface ChatAddEventActionData {
+  title: string;
+  date: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
+  startTime?: string; // HH:mm
+  endTime?: string; // HH:mm
+  isAllDay?: boolean;
+  description?: string;
+  type?: string;
+}
+
+export interface ChatAddTodoActionData {
+  text: string;
+  dueDate?: string; // YYYY-MM-DD
+  category?: Todo['category'];
+  listName?: string;
+}
+
+export interface ChatAddJournalEntryActionData {
+  title: string;
+  content: string;
+  category?: string;
+  mood?: JournalEntry['mood'];
+}
+
+export interface ChatActionState {
+  executed?: boolean;
+  status?: ChatActionStatus;
+  error?: string;
+}
+
+export type ChatSingleGeneratedAction =
+  | ({ type: 'add_event'; data: ChatAddEventActionData } & ChatActionState)
+  | ({ type: 'add_todo'; data: ChatAddTodoActionData } & ChatActionState)
+  | ({ type: 'add_journal_entry'; data: ChatAddJournalEntryActionData } & ChatActionState);
+
+export type ChatGeneratedAction =
+  | { type: 'none' }
+  | ChatSingleGeneratedAction
+  | ({ type: 'batch'; actions: ChatSingleGeneratedAction[] } & ChatActionState);
+
+export type ChatMessageAction =
+  | ({ type: 'onboarding'; data?: any } & ChatActionState)
+  | ChatSingleGeneratedAction
+  | ({ type: 'batch'; actions: ChatSingleGeneratedAction[] } & ChatActionState);
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -175,11 +254,7 @@ export interface ChatMessage {
   connectionId?: string;
   imageUrl?: string;
   videoUrl?: string;
-  action?: {
-    type: 'add_event' | 'delete_event' | 'add_todo' | 'add_journal' | 'generate_insight' | 'generate_image' | 'generate_video' | 'onboarding';
-    data?: any;
-    executed?: boolean;
-  };
+  action?: ChatMessageAction;
   quickReplies?: string[];
 }
 
@@ -193,7 +268,22 @@ export interface ChatSession {
   agentIds?: string[]; // selected AI agent ids for this session (group chat)
 }
 
-export type ChatMode = 'basic' | 'learning';
+export type PersonaMemoryType = 'fact' | 'preference' | 'goal';
+
+export interface PersonaMemory {
+  id: string;
+  userId: string;
+  agentId: string;
+  type: PersonaMemoryType;
+  key: string;
+  content: string;
+  confidence: number;
+  observationCount: number;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export type ViewState = 'dashboard' | 'calendar' | 'todo' | 'journal' | 'board' | 'chat' | 'settings' | 'api-settings' | 'personas';
 

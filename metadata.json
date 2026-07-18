@@ -1,5 +1,5 @@
 {
-  "name": "LifeSync AI",
-  "description": "An integrated personal dashboard combining calendar, tasks, and a diary. It uses Gemini AI to analyze your daily logs and generate insightful life update posts.",
+  "name": "Dayflow",
+  "description": "Dayflow는 AI와 함께 일정, 할 일, 메모, 대화를 정리하는 개인 생산성 대시보드입니다.",
   "requestFramePermissions": []
 }

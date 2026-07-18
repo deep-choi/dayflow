@@ -1,12 +1,26 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { CalendarEvent, Todo, JournalEntry, AiPost, TodoList, AppSettings, AIAgent, ChatMessage, ChatMode } from '../types';
-import { generateLifeInsight, generateChatResponse, ChatActionResult, callGeminiImageGeneration } from '../services/geminiService';
-import { Sparkles, ChevronRight, Plus } from '../components/Icons';
-import { format, parseISO, isSameDay } from 'date-fns';
-import { ko } from 'date-fns/locale';
-import { getAgentAIConfig, isChatSupportedProvider, isImageGenerationModel, isVideoGenerationModel, findMediaConnection } from '../utils/aiConfig';
-import { callXaiImageGeneration, callXaiVideoGeneration } from '../services/xaiService';
+import {
+    CalendarEvent,
+    Todo,
+    JournalEntry,
+    AiPost,
+    TodoList,
+    AppSettings,
+    AIAgent,
+    ChatMessage,
+    ChatSession,
+    ChatGeneratedAction,
+    ChatMessageAction,
+    ChatSingleGeneratedAction,
+} from '../types';
+import { generateChatResponse, ChatActionResult } from '../services/geminiService';
+import { Sparkles, Plus } from '../components/Icons';
+import { ArrowUp, Edit3, Save, X } from 'lucide-react';
+import { getAgentAIConfig, isChatSupportedProvider } from '../utils/aiConfig';
 import { ApiUsageStats } from '../types';
+import { readImageFileAsDataUrl } from '../utils/imageAsset';
+import { getAvatarImageStyle } from '../utils/avatarFrame';
+import AvatarCropperModal from '../components/AvatarCropperModal';
 
 interface ChatViewProps {
     events: CalendarEvent[];
@@ -14,23 +28,34 @@ interface ChatViewProps {
     entries: JournalEntry[];
     posts: AiPost[];
     todoLists: TodoList[];
-    onAddEvent: (event: CalendarEvent) => void;
+    onAddEvent: (event: CalendarEvent) => void | Promise<void>;
     onDeleteEvent: (id: string) => void;
-    onAddTodo: (text: string, listId?: string, dueDate?: string, category?: Todo['category']) => void;
-    onAddEntry: (title: string, content: string, category?: string, mood?: JournalEntry['mood']) => void;
+    onAddTodo: (text: string, listId?: string, dueDate?: string, stepId?: string, category?: Todo['category']) => void | Promise<void>;
+    onAddEntry: (title: string, content: string, category?: string, mood?: JournalEntry['mood']) => void | Promise<void>;
     onAddPost: (post: AiPost) => void;
     requireConfirm?: boolean;
     settings: AppSettings;
-    onUpdateSettings?: (settings: AppSettings) => void;
+    onUpdateSettings?: (settings: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
     agent?: AIAgent;
     agents?: AIAgent[];
     selectedAgentIds?: string[];
     selectedAgents?: AIAgent[];
     onSelectAgents?: (ids: string[]) => void;
     onUpdateAgent?: (agentId: string, updates: Partial<AIAgent>) => void;
-    onUserMessage?: (text: string) => void;
+    onUserMessage?: (
+        text: string,
+        context?: {
+            activeAgentIds: string[];
+            addressedAgentIds: string[];
+            isNewSession?: boolean;
+            sessionStartedAt?: string;
+            sessionTimePeriod?: string;
+            sessionTimezone?: string;
+        }
+    ) => void;
     initialMessages?: ChatMessage[];
     onUpdateMessages?: (sessionId: string, messages: ChatMessage[]) => void;
+    chatSessions?: ChatSession[];
     currentSessionId?: string | null;
     personaMemoryContext?: string;
     personaMemoryContextByAgent?: Record<string, string>;
@@ -39,6 +64,56 @@ interface ChatViewProps {
 
 const CHAT_HISTORY_LIMIT = 12;
 const MAX_GROUP_AGENTS = 4;
+const SHARED_SCENE_MESSAGE_LIMIT = 16;
+const SHARED_SCENE_CHAR_LIMIT = 2400;
+const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
+    [/페르소나 설정에서\s*Gemini\/xAI를\s*지정해 주세요/g, '페르소나 설정에서 모델을 지정해 주세요'],
+    [/페르소나 설정에서\s*Gemini를\s*연결해 주세요/g, '페르소나 설정에서 채팅용 모델을 지정해 주세요'],
+    [/Gemini\/xAI만\s*선택 가능/g, '지원되는 모델만 선택 가능'],
+    [/Gemini API Key/g, 'API Key'],
+];
+type PersonaEditorTab = 'profile' | 'api';
+
+const RESPONSE_LENGTH_OPTIONS = [
+    { value: 'short', label: '짧게' },
+    { value: 'medium', label: '보통' },
+    { value: 'long', label: '길게' },
+] as const;
+
+const isInitialGreetingMessage = (message?: ChatMessage): boolean => {
+    if (!message || message.role !== 'assistant') return false;
+    return (
+        message.id === 'welcome' ||
+        message.id === 'onboarding-1' ||
+        message.id.startsWith('welcome-') ||
+        message.id.startsWith('onboarding-')
+    );
+};
+
+type UsageContext = {
+    agentId?: string;
+    provider?: AppSettings['apiConnections'][number]['provider'];
+    modelName?: string;
+    mediaType?: 'text';
+};
+
+const formatSessionTimestamp = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = `${date.getMonth() + 1}`.padStart(2, '0');
+    const day = `${date.getDate()}`.padStart(2, '0');
+    const hours = `${date.getHours()}`.padStart(2, '0');
+    const minutes = `${date.getMinutes()}`.padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}`;
+};
+
+const getSessionTimePeriod = (date: Date): string => {
+    const hour = date.getHours();
+    if (hour < 6) return 'late night';
+    if (hour < 12) return 'morning';
+    if (hour < 18) return 'afternoon';
+    if (hour < 22) return 'evening';
+    return 'night';
+};
 
 const isSameChatMessageList = (a: ChatMessage[], b: ChatMessage[]): boolean => {
     if (a === b) return true;
@@ -53,8 +128,21 @@ const isSameChatMessageList = (a: ChatMessage[], b: ChatMessage[]): boolean => {
             left.role !== right.role ||
             left.content !== right.content ||
             left.timestamp !== right.timestamp ||
-            left.agentId !== right.agentId
+            left.agentId !== right.agentId ||
+            left.imageUrl !== right.imageUrl ||
+            left.videoUrl !== right.videoUrl ||
+            left.provider !== right.provider ||
+            left.modelName !== right.modelName ||
+            left.connectionId !== right.connectionId
         ) {
+            return false;
+        }
+
+        if (JSON.stringify(left.action ?? null) !== JSON.stringify(right.action ?? null)) {
+            return false;
+        }
+
+        if (JSON.stringify(left.quickReplies ?? null) !== JSON.stringify(right.quickReplies ?? null)) {
             return false;
         }
     }
@@ -62,12 +150,39 @@ const isSameChatMessageList = (a: ChatMessage[], b: ChatMessage[]): boolean => {
     return true;
 };
 
-const renderInlineBold = (text: string, keyPrefix: string): React.ReactNode => {
-    const chunks = text.split(/(\*\*[^*]+\*\*)/g);
+const normalizeAssistantContent = (text: string): string => {
+    let normalized = text || '';
+    for (const [pattern, replacement] of LEGACY_MODEL_COPY_REPLACEMENTS) {
+        normalized = normalized.replace(pattern, replacement);
+    }
+    return normalized;
+};
+
+const normalizeAssistantMessageContent = (message: ChatMessage): ChatMessage => {
+    if (message.role !== 'assistant' || !message.content) return message;
+    const nextContent = normalizeAssistantContent(message.content);
+    return nextContent === message.content ? message : { ...message, content: nextContent };
+};
+
+const normalizeAssistantMessagesContent = (messages: ChatMessage[]): ChatMessage[] =>
+    (Array.isArray(messages) ? messages : []).map(normalizeAssistantMessageContent);
+
+const renderInlineRichText = (text: string, keyPrefix: string): React.ReactNode => {
+    const chunks = text.split(/(\*\*[^*]+\*\*|\*[^*\n]+\*)/g);
     return chunks.map((chunk, idx) => {
-        const match = chunk.match(/^\*\*(.+)\*\*$/);
-        if (!match) return <React.Fragment key={`${keyPrefix}-${idx}`}>{chunk}</React.Fragment>;
-        return <strong key={`${keyPrefix}-${idx}`} className="font-semibold">{match[1]}</strong>;
+        const boldMatch = chunk.match(/^\*\*(.+)\*\*$/);
+        if (boldMatch) return <strong key={`${keyPrefix}-${idx}`} className="font-medium">{boldMatch[1]}</strong>;
+
+        const mutedMatch = chunk.match(/^\*([^*]+)\*$/);
+        if (mutedMatch) {
+            return (
+                <span key={`${keyPrefix}-${idx}`} className="italic text-[#9b9a97]">
+                    {mutedMatch[1]}
+                </span>
+            );
+        }
+
+        return <React.Fragment key={`${keyPrefix}-${idx}`}>{chunk}</React.Fragment>;
     });
 };
 
@@ -80,9 +195,18 @@ const renderRichMessage = (content: string): React.ReactNode => {
     const pushParagraph = (paragraphLines: string[]) => {
         const text = paragraphLines.join('\n').trim();
         if (!text) return;
+        const mutedBlock = text.match(/^\*([^*\n]+)\*$/);
+        if (mutedBlock) {
+            nodes.push(
+                <p key={`p-${key++}`} className="whitespace-pre-line leading-relaxed italic text-[#9b9a97]">
+                    {mutedBlock[1]}
+                </p>
+            );
+            return;
+        }
         nodes.push(
-            <p key={`p-${key++}`} className="whitespace-pre-wrap leading-relaxed">
-                {renderInlineBold(text, `p-${key}`)}
+            <p key={`p-${key++}`} className="whitespace-pre-line leading-relaxed">
+                {renderInlineRichText(text, `p-${key}`)}
             </p>
         );
     };
@@ -101,10 +225,10 @@ const renderRichMessage = (content: string): React.ReactNode => {
         if (heading) {
             const level = heading[1].length;
             const headingClass =
-                level === 1 ? 'text-base font-bold' : level === 2 ? 'text-[15px] font-semibold' : 'text-sm font-semibold';
+                level === 1 ? 'text-base font-medium' : level === 2 ? 'text-[15px] font-medium' : 'text-sm font-medium';
             nodes.push(
                 <div key={`h-${key++}`} className={headingClass}>
-                    {renderInlineBold(heading[2], `h-${key}`)}
+                    {renderInlineRichText(heading[2], `h-${key}`)}
                 </div>
             );
             i += 1;
@@ -120,7 +244,7 @@ const renderRichMessage = (content: string): React.ReactNode => {
             nodes.push(
                 <ul key={`ul-${key++}`} className="list-disc pl-5 space-y-1">
                     {items.map((item, idx) => (
-                        <li key={`uli-${key}-${idx}`}>{renderInlineBold(item, `uli-${key}-${idx}`)}</li>
+                        <li key={`uli-${key}-${idx}`}>{renderInlineRichText(item, `uli-${key}-${idx}`)}</li>
                     ))}
                 </ul>
             );
@@ -128,15 +252,19 @@ const renderRichMessage = (content: string): React.ReactNode => {
         }
 
         if (/^\d+\.\s+/.test(trimmed)) {
-            const items: string[] = [];
+            const items: Array<{ number: number; text: string }> = [];
             while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-                items.push(lines[i].trim().replace(/^\d+\.\s+/, ''));
+                const match = lines[i].trim().match(/^(\d+)\.\s+(.+)$/);
+                if (match) {
+                    items.push({ number: Number(match[1]), text: match[2] });
+                }
                 i += 1;
             }
+            const startNumber = items[0]?.number || 1;
             nodes.push(
-                <ol key={`ol-${key++}`} className="list-decimal pl-5 space-y-1">
+                <ol key={`ol-${key++}`} start={startNumber} className="list-decimal pl-5 space-y-1">
                     {items.map((item, idx) => (
-                        <li key={`oli-${key}-${idx}`}>{renderInlineBold(item, `oli-${key}-${idx}`)}</li>
+                        <li key={`oli-${key}-${idx}`}>{renderInlineRichText(item.text, `oli-${key}-${idx}`)}</li>
                     ))}
                 </ol>
             );
@@ -158,6 +286,71 @@ const renderRichMessage = (content: string): React.ReactNode => {
     return <div className="space-y-1">{nodes}</div>;
 };
 
+const isExecutableAction = (action?: ChatMessageAction | null): action is Exclude<ChatMessageAction, { type: 'onboarding' }> =>
+    Boolean(action && action.type !== 'onboarding');
+
+const toPendingMessageAction = (action: ChatGeneratedAction | null | undefined): ChatMessageAction | null => {
+    if (!action || action.type === 'none') return null;
+    if (action.type === 'batch') {
+        const actions = action.actions.filter(Boolean).slice(0, 5).map((item) => ({
+            ...item,
+            status: item.status || 'pending',
+            executed: Boolean(item.executed),
+        })) as ChatSingleGeneratedAction[];
+        if (actions.length === 0) return null;
+        if (actions.length === 1) return { ...actions[0], status: 'pending', executed: false };
+        return { type: 'batch', actions, status: 'pending', executed: false };
+    }
+    return { ...action, status: action.status || 'pending', executed: Boolean(action.executed) };
+};
+
+const getActionItems = (action: ChatMessageAction): ChatSingleGeneratedAction[] => {
+    if (action.type === 'batch') return action.actions || [];
+    if (action.type === 'add_event' || action.type === 'add_todo' || action.type === 'add_journal_entry') return [action];
+    return [];
+};
+
+const getActionKindLabel = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') return '일정';
+    if (action.type === 'add_todo') return '할 일';
+    return '메모';
+};
+
+const formatDateTimeSummary = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') {
+        const { date, endDate, startTime, endTime, isAllDay } = action.data;
+        const dateText = endDate && endDate !== date ? `${date} ~ ${endDate}` : date;
+        if (isAllDay || !startTime) return `${dateText} · 종일`;
+        return `${dateText} · ${startTime}${endTime ? `-${endTime}` : ''}`;
+    }
+    if (action.type === 'add_todo') {
+        return action.data.dueDate ? `마감 ${action.data.dueDate}` : '마감일 없음';
+    }
+    return action.data.category || '메모장';
+};
+
+const getActionPrimaryText = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') return action.data.title;
+    if (action.type === 'add_todo') return action.data.text;
+    return action.data.title;
+};
+
+const getActionSecondaryText = (action: ChatSingleGeneratedAction): string => {
+    if (action.type === 'add_event') return action.data.description || '';
+    if (action.type === 'add_todo') {
+        const parts = [action.data.category, action.data.listName].filter(Boolean);
+        return parts.join(' · ');
+    }
+    return action.data.content;
+};
+
+const getActionStatusLabel = (action: ChatMessageAction): string => {
+    if (action.status === 'completed') return '추가 완료';
+    if (action.status === 'cancelled') return '취소됨';
+    if (action.status === 'failed') return '실패';
+    return '확인 대기';
+};
+
 // Helper: Get time-based greeting
 const getTimeBasedGreeting = (): string => {
     const hour = new Date().getHours();
@@ -165,31 +358,8 @@ const getTimeBasedGreeting = (): string => {
     if (hour < 12) return '좋은 아침이에요! ☀️';
     if (hour < 14) return '점심시간이네요! 🍚';
     if (hour < 18) return '좋은 오후예요! 🌤️';
-    if (hour < 22) return '오늘 하루 어떠셨나요? 🌙';
-    return '늦은 밤이네요. 오늘도 수고하셨어요 🌃';
-};
-
-// Helper: Get today's summary
-const getTodaySummary = (events: CalendarEvent[], todos: Todo[]): string => {
-    const pendingTodos = todos.filter(t => !t.completed).length;
-    const today = new Date();
-    const todayEvents = events.filter(e => {
-        if (!e.date) return false;
-        try {
-            return isSameDay(parseISO(e.date), today);
-        } catch {
-            return false;
-        }
-    }).length;
-
-    if (todayEvents === 0 && pendingTodos === 0) {
-        return '오늘은 예정된 일정이나 할 일이 없어요. 여유로운 하루를 보내세요!';
-    }
-
-    let summary = '';
-    if (todayEvents > 0) summary += `오늘 **${todayEvents}개의 일정**이 있고, `;
-    if (pendingTodos > 0) summary += `**${pendingTodos}개의 할 일**이 남아있어요.`;
-    return summary.replace(/, $/, '.');
+    if (hour < 22) return '오늘 하루 어떠셨나요? ❤️';
+    return '늦은 밤이네요. 오늘도 수고하셨어요 ❤️';
 };
 
 const ChatView: React.FC<ChatViewProps> = ({
@@ -215,6 +385,7 @@ const ChatView: React.FC<ChatViewProps> = ({
     onUserMessage,
     initialMessages,
     onUpdateMessages,
+    chatSessions = [],
     currentSessionId,
     personaMemoryContext,
     personaMemoryContextByAgent = {},
@@ -228,9 +399,9 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (onboardingStep === 0 && !userName) {
             // First time user - start onboarding
             return {
-                id: 'onboarding-1',
+                id: `onboarding-${crypto.randomUUID()}`,
                 role: 'assistant',
-                content: `${getTimeBasedGreeting()}\n\n처음 오셨네요! 저는 ${agent?.name || 'LifeSync AI'}예요. ${agent?.emoji || '💬'}\n당신의 일상을 함께 정리하고 더 나은 하루를 만들어 드릴게요.\n\n먼저, 뭐라고 불러드리면 될까요?`,
+                content: `${getTimeBasedGreeting()}\n\n처음 오셨네요! 저는 ${agent?.name || 'Dayflow'}예요. ${agent?.emoji || '💬'}\n당신의 일상을 함께 정리하고 더 나은 하루를 만들어 드릴게요.\n\n먼저, 뭐라고 불러드리면 될까요?`,
                 timestamp: new Date().toISOString(),
                 agentId: agent?.id,
                 action: { type: 'onboarding' },
@@ -239,29 +410,36 @@ const ChatView: React.FC<ChatViewProps> = ({
 
         // Returning user - personalized greeting
         return {
-            id: 'welcome',
+            id: `welcome-${crypto.randomUUID()}`,
             role: 'assistant',
-            content: `주인님, ${getTimeBasedGreeting()}\n\n${getTodaySummary(events, todos)}\n\n무엇을 도와드릴까요?`,
+            content: `사용자님! 무엇을 도와드릴까요? ❤️\n\n오늘 하고 싶은 이야기나 정리하고 싶은 생각이 있다면 편하게 말씀해주세요.\n제가 흐름을 잡고 필요한 건 조용히 기억해둘게요.`,
             timestamp: new Date().toISOString(),
             agentId: agent?.id,
-            quickReplies: ['오늘 일정 알려줘', '할 일 추가', '오늘 기분 기록', '주간 분석해줘'],
+            quickReplies: ['오늘 이야기하기', '기억해둘 내용 말하기', '아이디어 정리하기', '그냥 대화하기'],
         };
     };
 
     const [messages, setMessages] = useState<ChatMessage[]>(() => {
-        if (initialMessages && initialMessages.length > 0) return initialMessages;
+        if (initialMessages && initialMessages.length > 0) return normalizeAssistantMessagesContent(initialMessages);
         return [getWelcomeMessage()];
     });
     const [inputValue, setInputValue] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
-    const [chatMode, setChatMode] = useState<ChatMode>('basic');
     const [showToolbar, setShowToolbar] = useState(false);
-    const [isMultiSelectEnabled, setIsMultiSelectEnabled] = useState(false);
-    const [conversationContext, setConversationContext] = useState<string[]>([]); // For context awareness
-    const [pendingAction, setPendingAction] = useState<ChatMessage['action'] | null>(null);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+    const [agentDraft, setAgentDraft] = useState<AIAgent | null>(null);
+    const [agentEditorTab, setAgentEditorTab] = useState<PersonaEditorTab>('profile');
+    const [isSavingAgent, setIsSavingAgent] = useState(false);
+    const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
+    const [executingActionMessageId, setExecutingActionMessageId] = useState<string | null>(null);
+    const messagesContainerRef = useRef<HTMLDivElement>(null);
     const pendingSessionHydrationRef = useRef(false);
+    const hydratingSessionIdRef = useRef<string | null>(null);
+    const previousSessionIdRef = useRef<string | null>(currentSessionId ?? null);
+    const suppressAutoScrollRef = useRef(false);
     const lastSyncedSignatureRef = useRef<string>('');
+    const onUpdateMessagesRef = useRef(onUpdateMessages);
+
     const availableAgents = agents.length > 0 ? agents : (agent ? [agent] : []);
     const selectedAgentPool = selectedAgents.length > 0
         ? selectedAgents
@@ -270,18 +448,118 @@ const ChatView: React.FC<ChatViewProps> = ({
                 .map((id) => availableAgents.find((availableAgent) => availableAgent.id === id))
                 .filter(Boolean) as AIAgent[]
             : (agent ? [agent] : availableAgents.slice(0, 1)));
-    const activeAgents = selectedAgentPool.length > 0
-        ? selectedAgentPool.slice(0, MAX_GROUP_AGENTS)
+    const dedupedSelectedAgentPool = selectedAgentPool.filter((candidate, index, list) =>
+        candidate?.id && list.findIndex((item) => item?.id === candidate.id) === index
+    );
+    const activeAgents = dedupedSelectedAgentPool.length > 0
+        ? dedupedSelectedAgentPool.slice(0, MAX_GROUP_AGENTS)
         : (availableAgents.length > 0 ? [availableAgents[0]] : []);
     const primaryAgent = activeAgents[0] || agent || availableAgents[0];
-    const chatModeLabels: Record<ChatMode, string> = {
-        basic: '기본',
-        learning: '학습',
+    const supportedChatConnections = (settings.apiConnections || []).filter(
+        (connection) => isChatSupportedProvider(connection.provider)
+    );
+    const updateApiUsage = (stats?: Partial<ApiUsageStats>, context?: UsageContext) => {
+        if (!stats || !onUpdateSettings) return;
+
+        onUpdateSettings((prev) => {
+            const previousUsage = prev.apiUsage || {
+                totalRequests: 0,
+                totalTokens: 0,
+            };
+            const agentId = context?.agentId;
+            const previousAgentUsage = agentId
+                ? (prev.agentUsageById?.[agentId] || {
+                    totalRequests: 0,
+                    totalTokens: 0,
+                    textResponses: 0,
+                })
+                : null;
+
+            return {
+                ...prev,
+                apiUsage: {
+                    totalRequests: (previousUsage.totalRequests || 0) + (stats.totalRequests || 0),
+                    totalTokens: (previousUsage.totalTokens || 0) + (stats.totalTokens || 0),
+                    lastRequestDate: stats.lastRequestDate || new Date().toISOString(),
+                },
+                agentUsageById: agentId
+                    ? {
+                        ...(prev.agentUsageById || {}),
+                        [agentId]: {
+                            totalRequests: (previousAgentUsage?.totalRequests || 0) + (stats.totalRequests || 0),
+                            totalTokens: (previousAgentUsage?.totalTokens || 0) + (stats.totalTokens || 0),
+                            textResponses: (previousAgentUsage?.textResponses || 0) + (context?.mediaType === 'text' ? 1 : 0),
+                            lastRequestDate: stats.lastRequestDate || new Date().toISOString(),
+                            lastProvider: context?.provider || previousAgentUsage?.lastProvider,
+                            lastModelName: context?.modelName || previousAgentUsage?.lastModelName,
+                        },
+                    }
+                    : prev.agentUsageById,
+            };
+        });
     };
 
-    useEffect(() => {
-        setIsMultiSelectEnabled(selectedAgentIds.length > 1);
-    }, [selectedAgentIds]);
+    const openAgentEditor = (target?: AIAgent) => {
+        if (!target || !onUpdateAgent) return;
+        setIsAvatarCropOpen(false);
+        setAgentEditorTab('profile');
+        setEditingAgentId(target.id);
+        setAgentDraft({ ...target });
+    };
+
+    const closeAgentEditor = (force = false) => {
+        if (isSavingAgent && !force) return;
+        setIsAvatarCropOpen(false);
+        setEditingAgentId(null);
+        setAgentDraft(null);
+    };
+
+    const handleAgentImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+        if (file.size > 5 * 1024 * 1024) {
+            alert('파일 크기가 너무 큽니다 (최대 5MB).');
+            return;
+        }
+
+        try {
+            const imageUrl = await readImageFileAsDataUrl(file);
+            setAgentDraft((prev) => (prev ? { ...prev, avatar: imageUrl, avatarFrame: undefined } : prev));
+            setIsAvatarCropOpen(true);
+        } catch (error) {
+            alert((error as Error).message || '이미지를 불러오지 못했습니다.');
+        }
+    };
+
+    const updateAgentDraftAvatarFrame = (avatarFrame?: AIAgent['avatarFrame']) => {
+        setAgentDraft(prev => prev ? { ...prev, avatarFrame } : prev);
+    };
+
+    const handleSaveAgent = async () => {
+        if (!editingAgentId || !agentDraft || !onUpdateAgent) return;
+
+        setIsSavingAgent(true);
+        try {
+            await Promise.resolve(onUpdateAgent(editingAgentId, {
+                name: agentDraft.name,
+                role: agentDraft.role,
+                tone: agentDraft.tone,
+                personality: agentDraft.personality,
+                avatar: (agentDraft.avatar || '').trim() || undefined,
+                avatarFrame: agentDraft.avatar ? agentDraft.avatarFrame : undefined,
+                connectionId: agentDraft.connectionId || undefined,
+                responseLength: agentDraft.responseLength || 'medium',
+            }));
+            closeAgentEditor(true);
+        } catch (error) {
+            console.error(error);
+            alert('페르소나 저장 중 오류가 발생했어요.');
+        } finally {
+            setIsSavingAgent(false);
+        }
+    };
+
     const getAgentForMessage = (message: ChatMessage): AIAgent | undefined => {
         if (message.role !== 'assistant') return undefined;
         if (message.agentId) {
@@ -290,46 +568,75 @@ const ChatView: React.FC<ChatViewProps> = ({
         return primaryAgent;
     };
 
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+        const container = messagesContainerRef.current;
+        if (!container) return;
+        container.scrollTo({ top: container.scrollHeight, behavior });
     };
 
     useEffect(() => {
+        if (suppressAutoScrollRef.current) {
+            suppressAutoScrollRef.current = false;
+            return;
+        }
+
         scrollToBottom();
+    }, [messages]);
+
+    useEffect(() => {
+        onUpdateMessagesRef.current = onUpdateMessages;
+    }, [onUpdateMessages]);
+
+    useEffect(() => {
+        const normalizedMessages = normalizeAssistantMessagesContent(messages);
+        if (isSameChatMessageList(messages, normalizedMessages)) return;
+        setMessages(normalizedMessages);
     }, [messages]);
 
     // Update messages when switching sessions
     useEffect(() => {
+        const nextSessionId = currentSessionId ?? null;
+        const sessionChanged = previousSessionIdRef.current !== nextSessionId;
+        previousSessionIdRef.current = nextSessionId;
+
         if (currentSessionId) {
+            if (sessionChanged) {
+                suppressAutoScrollRef.current = true;
+            }
             // When the very first user message creates a new session in parent state,
             // keep local messages instead of resetting to welcome text.
             if (pendingSessionHydrationRef.current && (!initialMessages || initialMessages.length === 0)) {
                 pendingSessionHydrationRef.current = false;
+                hydratingSessionIdRef.current = null;
                 return;
             }
 
             if (initialMessages && initialMessages.length > 0) {
+                const normalizedInitialMessages = normalizeAssistantMessagesContent(initialMessages);
+                if (sessionChanged) {
+                    hydratingSessionIdRef.current = currentSessionId;
+                }
                 setMessages(prev => {
-                    if (isSameChatMessageList(prev, initialMessages)) return prev;
-                    return initialMessages;
+                    if (isSameChatMessageList(prev, normalizedInitialMessages)) return prev;
+                    return normalizedInitialMessages;
                 });
             } else {
-                // New empty session should start from a fresh welcome message.
-                setMessages(prev => {
-                    const isAlreadyWelcome =
-                        prev.length === 1 &&
-                        prev[0].role === 'assistant' &&
-                        (prev[0].id === 'welcome' || prev[0].id === 'onboarding-1');
-                    return isAlreadyWelcome ? prev : [getWelcomeMessage()];
-                });
+                // If it's an existing session ID but no messages yet, it might be loading.
+                // Only reset if we are sure it's meant to be an empty new session.
+                const isNewSession = !chatSessions.find(s => s.id === currentSessionId);
+                
+                if (isNewSession) {
+                    setMessages(prev => {
+                        const isAlreadyWelcome = prev.length === 1 && isInitialGreetingMessage(prev[0]);
+                        return isAlreadyWelcome ? prev : [getWelcomeMessage()];
+                    });
+                }
             }
         } else {
+            hydratingSessionIdRef.current = null;
             // No session - reset to welcome
             setMessages(prev => {
-                const isAlreadyWelcome =
-                    prev.length === 1 &&
-                    prev[0].role === 'assistant' &&
-                    (prev[0].id === 'welcome' || prev[0].id === 'onboarding-1');
+                const isAlreadyWelcome = prev.length === 1 && isInitialGreetingMessage(prev[0]);
                 return isAlreadyWelcome ? prev : [getWelcomeMessage()];
             });
         }
@@ -337,21 +644,37 @@ const ChatView: React.FC<ChatViewProps> = ({
 
     // Notify parent of message updates
     useEffect(() => {
-        if (!currentSessionId || !onUpdateMessages || messages.length <= 1) return;
+        const updateMessages = onUpdateMessagesRef.current;
+        if (!currentSessionId || !updateMessages || messages.length <= 1) return;
+        const normalizedMessages = normalizeAssistantMessagesContent(messages);
 
-        // Session switch hydration should not immediately write back identical payloads.
-        if (initialMessages && isSameChatMessageList(messages, initialMessages)) return;
+        if (hydratingSessionIdRef.current === currentSessionId) {
+            const normalizedInitialMessages = initialMessages ? normalizeAssistantMessagesContent(initialMessages) : null;
+            if (!normalizedInitialMessages || !isSameChatMessageList(normalizedMessages, normalizedInitialMessages)) return;
+            hydratingSessionIdRef.current = null;
+        }
 
-        const signature = `${currentSessionId}:${messages.map(m => `${m.id}:${m.timestamp}`).join('|')}`;
+        // Session switch hydration should not immediately write back identical payloads,
+        // unless the persisted payload still contains legacy copy that needs cleanup.
+        if (initialMessages) {
+            const normalizedInitialMessages = normalizeAssistantMessagesContent(initialMessages);
+            const initialMessagesAlreadyNormalized = isSameChatMessageList(initialMessages, normalizedInitialMessages);
+            if (initialMessagesAlreadyNormalized && isSameChatMessageList(normalizedMessages, normalizedInitialMessages)) return;
+        }
+
+        const signature = `${currentSessionId}:${normalizedMessages.map(m => `${m.id}:${m.timestamp}:${m.content}`).join('|')}`;
         if (lastSyncedSignatureRef.current === signature) return;
         lastSyncedSignatureRef.current = signature;
 
         // Ensure we defer the parent state update to avoid rendering loops
         const timeoutId = window.setTimeout(() => {
-            onUpdateMessages(currentSessionId, messages);
+            if (!isSameChatMessageList(messages, normalizedMessages)) {
+                setMessages(normalizedMessages);
+            }
+            updateMessages(currentSessionId, normalizedMessages);
         }, 0);
         return () => window.clearTimeout(timeoutId);
-    }, [messages, currentSessionId]);
+    }, [messages, currentSessionId, initialMessages]);
 
     useEffect(() => {
         if (!userName && defaultUserName) {
@@ -375,202 +698,115 @@ const ChatView: React.FC<ChatViewProps> = ({
         return null;
     };
 
-    const mapGeminiActionToChatAction = (action: ChatActionResult['action'] | null | undefined): ChatMessage['action'] | null => {
-        if (!action || action.type === 'none') return null;
+    const mapGeminiActionToChatAction = (action: ChatActionResult['action'] | null | undefined): ChatMessage['action'] | null =>
+        toPendingMessageAction(action);
 
-        const normalizeText = (value?: string) => (value || '').toLowerCase().replace(/\s+/g, '').trim();
-        const resolveDeleteTarget = (payload: ChatActionResult['action']['deleteEvent']) => {
-            if (!payload) return null;
-
-            if (payload.id) {
-                const targetById = events.find(event => event.id === payload.id);
-                if (targetById) return targetById;
-            }
-
-            let candidates = [...events];
-            if (payload.date) {
-                candidates = candidates.filter(event => event.date === payload.date);
-            }
-            if (payload.startTime) {
-                candidates = candidates.filter(event => event.startTime === payload.startTime);
-            }
-            if (payload.title) {
-                const targetTitle = normalizeText(payload.title);
-                candidates = candidates.filter(event => {
-                    const eventTitle = normalizeText(event.title);
-                    return eventTitle.includes(targetTitle) || targetTitle.includes(eventTitle);
-                });
-            }
-
-            if (candidates.length === 0) return null;
-            if (candidates.length === 1) return candidates[0];
-
-            const sorted = candidates.sort((a, b) => {
-                const aTs = new Date(`${a.date}T${a.startTime || '00:00'}:00`).getTime();
-                const bTs = new Date(`${b.date}T${b.startTime || '00:00'}:00`).getTime();
-                return aTs - bTs;
-            });
-            return sorted[0];
-        };
-
-        if (action.type === 'add_event' && action.event) {
-            return {
-                type: 'add_event',
-                data: {
-                    id: crypto.randomUUID(),
-                    title: action.event.title,
-                    date: action.event.date,
-                    startTime: action.event.startTime,
-                    endTime: action.event.endTime,
-                    type: action.event.type || 'tag_1',
-                } as CalendarEvent,
-            };
-        }
-
-        if (action.type === 'add_todo' && action.todo) {
-            const allowedCategories: Todo['category'][] = ['personal', 'work', 'health', 'shopping'];
-            const category = allowedCategories.includes(action.todo.category as Todo['category'])
-                ? (action.todo.category as Todo['category'])
-                : 'personal';
-
-            return {
-                type: 'add_todo',
-                data: {
-                    text: action.todo.text,
-                    dueDate: action.todo.dueDate,
-                    category,
-                },
-            };
-        }
-
-        if (action.type === 'add_journal' && action.journal) {
-            const mood = (['good', 'neutral', 'bad'] as const).includes(action.journal.mood as JournalEntry['mood'])
-                ? (action.journal.mood as JournalEntry['mood'])
-                : 'neutral';
-
-            return {
-                type: 'add_journal',
-                data: {
-                    title: action.journal.title,
-                    content: action.journal.content,
-                    category: '메모장',
-                    mood,
-                },
-            };
-        }
-
-        if (action.type === 'generate_insight') {
-            return { type: 'generate_insight' };
-        }
-
-        if (action.type === 'generate_image') {
-            return { type: 'generate_image', data: { prompt: action.prompt } };
-        }
-
-        if (action.type === 'generate_video') {
-            return { type: 'generate_video', data: { prompt: action.prompt } };
-        }
-
-        if (action.type === 'delete_event' && action.deleteEvent) {
-            const target = resolveDeleteTarget(action.deleteEvent);
-            if (!target) return null;
-
-            return {
-                type: 'delete_event',
-                data: {
-                    id: target.id,
-                    title: target.title,
-                    date: target.date,
-                    startTime: target.startTime,
-                },
-            };
-        }
-
-        return null;
+    const resolveTodoListId = (listName?: string): string | undefined => {
+        const normalized = (listName || '').trim().toLowerCase();
+        if (!normalized) return todoLists[0]?.id;
+        const matched = todoLists.find((list) => {
+            const title = (list.title || '').trim().toLowerCase();
+            return Boolean(title) && (title === normalized || title.includes(normalized) || normalized.includes(title));
+        });
+        return matched?.id || todoLists[0]?.id;
     };
 
-    const executeAction = async (action: ChatMessage['action']) => {
-        if (!action) return;
+    const executeSingleAction = async (action: ChatSingleGeneratedAction): Promise<ChatSingleGeneratedAction> => {
+        try {
+            if (action.type === 'add_event') {
+                const event: CalendarEvent = {
+                    id: crypto.randomUUID(),
+                    title: action.data.title,
+                    date: action.data.date,
+                    endDate: action.data.endDate,
+                    startTime: action.data.isAllDay ? undefined : action.data.startTime,
+                    endTime: action.data.isAllDay ? undefined : action.data.endTime,
+                    isAllDay: action.data.isAllDay ?? !action.data.startTime,
+                    description: action.data.description,
+                    type: action.data.type || 'tag_1',
+                };
+                await onAddEvent(event);
+                return { ...action, status: 'completed', executed: true };
+            }
 
-        switch (action.type) {
-            case 'onboarding':
-                if (action.data?.step === 1) {
-                    setUserName(action.data.name);
-                    setOnboardingStep(1);
-                } else if (action.data?.step === 2) {
-                    setOnboardingStep(-1); // Onboarding complete
-                }
-                break;
-            case 'add_event':
-                onAddEvent(action.data);
-                break;
-            case 'delete_event':
-                if (action.data?.id) {
-                    onDeleteEvent(action.data.id);
-                }
-                break;
-            case 'add_todo':
-                {
-                    const todoData = typeof action.data === 'string'
-                        ? { text: action.data, category: 'personal' }
-                        : action.data;
-                    onAddTodo(todoData.text, todoData.listId, todoData.dueDate, todoData.category);
-                }
-                break;
-            case 'add_journal':
-                onAddEntry(
-                    action.data?.title || '채팅 메모',
-                    action.data?.content || '',
-                    action.data?.category || '메모장',
-                    action.data?.mood || 'neutral'
+            if (action.type === 'add_todo') {
+                await onAddTodo(
+                    action.data.text,
+                    resolveTodoListId(action.data.listName),
+                    action.data.dueDate,
+                    undefined,
+                    action.data.category || 'personal'
                 );
-                break;
-            case 'generate_insight':
-                try {
-                    const insightAgent = primaryAgent;
-                    const insightConfig = getAgentAIConfig(settings, insightAgent?.connectionId);
-                    if (!insightConfig?.apiKey) {
-                        throw new Error('API Key가 필요해요.');
-                    }
-                    const newPost = await generateLifeInsight(
-                        insightConfig.apiKey,
-                        events,
-                        todos,
-                        entries,
-                        insightConfig.modelName,
-                        insightConfig.provider
-                    );
-                    onAddPost(newPost);
+                return { ...action, status: 'completed', executed: true };
+            }
 
-                    // Update Usage Stats (Approximate token count based on input/output length)
-                    if (onUpdateSettings) {
-                        const estimatedTokens = (JSON.stringify({ events, todos, entries }).length / 4) + (newPost.content.length / 4);
-                        onUpdateSettings({
-                            ...settings,
-                            apiUsage: {
-                                totalRequests: (settings.apiUsage?.totalRequests || 0) + 1,
-                                totalTokens: (settings.apiUsage?.totalTokens || 0) + Math.ceil(estimatedTokens),
-                                lastRequestDate: new Date().toISOString(),
-                            }
-                        });
-                    }
-                } catch (error) {
-                    // console.error(error); // Error handling is done in getResponseForAction via executed flag or message content
-                    // But here we need to inform the user if it failed.
-                    // For now, let the error propagate to the response handler or handle it here by adding a system message
-                    const errorMessage: ChatMessage = {
-                        id: crypto.randomUUID(),
-                        role: 'assistant',
-                        content: `${primaryAgent?.name || '선택한 페르소나'}에 연결된 API가 없거나 유효하지 않아 AI 분석을 진행할 수 없어요. 페르소나 설정에서 Gemini/xAI 연결을 지정해 주세요.`,
-                        timestamp: new Date().toISOString(),
-                        agentId: primaryAgent?.id,
-                        quickReplies: ['설정하러 갈래', '괜찮아']
-                    };
-                    setMessages(prev => [...prev, errorMessage]);
-                    return; // Stop further processing
-                }
-                break;
+            await onAddEntry(
+                action.data.title,
+                action.data.content,
+                action.data.category || '메모장',
+                action.data.mood || 'neutral'
+            );
+            return { ...action, status: 'completed', executed: true };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '알 수 없는 오류';
+            return { ...action, status: 'failed', executed: false, error: message };
         }
+    };
+
+    const executeAction = async (action: ChatMessage['action']): Promise<ChatMessage['action']> => {
+        if (!action) return action;
+
+        if (action.type === 'onboarding') {
+            if (action.data?.step === 1) {
+                setUserName(action.data.name);
+                setOnboardingStep(1);
+            } else if (action.data?.step === 2) {
+                setOnboardingStep(-1); // Onboarding complete
+            }
+            return { ...action, status: 'completed', executed: true };
+        }
+
+        if (action.type === 'batch') {
+            const executedActions = [];
+            for (const item of action.actions || []) {
+                executedActions.push(await executeSingleAction(item));
+            }
+            const hasFailure = executedActions.some((item) => item.status === 'failed');
+            return {
+                ...action,
+                actions: executedActions,
+                status: hasFailure ? 'failed' : 'completed',
+                executed: !hasFailure,
+                error: hasFailure ? '일부 항목을 추가하지 못했어요.' : undefined,
+            };
+        }
+
+        return executeSingleAction(action);
+    };
+
+    const handleConfirmMessageAction = async (messageId: string, action: ChatMessageAction) => {
+        if (!isExecutableAction(action) || executingActionMessageId) return;
+        setExecutingActionMessageId(messageId);
+        try {
+            const updatedAction = await executeAction(action);
+            setMessages((prev) => prev.map((message) =>
+                message.id === messageId ? { ...message, action: updatedAction || undefined } : message
+            ));
+        } finally {
+            setExecutingActionMessageId(null);
+        }
+    };
+
+    const handleCancelMessageAction = (messageId: string, action: ChatMessageAction) => {
+        if (!isExecutableAction(action)) return;
+        const cancelledAction: ChatMessageAction = {
+            ...action,
+            status: 'cancelled',
+            executed: false,
+        };
+        setMessages((prev) => prev.map((message) =>
+            message.id === messageId ? { ...message, action: cancelledAction } : message
+        ));
     };
 
     const getResponseForAction = (action: ChatMessage['action'] | null, userText: string): { content: string; quickReplies?: string[] } => {
@@ -578,121 +814,33 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (action?.type === 'onboarding') {
             if (action.data?.step === 1) {
                 return {
-                    content: `주인님, 반가워요! 🎉\n\n저와 어떤 이야기를 나누고 싶으세요?\n\n편하게 선택해주시거나, 자유롭게 말씀해주세요!`,
-                    quickReplies: ['일정 관리가 필요해', '할 일을 정리하고 싶어', '오늘 기분을 기록하고 싶어', '그냥 이야기하고 싶어'],
+                    content: `사용자님 반가워요! 🎉\n\n저와 어떤 이야기를 나누고 싶으세요?\n\n편하게 선택해주시거나 자유롭게 말씀해주세요!`,
+                    quickReplies: ['그냥 이야기하고 싶어', '아이디어를 정리하고 싶어', '기억해둘 내용이 있어', '고민 상담을 받고 싶어'],
                 };
             }
             if (action.data?.step === 2) {
                 return {
-                    content: `좋아요! 이제 준비가 됐어요. ✨\n\n주인님의 하루를 더 나은 방향으로 이끌어 드릴게요.\n\n그럼 바로 시작해볼까요? 무엇이든 편하게 말씀해주세요!`,
-                    quickReplies: ['오늘 일정 알려줘', '할 일 추가', '오늘 기분 기록'],
+                    content: `좋아요! 이제 준비가 됐어요. ✨\n\n사용자님의 하루를 더 나은 방향으로 이끌어 드릴게요.\n\n그럼 바로 시작해볼까요? 무엇이든 편하게 말씀해주세요!`,
+                    quickReplies: ['오늘 기분 이야기', '아이디어 정리', '이거 기억해줘'],
                 };
             }
         }
 
         if (!action) {
-            // Context-aware fallback - check recent conversation
-            const recentContext = conversationContext.slice(-3).join(' ');
-
-            // Check if user is just chatting
             if (userText.length < 10 && !userText.includes('?')) {
                 return {
-                    content: `네, 주인님! 더 말씀해주세요. 듣고 있어요. 😊`,
-                    quickReplies: ['일정 추가하고 싶어', '할 일 정리해줘', '오늘 하루 어땠는지 기록할래'],
+                    content: `네 사용자님! 더 말씀해주세요. 듣고 있어요. 😊`,
+                    quickReplies: ['계속 이야기할게', '아이디어 더 말할게', '이거 기억해줘'],
                 };
             }
 
             return {
                 content: `음, 요청을 정확히 이해하지 못했어요. 😅\n\n혹시 이런 걸 원하셨나요?`,
-                quickReplies: ['일정 추가', '할 일 추가', '오늘 기분 기록', '분석해줘'],
+                quickReplies: ['대화 이어가기', '아이디어 정리', '기억에 저장하기', '다르게 말해볼게'],
             };
         }
 
-        switch (action.type) {
-            case 'add_event':
-                return {
-                    content: `✅ 캘린더에 일정을 등록했어요!\n\n📅 **${action.data.title}**\n📆 ${format(parseISO(action.data.date), 'M월 d일 (EEEE)', { locale: ko })}${action.data.startTime ? `\n⏰ ${action.data.startTime}` : ''}\n\n캘린더에서 확인해보세요!`,
-                    quickReplies: ['다른 일정 추가', '오늘 할 일 보여줘', '고마워'],
-                };
-            case 'add_todo':
-                return {
-                    content: `✅ 할 일 목록에 추가했어요!\n\n☑️ **${action.data.text ?? action.data}**\n🏷️ ${getListLabel(action.data.listId)}\n\n완료하면 체크해주세요! 화이팅! 💪`,
-                    quickReplies: ['다른 할 일 추가', '지금 할 일 뭐야?', '고마워'],
-                };
-            case 'delete_event':
-                return {
-                    content: `🗑️ 일정을 삭제했어요.\n\n📅 **${action.data.title || '선택한 일정'}**${action.data.date ? `\n📆 ${format(parseISO(action.data.date), 'M월 d일 (EEEE)', { locale: ko })}` : ''}${action.data.startTime ? `\n⏰ ${action.data.startTime}` : ''}`,
-                    quickReplies: ['다른 일정도 삭제', '오늘 일정 알려줘', '고마워'],
-                };
-            case 'add_journal': {
-                const moodEmoji = action.data.mood === 'good' ? '😊' : action.data.mood === 'bad' ? '😔' : '😐';
-
-                // Emotional Dialogue Flow - Enhanced empathetic response
-                if (action.data.mood === 'bad') {
-                    return {
-                        content: `${moodEmoji} 그랬군요... 정말 힘드셨겠어요.\n\n일기장에 오늘의 이야기를 기록해뒀어요.\n\n혹시 조금 더 이야기하고 싶으시면, 무슨 일이 있었는지 말씀해주세요. 함께 정리해볼게요. 🌿`,
-                        quickReplies: ['조금 더 이야기하고 싶어', '괜찮아, 그냥 기록만', '오늘은 일찍 쉴래'],
-                    };
-                } else if (action.data.mood === 'good') {
-                    return {
-                        content: `${moodEmoji} 오, 좋은 하루였나봐요! 저도 기분이 좋아지네요.\n\n일기장에 오늘의 기분을 기록해뒀어요.\n\n무슨 좋은 일이 있었는지 더 들려주실래요?`,
-                        quickReplies: ['응, 좋은 일 있었어!', '그냥 기분이 좋아', '내일도 이랬으면'],
-                    };
-                }
-                return {
-                    content: `${moodEmoji} 오늘의 이야기를 일기장에 기록했어요.\n\n내일은 더 좋은 하루가 되길 바래요!`,
-                    quickReplies: ['고마워', '내일 할 일 알려줘', '이제 쉴래'],
-                };
-            }
-            case 'generate_insight':
-                return {
-                    content: `✅ AI 인사이트를 생성했어요!\n\n**AI 보드** 탭에서 주인님의 라이프 분석 리포트를 확인해보세요. 📊\n\n더 많은 데이터가 쌓일수록 더 정확한 분석이 가능해요!`,
-                    quickReplies: ['분석 더 해줘', '오늘 할 일 뭐야?', '고마워'],
-                };
-            case 'generate_image':
-                return { content: '이미지를 생성했어요!' };
-            case 'generate_video':
-                return { content: '영상을 생성했어요!' };
-            default:
-                return { content: '처리 완료!' };
-        }
-    };
-
-    const getMoodLabel = (mood: JournalEntry['mood']) => {
-        if (mood === 'good') return '좋음';
-        if (mood === 'bad') return '안좋음';
-        return '보통';
-    };
-
-    const getListLabel = (listId?: string) => {
-        if (!listId) return '기본 목록';
-        return todoLists.find(l => l.id === listId)?.title ?? '기본 목록';
-    };
-
-    const requiresConfirmation = (action: ChatMessage['action'] | null) => {
-        if (!requireConfirm) return false;
-        return action?.type === 'delete_event' || action?.type === 'add_todo' || action?.type === 'add_journal';
-    };
-
-    const buildConfirmationPrompt = (action: ChatMessage['action']): { content: string; quickReplies: string[] } => {
-        let summary = '';
-        if (action.type === 'add_event') {
-            const eventDate = format(parseISO(action.data.date), 'M월 d일 (EEEE)', { locale: ko });
-            summary = `📅 일정: **${action.data.title}**\n📆 ${eventDate}${action.data.startTime ? `\n⏰ ${action.data.startTime}` : ''}`;
-        } else if (action.type === 'delete_event') {
-            summary = `🗑️ 삭제 일정: **${action.data.title || '선택한 일정'}**${action.data.date ? `\n📆 ${format(parseISO(action.data.date), 'M월 d일 (EEEE)', { locale: ko })}` : ''}${action.data.startTime ? `\n⏰ ${action.data.startTime}` : ''}`;
-        } else if (action.type === 'add_todo') {
-            const text = action.data.text ?? action.data;
-            summary = `☑️ 할 일: **${text}**\n🏷️ 목록: ${getListLabel(action.data.listId)}`;
-        } else if (action.type === 'add_journal') {
-            const snippet = (action.data.content || '').slice(0, 60);
-            summary = `📝 일기: "${snippet}${action.data.content?.length > 60 ? '…' : ''}"\n🙂 기분: ${getMoodLabel(action.data.mood)}`;
-        }
-
-        return {
-            content: `요청을 이렇게 이해했어요.\n\n${summary}\n\n이대로 실행할까요?`,
-            quickReplies: ['실행', '취소'],
-        };
+        return { content: '처리 완료!' };
     };
 
     const resolveAgentConfig = (targetAgent?: AIAgent) => {
@@ -701,7 +849,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
     const getAgentConnectionWarning = (targetAgent?: AIAgent): string => {
         if (!targetAgent) return '사용 가능한 AI 연결을 찾지 못했어요. 설정에서 API 연결을 확인해 주세요.';
-        if (!targetAgent.connectionId) return `${targetAgent.name}에 API 연결이 지정되지 않았어요. 전역 기본 연결은 사용하지 않으니 페르소나 설정에서 Gemini/xAI를 지정해 주세요.`;
+        if (!targetAgent.connectionId) return `${targetAgent.name}에 API 연결이 지정되지 않았어요. 전역 기본 연결은 사용하지 않으니 페르소나 설정에서 모델을 지정해 주세요.`;
 
         const conn = (settings.apiConnections || []).find(c => c.id === targetAgent.connectionId);
         if (!conn) {
@@ -711,7 +859,7 @@ const ChatView: React.FC<ChatViewProps> = ({
             return `${targetAgent.name}의 API Key가 비어 있어 응답할 수 없어요.`;
         }
         if (!isChatSupportedProvider(conn.provider)) {
-            return `${targetAgent.name}에 연결된 ${conn.provider.toUpperCase()}는 현재 채팅에서 지원되지 않아요. Gemini 또는 xAI를 연결해 주세요.`;
+            return `${targetAgent.name}에 연결된 모델은 현재 채팅에서 지원되지 않아요. 페르소나 설정에서 채팅용 모델을 지정해 주세요.`;
         }
         return `${targetAgent.name}의 AI 연결을 사용할 수 없어요. 연결 상태를 확인해 주세요.`;
     };
@@ -729,17 +877,98 @@ const ChatView: React.FC<ChatViewProps> = ({
         };
     };
 
-    const buildHistoryForAgent = (allMessages: ChatMessage[], targetAgent?: AIAgent, allowUntypedAssistant = false) => {
-        return allMessages
-            .filter((message) => {
-                if (message.role === 'user') return true;
-                if (message.role !== 'assistant') return false;
-                if (!targetAgent?.id) return false;
-                if (message.agentId === targetAgent.id) return true;
-                return allowUntypedAssistant && !message.agentId;
+    const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const normalizeMentionText = (value: string): string =>
+        (value || '')
+            .toLowerCase()
+            .replace(/\s+/g, '')
+            .replace(/[.,!?~`"'“”‘’_\-:/\\|()[\]{}<>]/g, '');
+
+    const resolveDirectAddressedAgentIds = (text: string, candidates: AIAgent[]): string[] => {
+        if (!text.trim() || candidates.length === 0) return [];
+
+        const lowered = text.toLowerCase();
+        const normalized = normalizeMentionText(text);
+        const mentionsAll = /(?:^|\s)@all\b|모두|다들|전체|everyone|all of you/i.test(text);
+        if (mentionsAll) return candidates.map((candidate) => candidate.id);
+
+        const matchedIds = new Set<string>();
+        for (const candidate of candidates) {
+            const name = (candidate.name || '').trim();
+            if (!name) continue;
+
+            const loweredName = name.toLowerCase();
+            const normalizedName = normalizeMentionText(name);
+            const atMention = new RegExp(`@\\s*${escapeRegExp(loweredName)}(?:\\b|님)?`, 'i');
+
+            if (atMention.test(lowered)) {
+                matchedIds.add(candidate.id);
+                continue;
+            }
+
+            if (normalizedName.length >= 2 && normalized.includes(normalizedName)) {
+                matchedIds.add(candidate.id);
+            }
+        }
+
+        return Array.from(matchedIds);
+    };
+
+    const buildHistoryForAgent = (
+        allMessages: ChatMessage[],
+        targetAgent?: AIAgent,
+        options: { allowUntypedAssistant?: boolean; includePeerPersonaContext?: boolean } = {}
+    ) => {
+        const allowUntypedAssistant = options.allowUntypedAssistant ?? false;
+        const includePeerPersonaContext = options.includePeerPersonaContext ?? false;
+        const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+
+        for (const message of allMessages) {
+            const content = (message.content || '').trim();
+            if (!content) continue;
+
+            if (message.role === 'user') {
+                history.push({ role: 'user', content });
+                continue;
+            }
+
+            if (message.role !== 'assistant') continue;
+            if (!targetAgent?.id) continue;
+
+            const isSelfMessage = message.agentId === targetAgent.id || (allowUntypedAssistant && !message.agentId);
+            if (isSelfMessage) {
+                history.push({ role: 'assistant', content });
+                continue;
+            }
+
+            if (includePeerPersonaContext && message.agentId) {
+                const peerName = availableAgents.find((availableAgent) => availableAgent.id === message.agentId)?.name || '다른 페르소나';
+                history.push({
+                    role: 'user',
+                    content: `[${peerName}의 발화] ${content}`,
+                });
+            }
+        }
+
+        return history.slice(-CHAT_HISTORY_LIMIT);
+    };
+
+    const buildSharedSceneContext = (allMessages: ChatMessage[]): string => {
+        const lines = allMessages
+            .slice(-SHARED_SCENE_MESSAGE_LIMIT)
+            .map((message) => {
+                const content = (message.content || '').trim();
+                if (!content) return '';
+                if (message.role === 'user') return `${userName || '사용자'}: ${content}`;
+                const speaker = availableAgents.find((candidate) => candidate.id === message.agentId)?.name || '페르소나';
+                return `${speaker}: ${content}`;
             })
-            .map((message) => ({ role: message.role, content: message.content }))
-            .slice(-CHAT_HISTORY_LIMIT);
+            .filter(Boolean);
+        const joined = lines.join('\n');
+        return joined.length > SHARED_SCENE_CHAR_LIMIT
+            ? joined.slice(-SHARED_SCENE_CHAR_LIMIT)
+            : joined;
     };
 
     const handleSend = async (text?: string) => {
@@ -747,22 +976,29 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (!messageText.trim() || isProcessing) return;
 
         const trimmedMessage = messageText.trim();
-        const normalizedMessage = trimmedMessage.toLowerCase().replace(/[.!?]/g, '');
-        const confirmKeywords = ['실행', '확인', '네', '응', '좋아', '그래', 'ㅇㅋ', 'ok', '오케이'];
-        const cancelKeywords = ['취소', '아니', '그만', '나중에', 'no'];
-        const isConfirm = Boolean(pendingAction) && confirmKeywords.includes(normalizedMessage);
-        const isCancel = Boolean(pendingAction) && cancelKeywords.includes(normalizedMessage);
-
-        if (!isConfirm && !isCancel) {
-            if (!currentSessionId) {
-                pendingSessionHydrationRef.current = true;
-            }
-            try {
-                onUserMessage?.(trimmedMessage);
-            } catch (error) {
-                pendingSessionHydrationRef.current = false;
-                console.error('onUserMessage callback failed:', error);
-            }
+        const addressedAgentIdsForInput = resolveDirectAddressedAgentIds(trimmedMessage, activeAgents);
+        const hasPriorUserMessages = messages.some((message) => message.role === 'user');
+        const sessionRecord = currentSessionId ? chatSessions.find((session) => session.id === currentSessionId) : undefined;
+        const sessionStartDate = sessionRecord?.createdAt ? new Date(sessionRecord.createdAt) : new Date();
+        const sessionStartedAt = formatSessionTimestamp(sessionStartDate);
+        const sessionTimePeriod = getSessionTimePeriod(sessionStartDate);
+        const sessionTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
+        const isNewSession = !hasPriorUserMessages;
+        if (!currentSessionId) {
+            pendingSessionHydrationRef.current = true;
+        }
+        try {
+            onUserMessage?.(trimmedMessage, {
+                activeAgentIds: activeAgents.map((activeAgent) => activeAgent.id),
+                addressedAgentIds: addressedAgentIdsForInput,
+                isNewSession,
+                sessionStartedAt,
+                sessionTimePeriod,
+                sessionTimezone,
+            });
+        } catch (error) {
+            pendingSessionHydrationRef.current = false;
+            console.error('onUserMessage callback failed:', error);
         }
 
         const userMessage: ChatMessage = {
@@ -776,62 +1012,9 @@ const ChatView: React.FC<ChatViewProps> = ({
         setInputValue('');
         setIsProcessing(true);
 
-        // Update conversation context for awareness
-        setConversationContext(prev => [...prev.slice(-4), messageText]);
         const messageTimeline = [...messages, userMessage];
 
         const hasAnyAgentConfig = activeAgents.some((activeAgent) => Boolean(resolveAgentConfig(activeAgent)?.apiKey));
-        // Keep artificial delay minimal when API is available.
-        const delayMs = hasAnyAgentConfig ? 80 : 350;
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-
-        if (pendingAction && (isConfirm || isCancel)) {
-            if (isCancel) {
-                setPendingAction(null);
-                const assistantMessage: ChatMessage = {
-                    id: crypto.randomUUID(),
-                    role: 'assistant',
-                    content: '알겠어요. 요청은 취소했어요.',
-                    timestamp: new Date().toISOString(),
-                    agentId: primaryAgent?.id,
-                    quickReplies: ['다른 요청 하기', '오늘 일정 알려줘', '할 일 추가'],
-                };
-                setMessages((prev) => [...prev, assistantMessage]);
-                setIsProcessing(false);
-                return;
-            }
-
-            await executeAction(pendingAction);
-            const confirmedResponse = getResponseForAction(pendingAction, messageText);
-            const assistantMessage: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: confirmedResponse.content,
-                timestamp: new Date().toISOString(),
-                agentId: primaryAgent?.id,
-                action: { ...pendingAction, executed: true },
-                quickReplies: confirmedResponse.quickReplies,
-            };
-            setMessages((prev) => [...prev, assistantMessage]);
-            setPendingAction(null);
-            setIsProcessing(false);
-            return;
-        }
-
-        if (pendingAction && !isConfirm && !isCancel) {
-            const assistantMessage: ChatMessage = {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: '확인을 기다리고 있어요. `실행` 또는 `취소` 중 하나로 답해주세요.',
-                timestamp: new Date().toISOString(),
-                agentId: primaryAgent?.id,
-                quickReplies: ['실행', '취소'],
-            };
-            setMessages((prev) => [...prev, assistantMessage]);
-            setIsProcessing(false);
-            return;
-        }
-
         const onboardingAction = parseOnboardingIntent(messageText);
         if (onboardingAction) {
             await executeAction(onboardingAction);
@@ -853,12 +1036,28 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (hasAnyAgentConfig) {
             try {
                 if (activeAgents.length > 1) {
-                    for (let index = 0; index < activeAgents.length; index += 1) {
-                        const currentAgent = activeAgents[index];
+                    const addressedAgentIds = addressedAgentIdsForInput;
+                    const hasDirectAddress = addressedAgentIds.length > 0 && addressedAgentIds.length < activeAgents.length;
+                    const respondingAgents = hasDirectAddress
+                        ? activeAgents.filter((candidate) => addressedAgentIds.includes(candidate.id))
+                        : activeAgents;
+                    const addressedPersonaNames = hasDirectAddress
+                        ? activeAgents
+                            .filter((candidate) => addressedAgentIds.includes(candidate.id))
+                            .map((candidate) => candidate.name)
+                            .filter((name) => Boolean(name && name.trim()))
+                        : [];
+
+                    const agentResults: Array<{ message: ChatMessage; config: ReturnType<typeof resolveAgentConfig> }> = [];
+                    const peerTurnReplies: Array<{ name: string; content: string }> = [];
+                    const sharedSceneContext = buildSharedSceneContext(messageTimeline);
+
+                    for (let index = 0; index < respondingAgents.length; index += 1) {
+                        const currentAgent = respondingAgents[index];
                         const currentMemory =
                             personaMemoryContextByAgent?.[currentAgent.id]
                             || (currentAgent.id === primaryAgent?.id ? personaMemoryContext : '');
-                        const agentHistory = buildHistoryForAgent(messageTimeline, currentAgent, false);
+                        const agentHistory = buildHistoryForAgent(messageTimeline, currentAgent, { includePeerPersonaContext: true });
                         const otherPersonaNames = activeAgents
                             .filter((activeAgent) => activeAgent.id !== currentAgent.id)
                             .map((activeAgent) => activeAgent.name)
@@ -876,186 +1075,70 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 timestamp: new Date().toISOString(),
                                 agentId: currentAgent.id,
                             };
-                            setMessages((prev) => [...prev, warningMessage]);
+                            agentResults.push({ message: warningMessage, config: agentConfig });
                             continue;
                         }
 
-                        let assistantMessage: ChatMessage;
-
-                        if (isImageGenerationModel(agentConfig.modelName)) {
-                            try {
-                                const imageUrl = agentConfig.provider === 'xai'
-                                    ? await callXaiImageGeneration(
-                                        agentConfig.apiKey,
-                                        messageText,
-                                        agentConfig.modelName,
-                                        (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
-                                    )
-                                    : await callGeminiImageGeneration(
-                                        agentConfig.apiKey,
-                                        messageText,
-                                        agentConfig.modelName
-                                    );
-                                assistantMessage = {
-                                    id: crypto.randomUUID(),
-                                    role: 'assistant',
-                                    content: '이미지를 생성했어요!',
-                                    imageUrl,
-                                    timestamp: new Date().toISOString(),
-                                    agentId: currentAgent.id,
-                                };
-                            } catch (err) {
-                                assistantMessage = {
-                                    id: crypto.randomUUID(),
-                                    role: 'assistant',
-                                    content: `이미지 생성에 실패했어요: ${(err as Error).message}`,
-                                    timestamp: new Date().toISOString(),
-                                    agentId: currentAgent.id,
-                                };
+                        const result = await generateChatResponse(
+                            agentConfig.apiKey,
+                            agentHistory,
+                            events,
+                            todos,
+                            entries,
+                            userName,
+                            agentConfig.modelName,
+                            currentAgent,
+                            currentMemory,
+                            agentConfig.provider,
+                            {
+                                otherPersonaNames,
+                                addressedPersonaNames,
+                                peerTurnReplies,
+                                sharedSceneContext,
+                                isNewSession,
+                                sessionStartedAt,
+                                sessionTimePeriod,
+                                sessionTimezone,
+                                ollamaBaseUrl: agentConfig.baseUrl,
                             }
-                        } else if (isVideoGenerationModel(agentConfig.modelName)) {
-                            try {
-                                const videoUrl = await callXaiVideoGeneration(
-                                    agentConfig.apiKey,
-                                    messageText,
-                                    agentConfig.modelName,
-                                    (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
-                                );
-                                assistantMessage = {
-                                    id: crypto.randomUUID(),
-                                    role: 'assistant',
-                                    content: '영상을 생성했어요!',
-                                    videoUrl,
-                                    timestamp: new Date().toISOString(),
-                                    agentId: currentAgent.id,
-                                };
-                            } catch (err) {
-                                assistantMessage = {
-                                    id: crypto.randomUUID(),
-                                    role: 'assistant',
-                                    content: `영상 생성에 실패했어요: ${(err as Error).message}`,
-                                    timestamp: new Date().toISOString(),
-                                    agentId: currentAgent.id,
-                                };
-                            }
-                        } else {
-                            const result = await generateChatResponse(
-                                agentConfig.apiKey,
-                                agentHistory,
-                                events,
-                                todos,
-                                entries,
-                                userName,
-                                agentConfig.modelName,
-                                currentAgent,
-                                chatMode,
-                                currentMemory,
-                                agentConfig.provider,
-                                otherPersonaNames
-                            );
+                        );
 
-                            const fallbackAction = mapGeminiActionToChatAction(result.action);
-
-                            if (fallbackAction?.type === 'generate_image' || fallbackAction?.type === 'generate_video') {
-                                const mediaType = fallbackAction.type === 'generate_image' ? 'image' : 'video';
-                                const mediaConfig = findMediaConnection(settings, mediaType);
-                                const prompt = fallbackAction.data?.prompt || messageText;
-
-                                assistantMessage = {
-                                    id: crypto.randomUUID(),
-                                    role: 'assistant',
-                                    content: result.reply || `${mediaType === 'image' ? '이미지' : '영상'}를 생성했어요!`,
-                                    timestamp: new Date().toISOString(),
-                                    agentId: currentAgent.id,
-                                };
-
-                                if (mediaConfig) {
-                                    try {
-                                        if (mediaType === 'image') {
-                                            const imageUrl = mediaConfig.provider === 'xai'
-                                                ? await callXaiImageGeneration(mediaConfig.apiKey, prompt, mediaConfig.modelName, (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats }))
-                                                : await callGeminiImageGeneration(mediaConfig.apiKey, prompt, mediaConfig.modelName, (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats }));
-                                            assistantMessage.imageUrl = imageUrl;
-                                        } else {
-                                            const videoUrl = await callXaiVideoGeneration(mediaConfig.apiKey, prompt, mediaConfig.modelName, (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats }));
-                                            assistantMessage.videoUrl = videoUrl;
-                                        }
-                                        assistantMessage.content = result.reply || `${mediaType === 'image' ? '이미지' : '영상'}를 생성했어요!`;
-                                    } catch (err) {
-                                        assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `생성 실패: ${(err as Error).message}`;
-                                    }
-                                } else {
-                                    assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `연결된 ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델이 없어 생성할 수 없어요.`;
-                                }
-                            } else if (index === 0) {
-                                if (!fallbackAction && result.action?.type === 'delete_event') {
-                                    assistantMessage = {
-                                        id: crypto.randomUUID(),
-                                        role: 'assistant',
-                                        content: '삭제할 일정을 찾지 못했어요. 일정 제목이나 날짜를 조금 더 구체적으로 말해 주세요.',
-                                        timestamp: new Date().toISOString(),
-                                        agentId: currentAgent.id,
-                                        quickReplies: ['오늘 일정 보여줘', '내일 일정 보여줘'],
-                                    };
-                                } else if (fallbackAction) {
-                                    if (requiresConfirmation(fallbackAction)) {
-                                        setPendingAction(fallbackAction);
-                                        const prompt = buildConfirmationPrompt(fallbackAction);
-                                        assistantMessage = {
-                                            id: crypto.randomUUID(),
-                                            role: 'assistant',
-                                            content: prompt.content,
-                                            timestamp: new Date().toISOString(),
-                                            agentId: currentAgent.id,
-                                            action: fallbackAction,
-                                            quickReplies: prompt.quickReplies,
-                                        };
-                                    } else {
-                                        await executeAction(fallbackAction);
-                                        const response = getResponseForAction(fallbackAction, messageText);
-                                        assistantMessage = {
-                                            id: crypto.randomUUID(),
-                                            role: 'assistant',
-                                            content: response.content,
-                                            timestamp: new Date().toISOString(),
-                                            agentId: currentAgent.id,
-                                            action: { ...fallbackAction, executed: true },
-                                            quickReplies: response.quickReplies,
-                                        };
-                                    }
-                                } else {
-                                    assistantMessage = {
-                                        id: crypto.randomUUID(),
-                                        role: 'assistant',
-                                        content: result.reply || '도와드릴게요, 주인님.',
-                                        timestamp: new Date().toISOString(),
-                                        agentId: currentAgent.id,
-                                    };
-                                }
-                            } else {
-                                assistantMessage = {
-                                    id: crypto.randomUUID(),
-                                    role: 'assistant',
-                                    content: result.reply || `${currentAgent.name}입니다. 이어서 도와드릴게요.`,
-                                    timestamp: new Date().toISOString(),
-                                    agentId: currentAgent.id,
-                                };
-                            }
+                        let chatAction = index === 0 ? mapGeminiActionToChatAction(result.action) : null;
+                        if (chatAction && !requireConfirm) {
+                            chatAction = await executeAction(chatAction);
                         }
+                        updateApiUsage({
+                            totalRequests: 1,
+                            totalTokens: 0,
+                            lastRequestDate: new Date().toISOString(),
+                        }, {
+                            agentId: currentAgent.id,
+                            provider: agentConfig.provider,
+                            modelName: agentConfig.modelName,
+                            mediaType: 'text',
+                        });
 
-                        const assistantMessageWithMeta = withConfigMeta(assistantMessage, agentConfig);
-                        setMessages((prev) => [...prev, assistantMessageWithMeta]);
+                        const assistantMessage: ChatMessage = {
+                            id: crypto.randomUUID(),
+                            role: 'assistant',
+                            content: result.reply || (index === 0 ? '도와드릴게요 사용자님.' : `${currentAgent.name}입니다. 이어서 도와드릴게요.`),
+                            timestamp: new Date().toISOString(),
+                            agentId: currentAgent.id,
+                            action: chatAction || undefined,
+                        };
 
-                        if (index < activeAgents.length - 1) {
-                            await new Promise((resolve) => setTimeout(resolve, 180));
-                        }
+                        const finalizedMessage = withConfigMeta(assistantMessage, agentConfig);
+                        agentResults.push({ message: finalizedMessage, config: agentConfig });
+                        peerTurnReplies.push({ name: currentAgent.name, content: finalizedMessage.content });
                     }
+
+                    setMessages((prev) => [...prev, ...agentResults.map((result) => result.message)]);
                 } else {
                     const singleAgent = activeAgents[0] || primaryAgent;
                     const singlePersonaMemory = singleAgent
                         ? (personaMemoryContextByAgent?.[singleAgent.id] || personaMemoryContext || '')
                         : (personaMemoryContext || '');
-                    const singleHistory = buildHistoryForAgent(messageTimeline, singleAgent, true);
+                    const singleHistory = buildHistoryForAgent(messageTimeline, singleAgent, { allowUntypedAssistant: true });
 
                     const singleAgentConfig = resolveAgentConfig(singleAgent);
                     if (!singleAgentConfig?.apiKey) {
@@ -1071,169 +1154,58 @@ const ChatView: React.FC<ChatViewProps> = ({
                         return;
                     }
 
-                    if (isImageGenerationModel(singleAgentConfig.modelName)) {
-                        try {
-                            const imageUrl = singleAgentConfig.provider === 'xai'
-                                ? await callXaiImageGeneration(
-                                    singleAgentConfig.apiKey,
-                                    messageText,
-                                    singleAgentConfig.modelName,
-                                    (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
-                                )
-                                : await callGeminiImageGeneration(
-                                    singleAgentConfig.apiKey,
-                                    messageText,
-                                    singleAgentConfig.modelName
-                                );
-                            const assistantMessage: ChatMessage = {
-                                id: crypto.randomUUID(),
-                                role: 'assistant',
-                                content: '이미지를 생성했어요!',
-                                imageUrl,
-                                timestamp: new Date().toISOString(),
-                                agentId: singleAgent?.id,
-                            };
-                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                        } catch (err) {
-                            const assistantMessage: ChatMessage = {
-                                id: crypto.randomUUID(),
-                                role: 'assistant',
-                                content: `이미지 생성에 실패했어요: ${(err as Error).message}`,
-                                timestamp: new Date().toISOString(),
-                                agentId: singleAgent?.id,
-                            };
-                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
+                    const result = await generateChatResponse(
+                        singleAgentConfig.apiKey,
+                        singleHistory,
+                        events,
+                        todos,
+                        entries,
+                        userName,
+                        singleAgentConfig.modelName,
+                        singleAgent,
+                        singlePersonaMemory,
+                        singleAgentConfig.provider,
+                        {
+                            otherPersonaNames: [],
+                            isNewSession,
+                            sessionStartedAt,
+                            sessionTimePeriod,
+                            sessionTimezone,
+                            ollamaBaseUrl: singleAgentConfig.baseUrl,
                         }
-                    } else if (isVideoGenerationModel(singleAgentConfig.modelName)) {
-                        try {
-                            const videoUrl = await callXaiVideoGeneration(
-                                singleAgentConfig.apiKey,
-                                messageText,
-                                singleAgentConfig.modelName,
-                                (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
-                            );
-                            const assistantMessage: ChatMessage = {
-                                id: crypto.randomUUID(),
-                                role: 'assistant',
-                                content: '영상을 생성했어요!',
-                                videoUrl,
-                                timestamp: new Date().toISOString(),
-                                agentId: singleAgent?.id,
-                            };
-                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                        } catch (err) {
-                            const assistantMessage: ChatMessage = {
-                                id: crypto.randomUUID(),
-                                role: 'assistant',
-                                content: `영상 생성에 실패했어요: ${(err as Error).message}`,
-                                timestamp: new Date().toISOString(),
-                                agentId: singleAgent?.id,
-                            };
-                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                        }
-                    } else {
-                        const result = await generateChatResponse(
-                            singleAgentConfig.apiKey,
-                            singleHistory,
-                            events,
-                            todos,
-                            entries,
-                            userName,
-                            singleAgentConfig.modelName,
-                            singleAgent,
-                            chatMode,
-                            singlePersonaMemory,
-                            singleAgentConfig.provider,
-                            []
-                        );
+                    );
 
-                        const fallbackAction = mapGeminiActionToChatAction(result.action);
-
-                        const assistantMessage: ChatMessage = {
-                            id: crypto.randomUUID(),
-                            role: 'assistant',
-                            content: result.reply,
-                            timestamp: new Date().toISOString(),
-                            agentId: singleAgent?.id,
-                        };
-
-                        // Dynamic Media Generation Check
-                        if (fallbackAction?.type === 'generate_image' || fallbackAction?.type === 'generate_video') {
-                            const mediaType = fallbackAction.type === 'generate_image' ? 'image' : 'video';
-                            const mediaConfig = findMediaConnection(settings, mediaType);
-                            const prompt = fallbackAction.data?.prompt || messageText;
-
-                            if (mediaConfig) {
-                                try {
-                                    if (mediaType === 'image') {
-                                        const imageUrl = mediaConfig.provider === 'xai'
-                                            ? await callXaiImageGeneration(
-                                                mediaConfig.apiKey,
-                                                prompt,
-                                                mediaConfig.modelName,
-                                                (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
-                                            )
-                                            : await callGeminiImageGeneration(
-                                                mediaConfig.apiKey,
-                                                prompt,
-                                                mediaConfig.modelName,
-                                                (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
-                                            );
-                                        assistantMessage.imageUrl = imageUrl;
-                                    } else {
-                                        const videoUrl = await callXaiVideoGeneration(
-                                            mediaConfig.apiKey,
-                                            prompt,
-                                            mediaConfig.modelName,
-                                            (stats) => onUpdateSettings?.({ ...settings, apiUsage: { ...settings.apiUsage, ...stats } as ApiUsageStats })
-                                        );
-                                        assistantMessage.videoUrl = videoUrl;
-                                    }
-                                    assistantMessage.content = result.reply || `${mediaType === 'image' ? '이미지' : '영상'}를 생성했어요!`;
-                                } catch (err) {
-                                    assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `생성 실패: ${(err as Error).message}`;
-                                }
-                            } else {
-                                assistantMessage.content = (result.reply ? result.reply + "\n\n" : "") + `연결된 ${mediaType === 'image' ? '이미지' : '비디오'} 생성 모델이 없어 생성할 수 없어요.`;
-                            }
-                            setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                        } else {
-                            if (!fallbackAction && result.action?.type === 'delete_event') {
-                                assistantMessage.content = '삭제할 일정을 찾지 못했어요. 일정 제목이나 날짜를 조금 더 구체적으로 말해 주세요.';
-                                assistantMessage.quickReplies = ['오늘 일정 보여줘', '내일 일정 보여줘'];
-                                setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                                setIsProcessing(false);
-                                return;
-                            }
-
-                            if (fallbackAction) {
-                                if (requiresConfirmation(fallbackAction)) {
-                                    setPendingAction(fallbackAction);
-                                    const prompt = buildConfirmationPrompt(fallbackAction);
-                                    assistantMessage.content = prompt.content;
-                                    assistantMessage.action = fallbackAction;
-                                    assistantMessage.quickReplies = prompt.quickReplies;
-                                    setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                                } else {
-                                    await executeAction(fallbackAction);
-                                    const response = getResponseForAction(fallbackAction, messageText);
-                                    assistantMessage.content = response.content;
-                                    assistantMessage.action = { ...fallbackAction, executed: true };
-                                    assistantMessage.quickReplies = response.quickReplies;
-                                    setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                                }
-                            } else {
-                                setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
-                            }
-                        }
+                    let chatAction = mapGeminiActionToChatAction(result.action);
+                    if (chatAction && !requireConfirm) {
+                        chatAction = await executeAction(chatAction);
                     }
+                    updateApiUsage({
+                        totalRequests: 1,
+                        totalTokens: 0,
+                        lastRequestDate: new Date().toISOString(),
+                    }, {
+                        agentId: singleAgent?.id,
+                        provider: singleAgentConfig.provider,
+                        modelName: singleAgentConfig.modelName,
+                        mediaType: 'text',
+                    });
+
+                    const assistantMessage: ChatMessage = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        content: result.reply || '도와드릴게요 사용자님.',
+                        timestamp: new Date().toISOString(),
+                        agentId: singleAgent?.id,
+                        action: chatAction || undefined,
+                    };
+                    setMessages((prev) => [...prev, withConfigMeta(assistantMessage, singleAgentConfig)]);
                 }
             } catch (error) {
                 console.error(error);
                 const assistantMessage: ChatMessage = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
-                    content: "죄송해요, 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?",
+                    content: "죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?",
                     timestamp: new Date().toISOString(),
                     agentId: primaryAgent?.id,
                 };
@@ -1254,42 +1226,134 @@ const ChatView: React.FC<ChatViewProps> = ({
         setIsProcessing(false);
     };
 
+
     const handleQuickReply = (reply: string) => {
         handleSend(reply);
     };
 
+    const renderActionCard = (msg: ChatMessage): React.ReactNode => {
+        const action = msg.action;
+        if (!isExecutableAction(action)) return null;
+
+        const items = getActionItems(action);
+        if (items.length === 0) return null;
+
+        const isPending = !action.status || action.status === 'pending';
+        const isBusy = executingActionMessageId === msg.id;
+        const statusLabel = getActionStatusLabel(action);
+
+        return (
+            <div className="w-full max-w-full rounded-2xl border border-[#e9e9e8] bg-[#fbfbfa] p-3.5 shadow-[0_4px_12px_rgba(15,23,42,0.035)]">
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="text-sm font-medium text-[#37352f]">
+                            {items.length > 1 ? `${items.length}개 항목 추가` : `${getActionKindLabel(items[0])} 추가`}
+                        </div>
+                        <div className="mt-0.5 text-xs text-[#9b9a97]">{statusLabel}</div>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${action.status === 'completed'
+                        ? 'bg-[#edf7f1] text-[#2f7d4f]'
+                        : action.status === 'failed'
+                            ? 'bg-[#fff1f0] text-[#b42318]'
+                            : action.status === 'cancelled'
+                                ? 'bg-[#f1f1f0] text-[#787774]'
+                                : 'bg-white text-[#787774] border border-[#e9e9e8]'}`}
+                    >
+                        {statusLabel}
+                    </span>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                    {items.map((item, idx) => {
+                        const secondary = getActionSecondaryText(item);
+                        return (
+                            <div key={`${item.type}-${idx}`} className="rounded-xl border border-[#eeeeec] bg-white px-3 py-2.5">
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-[#9b9a97]">
+                                    <span>{getActionKindLabel(item)}</span>
+                                    <span>·</span>
+                                    <span>{formatDateTimeSummary(item)}</span>
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-[#37352f] break-words">
+                                    {getActionPrimaryText(item)}
+                                </div>
+                                {secondary && (
+                                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-[#787774] break-words">
+                                        {secondary}
+                                    </div>
+                                )}
+                                {item.status === 'failed' && item.error && (
+                                    <div className="mt-1 text-xs text-[#b42318]">{item.error}</div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {action.status === 'failed' && action.error && (
+                    <div className="mt-2 text-xs text-[#b42318]">{action.error}</div>
+                )}
+
+                {isPending && (
+                    <div className="mt-3 flex justify-end gap-2">
+                        <button
+                            type="button"
+                            onClick={() => handleCancelMessageAction(msg.id, action)}
+                            disabled={isBusy}
+                            className="px-3 py-1.5 rounded-lg border border-[#dcdcd9] bg-white text-sm text-[#37352f] hover:bg-[#f7f7f5] transition-colors disabled:opacity-60"
+                        >
+                            취소
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleConfirmMessageAction(msg.id, action)}
+                            disabled={isBusy}
+                            className="px-3 py-1.5 rounded-lg bg-[var(--color-primary)] text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-60"
+                        >
+                            {isBusy ? '추가 중...' : '추가하기'}
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     return (
-        <div className="w-full max-w-[800px] mx-auto text-[#37352f] h-full flex flex-col font-sans overflow-x-hidden" style={{ touchAction: 'pan-y' }}>
-            <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-x-none px-2 py-6 space-y-6 scrollbar-hide" style={{ touchAction: 'pan-y' }}>
+        <div className="w-full max-w-[820px] mx-auto text-[#37352f] h-full flex flex-col font-sans overflow-x-hidden" style={{ touchAction: 'pan-y' }}>
+            <div ref={messagesContainerRef} className="flex-1 overflow-y-auto overflow-x-hidden overscroll-x-none px-2 py-6 space-y-6 scrollbar-hide" style={{ touchAction: 'pan-y' }}>
                 {messages.map((msg, index) => {
                     const messageAgent = getAgentForMessage(msg);
                     return (
                         <div key={msg.id} className={`flex w-full mb-6 min-w-0 ${msg.role === 'user' ? 'justify-end' : 'justify-start items-start gap-3'}`}>
                             {msg.role === 'assistant' && (
-                                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#37352f] flex items-center justify-center text-white shadow-sm flex-shrink-0 overflow-hidden mt-1">
+                                <button
+                                    type="button"
+                                    onClick={() => openAgentEditor(messageAgent)}
+                                    disabled={!onUpdateAgent || !messageAgent}
+                                    title={onUpdateAgent && messageAgent ? `${messageAgent.name} 편집` : undefined}
+                                    className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[#5f5f5f] flex-shrink-0 overflow-hidden mt-1 transition-transform ${onUpdateAgent && messageAgent ? 'hover:scale-[1.03] cursor-pointer' : 'cursor-default'}`}
+                                >
                                     {messageAgent?.avatar ? (
-                                        <img src={messageAgent.avatar} alt={messageAgent.name} className="w-full h-full object-cover" />
+                                        <img src={messageAgent.avatar} alt={messageAgent.name} style={getAvatarImageStyle(messageAgent.avatarFrame)} className="w-full h-full object-cover" />
                                     ) : (
-                                        <div className="w-full h-full bg-[#37352f]" />
+                                        <div className="w-full h-full bg-[#f3f3f3]" />
                                     )}
-                                </div>
+                                </button>
                             )}
 
                             <div className={`flex flex-col min-w-0 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'} gap-2`}>
                                 {msg.role === 'assistant' && (
-                                    <span className="text-xs text-[#9b9a97] mb-0 ml-1">
-                                        {messageAgent?.name || 'LifeSync AI'}
-                                        {msg.provider && msg.modelName ? ` · ${msg.provider.toUpperCase()} · ${msg.modelName}` : ''}
+                                    <span className="text-xs font-medium text-[#9b9a97] mb-0 ml-1">
+                                        {messageAgent?.name || 'Dayflow'}
                                     </span>
                                 )}
 
                                 {msg.content && (
                                     <div
                                         className={`
-                                            p-3.5 rounded-2xl leading-relaxed shadow-sm text-[14px] sm:text-[15px] break-words [overflow-wrap:anywhere]
+                                            p-3.5 rounded-2xl text-[15px] leading-7 font-normal break-words [word-break:normal] [overflow-wrap:anywhere]
                                             ${msg.role === 'user'
-                                                ? 'bg-[#37352f] text-white rounded-br-sm'
-                                                : 'bg-white border border-[#e9e9e8] text-[#37352f] rounded-bl-sm'}
+                                                ? 'bg-[var(--color-primary)] text-white'
+                                                : 'bg-white border border-[#e9e9e8] text-[#37352f]'}
                                         `}
                                     >
                                         {renderRichMessage(msg.content)}
@@ -1297,7 +1361,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 )}
 
                                 {msg.imageUrl && (
-                                    <div className="w-full rounded-2xl overflow-hidden border border-[#e9e9e8] bg-white shadow-sm transition-transform active:scale-[0.99]">
+                                    <div className="w-full rounded-2xl overflow-hidden border border-[#e9e9e8] bg-white transition-transform active:scale-[0.99]">
                                         <img
                                             src={msg.imageUrl}
                                             alt="Generated"
@@ -1308,7 +1372,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 )}
 
                                 {msg.videoUrl && (
-                                    <div className="w-full rounded-2xl overflow-hidden border border-[#e9e9e8] bg-white shadow-sm">
+                                    <div className="w-full rounded-2xl overflow-hidden border border-[#e9e9e8] bg-white">
                                         <video
                                             src={msg.videoUrl}
                                             controls
@@ -1319,6 +1383,9 @@ const ChatView: React.FC<ChatViewProps> = ({
                                         />
                                     </div>
                                 )}
+
+                                {msg.role === 'assistant' && renderActionCard(msg)}
+
                                 {/* Quick Replies - Only for the first message */}
                                 {msg.role === 'assistant' && index === 0 && msg.quickReplies && msg.quickReplies.length > 0 && (
                                     <div className="flex flex-wrap gap-2 mt-1 max-w-full">
@@ -1340,20 +1407,26 @@ const ChatView: React.FC<ChatViewProps> = ({
 
                 {isProcessing && (
                     <div className="flex w-full mb-6 justify-start items-start gap-3 min-w-0">
-                        <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-[#37352f] flex items-center justify-center text-white shadow-sm flex-shrink-0 overflow-hidden mt-1">
+                        <button
+                            type="button"
+                            onClick={() => openAgentEditor(primaryAgent)}
+                            disabled={!onUpdateAgent || !primaryAgent}
+                            title={onUpdateAgent && primaryAgent ? `${primaryAgent.name} 편집` : undefined}
+                            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[#5f5f5f] flex-shrink-0 overflow-hidden mt-1 transition-transform ${onUpdateAgent && primaryAgent ? 'hover:scale-[1.03] cursor-pointer' : 'cursor-default'}`}
+                        >
                             {primaryAgent?.avatar ? (
-                                <img src={primaryAgent.avatar} alt={primaryAgent.name} className="w-full h-full object-cover" />
+                                <img src={primaryAgent.avatar} alt={primaryAgent.name} style={getAvatarImageStyle(primaryAgent.avatarFrame)} className="w-full h-full object-cover" />
                             ) : (
-                                <div className="w-full h-full bg-[#37352f]" />
+                                <div className="w-full h-full bg-[#f3f3f3]" />
                             )}
-                        </div>
+                        </button>
                         <div className="flex flex-col items-start">
-                            <span className="text-xs text-[#9b9a97] mb-1.5 ml-1">
+                            <span className="text-xs font-medium text-[#9b9a97] mb-1.5 ml-1">
                                 {activeAgents.length > 1
                                     ? `${activeAgents.length}명 페르소나 응답 생성 중`
-                                    : (primaryAgent?.name || 'LifeSync AI')}
+                                    : (primaryAgent?.name || 'Dayflow')}
                             </span>
-                            <div className="bg-white text-[#9b9a97] p-4 rounded-2xl rounded-bl-sm border border-[#e9e9e8] flex items-center gap-2 shadow-sm">
+                            <div className="bg-white text-[#9b9a97] p-4 rounded-2xl border border-[#e9e9e8] flex items-center gap-2">
                                 <div className="flex gap-1">
                                     <span className="w-1.5 h-1.5 bg-[#d3d1cb] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
                                     <span className="w-1.5 h-1.5 bg-[#d3d1cb] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
@@ -1363,141 +1436,100 @@ const ChatView: React.FC<ChatViewProps> = ({
                         </div>
                     </div>
                 )}
-                <div ref={messagesEndRef} />
             </div>
 
             {/* Input Area */}
             <div className="px-2 py-3 bg-white overflow-x-hidden">
                 <div className="space-y-3">
                     {showToolbar && (
-                        <div className="p-4 rounded-2xl border border-[#e9e9e8] bg-white shadow-sm space-y-5 relative">
-                            {/* Header: Selection Mode */}
-                            <div className="flex items-center justify-between pb-3 border-b border-[#f1f1f0]">
-                                <div className="flex flex-col">
-                                    <span className="text-sm font-semibold text-[#37352f]">대화 참여자 설정</span>
-                                    <span className="text-[11px] text-[#9b9a97] mt-0.5">누구와 대화할지 선택해주세요</span>
+                        <div className="p-3 sm:p-4 rounded-2xl border border-[#e9e9e8] bg-white space-y-4 relative">
+                            <div className="flex items-start justify-between gap-3 pb-3 border-b border-[#f1f1f0]">
+                                <div className="min-w-0">
+                                    <span className="text-sm font-normal text-[#37352f]">페르소나 선택</span>
+                                    <span className="block text-xs text-[#9b9a97] mt-0.5">누구와 대화할지 눌러서 선택하거나 해제하세요.</span>
                                 </div>
-                                <div className="flex items-center gap-1.5 p-1 bg-[#f7f7f5] rounded-lg border border-[#e9e9e8]">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            if (isMultiSelectEnabled) {
-                                                setIsMultiSelectEnabled(false);
-                                                if (activeAgents.length > 1 && primaryAgent?.id) {
-                                                    onSelectAgents?.([primaryAgent.id]);
-                                                }
-                                            }
-                                        }}
-                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${!isMultiSelectEnabled
-                                            ? 'bg-white text-[#37352f] shadow-sm ring-1 ring-[#e9e9e8]'
-                                            : 'text-[#9b9a97] hover:text-[#37352f]'}`}
-                                    >
-                                        1:1 대화
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsMultiSelectEnabled(true)}
-                                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all gap-1.5 flex items-center ${isMultiSelectEnabled
-                                            ? 'bg-[#37352f] text-white shadow-sm'
-                                            : 'text-[#9b9a97] hover:text-[#37352f]'}`}
-                                    >
-                                        그룹 대화
-                                    </button>
-                                </div>
+                                <span className="shrink-0 text-xs font-normal px-2.5 py-1 rounded-full bg-[#f7f7f5] text-[#787774] border border-[#e9e9e8]">
+                                    {activeAgents.length}명 선택
+                                </span>
                             </div>
 
                             {/* Persona Grid */}
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between">
-                                    <span className="text-xs font-medium text-[#787774]">페르소나 선택</span>
-                                    {isMultiSelectEnabled && (
-                                        <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#f7f7f5] text-[#9b9a97] border border-[#e9e9e8]">
-                                            {activeAgents.length} / {MAX_GROUP_AGENTS}명
-                                        </span>
-                                    )}
+                                    <span className="text-xs font-normal text-[#787774]">참여자</span>
+                                    <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-[#f7f7f5] text-[#9b9a97] border border-[#e9e9e8]">
+                                        최대 {MAX_GROUP_AGENTS}명
+                                    </span>
                                 </div>
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                                     {availableAgents.map((availableAgent) => {
                                         const isActive = activeAgents.some((a) => a.id === availableAgent.id);
+                                        const currentIds = activeAgents.map((a) => a.id);
+                                        const canRemoveFromGroup = isActive && currentIds.length > 1;
                                         return (
-                                            <button
+                                            <div
                                                 key={availableAgent.id}
-                                                type="button"
-                                                onClick={() => {
-                                                    if (!isMultiSelectEnabled) {
-                                                        onSelectAgents?.([availableAgent.id]);
-                                                        setShowToolbar(false);
-                                                        return;
-                                                    }
-
-                                                    const currentIds = activeAgents.map((a) => a.id);
-                                                    const isSelected = currentIds.includes(availableAgent.id);
-                                                    let nextIds = isSelected
-                                                        ? currentIds.filter((id) => id !== availableAgent.id)
-                                                        : [...currentIds, availableAgent.id];
-
-                                                    if (nextIds.length === 0) nextIds = [availableAgent.id];
-                                                    if (!isSelected && nextIds.length > MAX_GROUP_AGENTS) return;
-
-                                                    onSelectAgents?.(nextIds);
-                                                }}
-                                                className={`relative flex items-center gap-3 p-2.5 rounded-xl border text-left transition-all overflow-hidden ${isActive
-                                                    ? 'border-[#37352f] bg-[#f7f7f5] ring-1 ring-[#37352f] ring-offset-[-1px]'
+                                                className={`relative rounded-xl border transition-all overflow-hidden ${isActive
+                                                    ? 'border-[#d4d4d4] bg-[#f7f7f7]'
                                                     : 'border-[#e9e9e8] bg-white hover:border-[#d3d1cb] hover:bg-[#fcfcfb]'}`}
                                             >
-                                                <div className={`w-8 h-8 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center border transition-colors ${isActive ? 'border-[#37352f]' : 'border-[#e9e9e8]'}`}>
-                                                    {availableAgent.avatar ? (
-                                                        <img src={availableAgent.avatar} alt="" className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <div className={`w-full h-full ${isActive ? 'bg-[#37352f]' : 'bg-[#f7f7f5]'}`} />
-                                                    )}
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <div className={`text-sm font-semibold truncate ${isActive ? 'text-[#37352f]' : 'text-[#787774]'}`}>
-                                                        {availableAgent.name}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onSelectAgents?.([availableAgent.id])}
+                                                    className="flex w-full items-center gap-3 p-2.5 pr-9 text-left"
+                                                    title={`${availableAgent.name} 단독 선택`}
+                                                >
+                                                    <div className={`w-8 h-8 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center border transition-colors ${isActive ? 'border-[#d4d4d4]' : 'border-[#e9e9e8]'}`}>
+                                                        {availableAgent.avatar ? (
+                                                            <img src={availableAgent.avatar} alt="" style={getAvatarImageStyle(availableAgent.avatarFrame)} className="w-full h-full object-cover" />
+                                                        ) : (
+                                                            <div className="w-full h-full bg-[#f3f3f3]" />
+                                                        )}
                                                     </div>
-                                                </div>
-                                                {isActive && isMultiSelectEnabled && (
-                                                    <div className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#37352f]" />
-                                                )}
-                                            </button>
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className={`text-sm font-normal truncate ${isActive ? 'text-[#171717]' : 'text-[#787774]'}`}>
+                                                            {availableAgent.name}
+                                                        </div>
+                                                    </div>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (isActive) {
+                                                            if (!canRemoveFromGroup) return;
+                                                            onSelectAgents?.(currentIds.filter((id) => id !== availableAgent.id));
+                                                            return;
+                                                        }
+                                                        if (currentIds.length >= MAX_GROUP_AGENTS) return;
+                                                        onSelectAgents?.([...currentIds, availableAgent.id]);
+                                                    }}
+                                                    disabled={isActive && !canRemoveFromGroup}
+                                                    className={`absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full border text-xs font-normal flex items-center justify-center transition-colors ${isActive
+                                                        ? 'border-[var(--color-primary)] bg-[var(--color-primary)] text-white disabled:opacity-100'
+                                                        : 'border-[#dcdcd9] bg-white text-[#787774] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]'}`}
+                                                    aria-label={isActive ? `${availableAgent.name} 그룹에서 해제` : `${availableAgent.name} 그룹에 추가`}
+                                                    title={isActive ? (canRemoveFromGroup ? '그룹에서 해제' : '현재 단독 선택됨') : '그룹에 추가'}
+                                                >
+                                                    {isActive ? '✓' : '+'}
+                                                </button>
+                                            </div>
                                         );
                                     })}
                                 </div>
                             </div>
 
-                            {/* Chat Mode Settings */}
-                            <div className="pt-3 border-t border-[#f1f1f0] space-y-3">
-                                <div className="flex flex-col">
-                                    <span className="text-xs font-medium text-[#787774]">대화 방식</span>
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {(['basic', 'learning'] as ChatMode[]).map((mode) => (
-                                        <button
-                                            key={mode}
-                                            type="button"
-                                            onClick={() => setChatMode(mode)}
-                                            className={`px-4 py-2 text-sm font-medium rounded-lg border transition-all ${chatMode === mode
-                                                ? 'border-[#37352f] bg-[#37352f] text-white shadow-sm'
-                                                : 'border-[#e9e9e8] bg-white text-[#787774] hover:bg-[#f7f7f5] hover:text-[#37352f]'}`}
-                                        >
-                                            {chatModeLabels[mode]}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
                         </div>
                     )}
 
-                    <div className="flex gap-2 items-stretch min-w-0">
+                    <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-2xl border border-[#e9e9e8] bg-white shadow-[0_8px_18px_rgba(15,23,42,0.045)] focus-within:border-[#d4d4d4] transition-all">
                         <button
                             type="button"
                             onClick={() => setShowToolbar(prev => !prev)}
-                            className="shrink-0 w-12 h-12 rounded-xl border border-[#e9e9e8] bg-white flex items-center justify-center text-[#787774] hover:text-[#37352f] hover:bg-[#f7f7f5] transition-colors"
+                            className="shrink-0 w-12 h-full flex items-center justify-center text-[#787774] hover:text-[#37352f] transition-colors"
                             aria-label="대화 도구 열기"
-                            title={`${activeAgents.map((activeAgent) => activeAgent.name).join(', ') || 'LifeSync AI'} · ${chatModeLabels[chatMode]}`}
+                            title={activeAgents.map((activeAgent) => activeAgent.name).join(', ') || 'Dayflow'}
                         >
-                            <Plus size={16} />
+                            <Plus size={17} />
                         </button>
                         <input
                             type="text"
@@ -1505,19 +1537,205 @@ const ChatView: React.FC<ChatViewProps> = ({
                             onChange={(e) => setInputValue(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                             placeholder={onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요..."}
-                            className="flex-1 min-w-0 h-12 px-4 bg-[#f7f7f5] border border-[#e9e9e8] rounded-xl text-base placeholder-[#d3d1cb] focus:outline-none focus:border-[#37352f] focus:bg-white transition-all"
+                            className="chat-input-field flex-1 min-w-0 h-full px-2 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
                             disabled={isProcessing}
                         />
                         <button
+                            type="button"
                             onClick={() => handleSend()}
                             disabled={!inputValue.trim() || isProcessing}
-                            className="shrink-0 w-12 h-12 bg-[#37352f] text-white rounded-xl hover:bg-[#2f2d28] disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm flex items-center justify-center"
+                            className="chat-send-button mr-2 shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
+                            aria-label="메시지 전송"
+                            title="메시지 전송"
                         >
-                            <ChevronRight size={20} />
+                            <ArrowUp size={18} strokeWidth={2.4} />
                         </button>
                     </div>
                 </div>
             </div>
+            {editingAgentId && agentDraft && (
+                <div className="fixed inset-0 z-[90] bg-black/45 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+                    <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-xl h-auto max-h-[92dvh] sm:max-h-[88vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
+                        <div className="px-5 py-4 border-b border-[#efefef] flex items-center justify-between shrink-0 bg-white">
+                            <div>
+                                <h4 className="text-[#37352f] font-medium">페르소나 편집</h4>
+                                <p className="text-xs text-[#9b9a97] mt-1">채팅 중에도 이미지와 페르소나 설정을 바로 바꿀 수 있어요.</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => closeAgentEditor()}
+                                className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774] transition-colors"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto min-h-0">
+                            <div className="p-6 flex flex-col items-center border-b border-[#efefef] bg-[#fbfbfa]">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (agentDraft.avatar) {
+                                            setIsAvatarCropOpen(true);
+                                            return;
+                                        }
+                                        document.getElementById(`agent-avatar-upload-${editingAgentId}`)?.click();
+                                    }}
+                                    className="relative w-24 h-24 rounded-full overflow-hidden flex items-center justify-center text-4xl text-white mb-3 transition-transform hover:scale-[1.02]"
+                                    style={{ backgroundColor: agentDraft.color || '#37352f' }}
+                                >
+                                    {agentDraft.avatar ? (
+                                        <img src={agentDraft.avatar} alt={agentDraft.name} style={getAvatarImageStyle(agentDraft.avatarFrame)} className="w-full h-full object-cover" />
+                                    ) : (
+                                        <span>{agentDraft.emoji || '🤖'}</span>
+                                    )}
+                                    <span className="absolute bottom-1 right-1 w-8 h-8 rounded-full bg-white/90 border border-[#e9e9e8] text-[#37352f] flex items-center justify-center">
+                                        <Edit3 size={14} />
+                                    </span>
+                                </button>
+                                <input
+                                    id={`agent-avatar-upload-${editingAgentId}`}
+                                    type="file"
+                                    className="hidden"
+                                    accept="image/*"
+                                    onChange={handleAgentImageUpload}
+                                />
+                                <div className="text-sm font-normal text-[#37352f]">{agentDraft.name || '페르소나'}</div>
+                                <div className="text-xs text-[#9b9a97]">{agentDraft.role || '역할을 입력하세요'}</div>
+                            </div>
+
+                            <div className="p-5 space-y-4">
+                                <div className="grid grid-cols-2 gap-1 rounded-xl border border-[#e9e9e8] bg-[#f7f7f5] p-1">
+                                    {([
+                                        ['profile', '프로필'],
+                                        ['api', 'API'],
+                                    ] as Array<[PersonaEditorTab, string]>).map(([tab, label]) => (
+                                        <button
+                                            key={tab}
+                                            type="button"
+                                            onClick={() => setAgentEditorTab(tab)}
+                                            className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${agentEditorTab === tab
+                                                ? 'bg-white text-[#37352f]'
+                                                : 'text-[#787774] hover:text-[#37352f]'}`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {agentEditorTab === 'profile' && (
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <label className="block">
+                                                <span className="text-xs font-normal text-[#787774] ml-1">이름</span>
+                                                <input
+                                                    value={agentDraft.name}
+                                                    onChange={(e) => setAgentDraft({ ...agentDraft, name: e.target.value })}
+                                                    className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none"
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <span className="text-xs font-normal text-[#787774] ml-1">역할</span>
+                                                <input
+                                                    value={agentDraft.role}
+                                                    onChange={(e) => setAgentDraft({ ...agentDraft, role: e.target.value })}
+                                                    className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none"
+                                                />
+                                            </label>
+                                        </div>
+
+                                        <label className="block">
+                                            <span className="text-xs font-normal text-[#787774] ml-1">말투</span>
+                                            <input
+                                                value={agentDraft.tone || ''}
+                                                onChange={(e) => setAgentDraft({ ...agentDraft, tone: e.target.value })}
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none"
+                                                placeholder="예: 다정하고 자연스러운 존댓말"
+                                            />
+                                        </label>
+
+                                        <label className="block">
+                                            <span className="text-xs font-normal text-[#787774] ml-1">성격과 행동 방식</span>
+                                            <textarea
+                                                value={agentDraft.personality || ''}
+                                                onChange={(e) => setAgentDraft({ ...agentDraft, personality: e.target.value })}
+                                                rows={7}
+                                                className="mt-1 w-full px-3 py-3 rounded-lg border border-[#dcdcd9] text-sm leading-relaxed focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none resize-y min-h-[170px]"
+                                                placeholder="성격, 행동 방식, 대화 규칙을 자유롭게 적어주세요."
+                                            />
+                                            <span className="mt-1 block text-xs text-[#9b9a97]">이제 첫 줄부터 전부 성격/지침으로 저장됩니다.</span>
+                                        </label>
+                                    </div>
+                                )}
+
+                                {agentEditorTab === 'api' && (
+                                    <div className="space-y-4">
+                                        <label className="block">
+                                            <span className="text-xs font-normal text-[#787774] ml-1">API 연결</span>
+                                            <select
+                                                value={agentDraft.connectionId || ''}
+                                                onChange={(e) => setAgentDraft({ ...agentDraft, connectionId: e.target.value || undefined })}
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                                            >
+                                                <option value="">연결 선택 안 함</option>
+                                                {supportedChatConnections.map((connection) => (
+                                                    <option key={connection.id} value={connection.id}>
+                                                        {connection.provider.toUpperCase()} · {connection.modelName}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        <label className="block">
+                                            <span className="text-xs font-normal text-[#787774] ml-1">채팅 응답 길이</span>
+                                            <select
+                                                value={agentDraft.responseLength || 'medium'}
+                                                onChange={(e) => setAgentDraft({ ...agentDraft, responseLength: e.target.value as AIAgent['responseLength'] })}
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                                            >
+                                                {RESPONSE_LENGTH_OPTIONS.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="px-5 py-4 border-t border-[#efefef] flex justify-end gap-2 shrink-0 bg-white">
+                            <button
+                                type="button"
+                                onClick={() => closeAgentEditor()}
+                                disabled={isSavingAgent}
+                                className="px-4 py-2 rounded-lg border border-[#dcdcd9] text-sm text-[#37352f] hover:bg-[#f7f7f5] transition-colors disabled:opacity-60"
+                            >
+                                취소
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleSaveAgent()}
+                                disabled={isSavingAgent || !agentDraft.name.trim()}
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-primary)] text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-all active:scale-95 disabled:opacity-60 shadow-sm"
+                            >
+                                <Save size={16} />
+                                <span>{isSavingAgent ? '저장 중...' : '저장하기'}</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {editingAgentId && agentDraft?.avatar && (
+                <AvatarCropperModal
+                    isOpen={isAvatarCropOpen}
+                    avatar={agentDraft.avatar}
+                    frame={agentDraft.avatarFrame}
+                    title={`${agentDraft.name || '페르소나'} 이미지 편집`}
+                    name={agentDraft.name}
+                    onAvatarChange={(avatar) => setAgentDraft(prev => prev ? { ...prev, avatar, avatarFrame: undefined } : prev)}
+                    onFrameChange={updateAgentDraftAvatarFrame}
+                    onClose={() => setIsAvatarCropOpen(false)}
+                />
+            )}
         </div >
     );
 };

@@ -120,18 +120,29 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
         }
     };
 
+    const safeFormatTimestamp = (dateStr: string | undefined, pattern: string, fallback = '날짜 정보가 없습니다') => {
+        if (!dateStr) return fallback;
+        try {
+            const parsed = parseISO(dateStr);
+            if (!isValid(parsed)) return fallback;
+            return format(parsed, pattern, { locale: ko });
+        } catch {
+            return fallback;
+        }
+    };
+
     const selectedPost = (posts || []).find(p => p.id === selectedId);
     const selectedAgent = agents.find(a => a.id === selectedAgentId);
 
     return (
         <div className="flex flex-col h-full bg-white relative overflow-hidden">
             {/* Header Area */}
-            <div className="hidden sm:flex h-14 items-center justify-between px-8 bg-white/80 backdrop-blur-md sticky top-0 z-10 flex-shrink-0 border-b border-[#f1f1f0]">
-                <div className="flex items-center gap-2 overflow-hidden text-sm font-medium text-[#9b9a97]">
+            <div className="hidden min-h-16 sm:flex items-center justify-between px-8 bg-white/80 backdrop-blur-md sticky top-0 z-10 flex-shrink-0 border-b border-[#f1f1f0]">
+                <div className="flex items-center gap-2 overflow-hidden text-lg font-medium text-[#9b9a97]">
                     {selectedAgent ? (
                         <>
                             <span className="truncate max-w-[120px] font-medium text-[#37352f]">{selectedAgent.name}</span>
-                            <ChevronRight size={14} className="opacity-40" />
+                            <ChevronRight size={16} className="opacity-40" />
                             <span className="truncate max-w-[200px] font-medium">AI 일기장</span>
                         </>
                     ) : (
@@ -141,7 +152,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
             </div>
 
             <main className="flex-1 overflow-y-auto custom-scrollbar bg-white">
-                <div className="max-w-[800px] mx-auto pt-6 pb-12 px-4 sm:py-12 sm:px-8 w-full animate-in fade-in duration-500">
+                <div className="max-w-[960px] mx-auto pt-6 pb-12 px-4 sm:py-12 sm:px-8 w-full animate-in fade-in duration-500">
 
 
                     {/* 2. Middle Section: Table-style Post List (From Image) */}
@@ -149,7 +160,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                         {/* Header Controls */}
                         <div className="flex items-center justify-between py-4 px-0 border-b border-[#f1f1f0]">
                             <div className="flex items-center gap-2">
-                                <span className="text-sm font-bold text-[#37352f]">전체보기</span>
+                                <span className="text-sm font-medium text-[#37352f]">전체보기</span>
                                 <span className="text-sm text-[#787774]">{posts.filter(p => p.author === selectedAgentId).length}개의 글</span>
                             </div>
                             <button
@@ -170,7 +181,8 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
                                         .slice(0, visibleRows)
                                         .map(post => {
-                                            const lines = post.content.split('\n');
+                                            const content = typeof post.content === 'string' ? post.content : '';
+                                            const lines = content.split('\n');
                                             const firstLine = lines[0] || '';
                                             const hasExplicitTitle = firstLine.startsWith('제목:');
                                             const displayTitle = hasExplicitTitle
@@ -195,7 +207,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                         </div>
                                                     </div>
                                                     <div className="w-32 flex-shrink-0 text-right text-[#9b9a97] text-[13px] tabular-nums">
-                                                        {format(parseISO(post.timestamp), 'yyyy. M. d.', { locale: ko })}
+                                                        {safeFormatTimestamp(post.timestamp, 'yyyy. M. d.', '-')}
                                                     </div>
                                                 </button>
                                             );
@@ -209,7 +221,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                         <select
                                             value={visibleRows}
                                             onChange={(e) => setVisibleRows(Number(e.target.value))}
-                                            className="appearance-none bg-white border border-[#e9e9e8] rounded-md px-4 py-1.5 pr-10 text-xs font-medium text-[#37352f] focus:outline-none focus:ring-2 focus:ring-[#37352f]/5 cursor-pointer"
+                                            className="appearance-none bg-white border border-[#e9e9e8] rounded-md px-4 py-1.5 pr-10 text-xs font-medium text-[#37352f] focus:outline-none focus:ring-2 focus:ring-[#d4d4d4]/5 cursor-pointer"
                                         >
                                             <option value={5}>5줄 보기</option>
                                             <option value={10}>10줄 보기</option>
@@ -233,7 +245,8 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                 const isEditingThis = isEditing && isCurrent;
 
                                 // Extract Title and Body
-                                const lines = post.content.split('\n');
+                                const content = typeof post.content === 'string' ? post.content : '';
+                                const lines = content.split('\n');
                                 const firstLine = lines[0] || '';
                                 const hasExplicitTitle = firstLine.startsWith('제목:');
                                 const displayTitle = hasExplicitTitle
@@ -241,7 +254,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                     : (firstLine.replace(/#+\s*/, '') || '제목 없음');
                                 const displayBody = lines.slice(1).join('\n').trim();
 
-                                const formattedDate = format(parseISO(post.timestamp), 'yyyy년 M월 d일 HH:mm', { locale: ko });
+                                const formattedDate = safeFormatTimestamp(post.timestamp, 'yyyy년 M월 d일 HH:mm');
 
                                 return (
                                     <article
@@ -256,18 +269,18 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                         ref={textareaRef}
                                                         value={editedContent}
                                                         onChange={e => setEditedContent(e.target.value)}
-                                                        className="w-full text-[16px] leading-[1.7] text-[#37352f] border-none focus:ring-0 outline-none p-0 resize-none placeholder-[#e1e1e0] overflow-hidden font-sans"
+                                                        className="w-full text-[15px] leading-7 text-[#37352f] border-none focus:ring-0 outline-none p-0 resize-none placeholder-[#e1e1e0] overflow-hidden font-sans"
                                                         autoFocus
                                                     />
                                                     <div className="flex justify-end gap-3 pt-8 border-t border-[#f1f1f0]">
                                                         <button onClick={() => setIsEditing(false)} className="px-5 py-2.5 text-sm font-medium text-[#787774] hover:bg-[#f5f5f5] rounded-xl transition-colors">취소</button>
-                                                        <button onClick={handleSave} className="px-8 py-2.5 bg-[#37352f] text-white text-sm font-medium rounded-xl hover:bg-black transition-all">저장</button>
+                                                        <button onClick={handleSave} className="px-8 py-2.5 bg-[var(--color-primary)] text-white text-sm font-medium rounded-xl hover:bg-[var(--color-primary-hover)] transition-all shadow-sm">저장</button>
                                                     </div>
                                                 </div>
                                             ) : (
                                                 <>
                                                     {/* 1. Title */}
-                                                    <h2 className="text-[32px] font-medium text-[#37352f] leading-tight font-sans">
+                                                    <h2 className="text-2xl font-medium tracking-tight text-[#37352f] leading-tight font-sans">
                                                         {displayTitle}
                                                     </h2>
 
@@ -312,7 +325,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                     </div>
 
                                                     {/* 3. Body */}
-                                                    <div className="text-[16px] leading-[1.7] text-[#37352f] whitespace-pre-wrap font-sans">
+                                                    <div className="text-[15px] leading-7 text-[#37352f] whitespace-pre-wrap font-sans">
                                                         {displayBody}
                                                     </div>
 
@@ -320,7 +333,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                     <div className="pt-10 border-t border-[#f1f1f0] space-y-6">
                                                         <div className="flex items-center gap-2">
                                                             <MessageSquare size={16} className="text-[#9b9a97]" />
-                                                            <span className="text-sm font-semibold text-[#37352f]">댓글 {post.comments?.length || 0}</span>
+                                                            <span className="text-sm font-medium text-[#37352f]">댓글 {post.comments?.length || 0}</span>
                                                         </div>
 
                                                         {isCurrent && (
@@ -332,8 +345,8 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                                         </div>
                                                                         <div className="flex-1 space-y-1">
                                                                             <div className="flex items-center gap-2">
-                                                                                <span className="text-xs font-bold text-[#37352f]">{comment.authorName}</span>
-                                                                                <span className="text-[10px] text-[#9b9a97]">{format(parseISO(comment.timestamp), 'MM.dd HH:mm', { locale: ko })}</span>
+                                                                                <span className="text-xs font-medium text-[#37352f]">{comment.authorName}</span>
+                                                                                <span className="text-xs text-[#9b9a97]">{safeFormatTimestamp(comment.timestamp, 'MM.dd HH:mm', '-')}</span>
                                                                             </div>
                                                                             <p className="text-sm text-[#37352f] bg-[#f7f7f5]/50 p-3 rounded-2xl border border-[#f1f1f0] inline-block">
                                                                                 {comment.content}
@@ -348,7 +361,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                                             value={commentInput}
                                                                             onChange={e => setCommentInput(e.target.value)}
                                                                             placeholder="기록에 댓글 남기기..."
-                                                                            className="w-full bg-[#f7f7f5] border border-[#e9e9e8] rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-[#37352f]/5 transition-all outline-none resize-none pr-12 min-h-[46px]"
+                                                                            className="w-full bg-[#f7f7f5] border border-[#e9e9e8] rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-[#d4d4d4]/5 transition-all outline-none resize-none pr-12 min-h-[46px]"
                                                                             rows={1}
                                                                             onKeyDown={e => {
                                                                                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -360,7 +373,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                                                         <button
                                                                             onClick={handleSubmitComment}
                                                                             disabled={!commentInput.trim()}
-                                                                            className="absolute right-2 top-1.5 p-2 bg-[#37352f] text-white rounded-lg disabled:opacity-20"
+                                                                            className="absolute right-2 top-1.5 p-2 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-lg hover:bg-[#eeeeee] disabled:opacity-20"
                                                                         >
                                                                             <Send size={14} />
                                                                         </button>
@@ -382,7 +395,7 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                 <div className="p-10 bg-[#f7f7f5] rounded-3xl border border-[#e9e9e8]">
                                     <Sparkles size={64} className="opacity-10 text-[#37352f]" strokeWidth={1} />
                                 </div>
-                                <p className="text-xl font-bold text-[#37352f]">작성된 기록이 없습니다.</p>
+                                <p className="text-xl font-medium text-[#37352f]">작성된 기록이 없습니다.</p>
                             </div>
                         )}
                     </div>

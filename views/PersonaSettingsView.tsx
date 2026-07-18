@@ -1,63 +1,137 @@
 import React, { useMemo, useState } from 'react';
-import { AIAgent, AppSettings } from '../types';
-import { Plus, Trash2, Save, RotateCcw, Download, Trash, Edit3, X, Upload } from 'lucide-react';
-
+import { AIAgent, AppSettings, PersonaMemory } from '../types';
+import { Plus, Trash2, Save, RotateCcw, Edit3, X } from 'lucide-react';
 import { DEFAULT_AGENTS } from '../data/defaultAgents';
+import { readImageFileAsDataUrl } from '../utils/imageAsset';
+import { getAvatarImageStyle } from '../utils/avatarFrame';
+import AvatarCropperModal from '../components/AvatarCropperModal';
+import { isChatSupportedProvider } from '../utils/aiConfig';
 
 interface PersonaSettingsViewProps {
   agents: AIAgent[];
   onUpdateAgents: (agents: AIAgent[]) => void;
   settings: AppSettings;
-  onUpdateSettings: (settings: AppSettings) => void;
+  onUpdateSettings: (settings: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
+  personaMemories: PersonaMemory[];
+  onAddPersonaMemory: (agentId: string, type: PersonaMemory['type'], content: string) => void;
+  onForgetPersonaMemory: (memoryId: string) => void;
+  onClearAgentPersonaMemories: (agentId: string) => void;
 }
+
+type PersonaEditorTab = 'profile' | 'api';
+
+const RESPONSE_LENGTH_OPTIONS = [
+  { value: 'short', label: '짧게' },
+  { value: 'medium', label: '보통' },
+  { value: 'long', label: '길게' },
+] as const;
+
+const MEMORY_TYPE_LABEL: Record<PersonaMemory['type'], string> = {
+  fact: '사실',
+  preference: '선호',
+  goal: '목표',
+};
+
+const formatTimestamp = (value?: string): string => {
+  if (!value) return '기록 없음';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '기록 없음';
+  return date.toLocaleString('ko-KR', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const getMemoryTimestamp = (memory: PersonaMemory): number => {
+  return new Date(memory.lastObservedAt || memory.updatedAt || memory.createdAt).getTime();
+};
+
+const sortMemoriesByRecent = (a: PersonaMemory, b: PersonaMemory): number => {
+  return getMemoryTimestamp(b) - getMemoryTimestamp(a);
+};
 
 const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   agents,
   onUpdateAgents,
   settings,
-  onUpdateSettings,
+  onUpdateSettings: _onUpdateSettings,
+  personaMemories,
+  onAddPersonaMemory,
+  onForgetPersonaMemory,
+  onClearAgentPersonaMemories,
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<AIAgent | null>(null);
+  const [editorTab, setEditorTab] = useState<PersonaEditorTab>('profile');
+  const [isSaving, setIsSaving] = useState(false);
+  const [memoryDrafts, setMemoryDrafts] = useState<Record<string, string>>({});
+  const [memoryTypes, setMemoryTypes] = useState<Record<string, PersonaMemory['type']>>({});
+  const [memoryPanelAgentId, setMemoryPanelAgentId] = useState<string | null>(null);
+  const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
   const supportedChatConnections = (settings.apiConnections || []).filter(
-    (connection) => connection.provider === 'gemini' || connection.provider === 'xai'
+    (connection) => isChatSupportedProvider(connection.provider)
   );
 
   const editingTarget = useMemo(
     () => agents.find((agent) => agent.id === editingId) || null,
     [agents, editingId]
   );
-
+  const memoryPanelAgent = useMemo(
+    () => agents.find((agent) => agent.id === memoryPanelAgentId) || null,
+    [agents, memoryPanelAgentId]
+  );
+  const memoryPanelMemories = useMemo(
+    () => personaMemories
+      .filter((memory) => memory.agentId === memoryPanelAgentId)
+      .sort(sortMemoriesByRecent),
+    [personaMemories, memoryPanelAgentId]
+  );
   const openEditor = (agent: AIAgent) => {
+    setIsAvatarCropOpen(false);
+    setEditorTab('profile');
     setEditingId(agent.id);
     setDraft({ ...agent });
   };
 
   const closeEditor = () => {
+    if (isSaving) return;
+    setIsAvatarCropOpen(false);
     setEditingId(null);
     setDraft(null);
   };
 
-  const saveAgent = () => {
+  const saveAgent = async () => {
     if (!editingId || !draft) return;
     if (!draft.connectionId) {
-      alert('전역 기본 연결은 비활성화되었습니다. 이 페르소나에 Gemini/xAI 연결을 지정해 주세요.');
+      alert('이 페르소나에 사용할 모델을 지정해 주세요.');
       return;
     }
-    onUpdateAgents(
-      agents.map((agent) => (agent.id === editingId ? { ...agent, ...draft } : agent))
-    );
-    closeEditor();
+
+    setIsSaving(true);
+    try {
+      const nextAgentDraft: AIAgent = { ...draft };
+      await Promise.resolve(
+        onUpdateAgents(
+          agents.map((agent) => (agent.id === editingId ? { ...agent, ...nextAgentDraft } : agent))
+        )
+      );
+      setEditingId(null);
+      setDraft(null);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const addCustomAgent = () => {
     const newAgent: AIAgent = {
       id: crypto.randomUUID(),
-      name: 'New Agent',
+      name: '새 페르소나',
       emoji: '✨',
-      role: 'Custom Role',
-      personality: 'Describe this agent personality',
-      tone: 'Friendly',
+      role: '친구',
+      personality: '사용자가 직접 만든 페르소나입니다.',
+      tone: '친절하고 자연스러운 말투',
       color: '#6366f1',
       avatar: '',
     };
@@ -66,6 +140,10 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   };
 
   const removeAgent = (id: string) => {
+    if (agents.length <= 1) {
+      alert('최소 한 개의 페르소나는 유지해야 합니다.');
+      return;
+    }
     if (!window.confirm('이 페르소나를 삭제할까요?')) return;
     onUpdateAgents(agents.filter((agent) => agent.id !== id));
   };
@@ -75,8 +153,9 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
     onUpdateAgents(DEFAULT_AGENTS);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
 
     if (file.size > 5 * 1024 * 1024) {
@@ -84,26 +163,40 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      if (event.target?.result) {
-        callback(event.target.result as string);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      callback(await readImageFileAsDataUrl(file));
+    } catch (error) {
+      alert((error as Error).message || '이미지를 불러오지 못했습니다.');
+    }
+  };
+
+  const handleAddMemory = (agentId: string) => {
+    const content = (memoryDrafts[agentId] || '').trim();
+    if (!content) return;
+    onAddPersonaMemory(agentId, memoryTypes[agentId] || 'fact', content);
+    setMemoryDrafts(prev => ({ ...prev, [agentId]: '' }));
+  };
+
+  const setDraftAvatarSource = (avatar: string, openCrop: boolean = false) => {
+    setDraft(prev => prev ? { ...prev, avatar, avatarFrame: undefined } : prev);
+    if (avatar.trim() && openCrop) setIsAvatarCropOpen(true);
+  };
+
+  const updateDraftAvatarFrame = (avatarFrame?: AIAgent['avatarFrame']) => {
+    setDraft(prev => prev ? { ...prev, avatarFrame } : prev);
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8 pb-12 px-2">
+    <div className="max-w-6xl mx-auto space-y-6 pb-12">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-normal text-[#37352f]">페르소나 설정</h2>
-          <p className="text-sm text-[#787774] mt-1">AI 페르소나를 편집하고 행동 옵션을 조정하세요.</p>
+          <p className="text-sm text-[#787774] mt-1">이름, 말투, 프로필, 연결 모델을 한 번에 정리하세요.</p>
         </div>
         <div className="flex gap-2 self-start sm:self-auto shrink-0">
           <button
             onClick={addCustomAgent}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#37352f] text-white text-sm hover:bg-[#2b2924] transition-colors whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] text-sm hover:bg-[#eeeeee] transition-colors whitespace-nowrap"
           >
             <Plus size={14} /> 추가
           </button>
@@ -117,191 +210,313 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {agents.map((agent) => (
-          <div key={agent.id} className="bg-white border border-[#e9e9e8] rounded-xl p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <div
-                  className="w-11 h-11 rounded-full overflow-hidden flex items-center justify-center text-lg text-white shrink-0"
-                  style={{ backgroundColor: agent.color || '#37352f' }}
-                >
-                  {agent.avatar ? (
-                    <img src={agent.avatar} alt={agent.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <span>{agent.emoji || '🤖'}</span>
-                  )}
+        {agents.map((agent) => {
+          const connection = settings.apiConnections?.find((conn) => conn.id === agent.connectionId);
+          const agentMemories = personaMemories
+            .filter((memory) => memory.agentId === agent.id)
+            .sort(sortMemoriesByRecent);
+
+          return (
+            <div key={agent.id} className="bg-white border border-[#e9e9e8] rounded-xl p-4 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-11 h-11 rounded-full overflow-hidden flex items-center justify-center text-lg text-white shrink-0"
+                    style={{ backgroundColor: agent.color || '#37352f' }}
+                  >
+                    {agent.avatar ? (
+                      <img src={agent.avatar} alt={agent.name} style={getAvatarImageStyle(agent.avatarFrame)} className="w-full h-full object-cover" />
+                    ) : (
+                      <span>{agent.emoji || '🤖'}</span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm text-[#37352f] truncate">{agent.name}</div>
+                    <div className="text-xs text-[#9b9a97] truncate">{agent.role}</div>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <div className="text-sm text-[#37352f] truncate">{agent.name}</div>
-                  <div className="text-xs text-[#9b9a97] truncate">{agent.role}</div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => openEditor(agent)}
+                    className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774]"
+                    title="편집"
+                  >
+                    <Edit3 size={14} />
+                  </button>
+                  <button
+                    onClick={() => removeAgent(agent.id)}
+                    className="p-1.5 rounded-md hover:bg-[#fff0f0] text-[#cf3f3f]"
+                    title="삭제"
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </div>
-              <div className="flex gap-1">
+
+              <p className="text-xs text-[#787774] line-clamp-2">{agent.personality}</p>
+              <div className="text-xs text-[#9b9a97] space-y-1">
+                {connection && <div>연결: {connection.provider.toUpperCase()} · {connection.modelName}</div>}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setMemoryPanelAgentId(agent.id)}
+                className="w-full flex items-center justify-between gap-3 rounded-xl border border-[#efefef] bg-[#fbfbfa] px-3 py-2.5 text-left hover:bg-[#f7f7f5] transition-colors"
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium text-[#37352f]">메모리</span>
+                  <span className="block text-[11px] text-[#9b9a97] truncate">필요할 때만 열어서 관리</span>
+                </span>
+                <span className="shrink-0 rounded-full bg-[#f1f1f0] px-2.5 py-1 text-[11px] font-medium text-[#787774]">
+                  {agentMemories.length}개 · 관리
+                </span>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {memoryPanelAgent && (
+        <div className="fixed inset-0 z-[70] bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-hidden">
+          <div className="w-full sm:max-w-lg max-h-[88vh] bg-white rounded-t-2xl sm:rounded-2xl border-x border-t sm:border border-[#e9e9e8] flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-[#efefef] flex items-start justify-between gap-3 shrink-0">
+              <div className="min-w-0">
+                <h4 className="text-sm font-medium text-[#37352f]">{memoryPanelAgent.name} 메모리</h4>
+                <p className="text-xs text-[#9b9a97] mt-1">필요한 기억만 조용히 보관해요.</p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {memoryPanelMemories.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`${memoryPanelAgent.name}의 메모리를 모두 삭제할까요?`)) {
+                        onClearAgentPersonaMemories(memoryPanelAgent.id);
+                      }
+                    }}
+                    className="px-2 py-1 rounded-md text-[11px] font-medium text-[#9b9a97] hover:text-[#cf3f3f] hover:bg-[#fff0f0] transition-colors"
+                  >
+                    전체 삭제
+                  </button>
+                )}
                 <button
-                  onClick={() => openEditor(agent)}
-                  className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774]"
-                  title="편집"
+                  type="button"
+                  onClick={() => setMemoryPanelAgentId(null)}
+                  className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774] transition-colors"
+                  title="닫기"
                 >
-                  <Edit3 size={14} />
-                </button>
-                <button
-                  onClick={() => removeAgent(agent.id)}
-                  className="p-1.5 rounded-md hover:bg-[#fff0f0] text-[#cf3f3f]"
-                  title="삭제"
-                >
-                  <Trash2 size={14} />
+                  <X size={18} />
                 </button>
               </div>
             </div>
-            <p className="text-xs text-[#787774] mt-3 line-clamp-2">{agent.personality}</p>
-            {agent.connectionId && (() => {
-              const conn = settings.apiConnections?.find(c => c.id === agent.connectionId);
-              return conn ? (
-                <div className="mt-2 text-[10px] text-[#9b9a97] bg-[#f7f7f5] px-2 py-1 rounded-md inline-block">
-                  🔗 {conn.provider.toUpperCase()} · {conn.modelName}
+
+            <div className="p-5 border-b border-[#efefef] shrink-0 space-y-2">
+              <select
+                value={memoryTypes[memoryPanelAgent.id] || 'fact'}
+                onChange={(e) => setMemoryTypes(prev => ({ ...prev, [memoryPanelAgent.id]: e.target.value as PersonaMemory['type'] }))}
+                className="w-full px-3 py-2 rounded-lg border border-[#dcdcd9] bg-white text-xs text-[#37352f] outline-none"
+              >
+                <option value="fact">사실</option>
+                <option value="preference">선호</option>
+                <option value="goal">목표</option>
+              </select>
+              <div className="flex gap-2">
+                <input
+                  value={memoryDrafts[memoryPanelAgent.id] || ''}
+                  onChange={(e) => setMemoryDrafts(prev => ({ ...prev, [memoryPanelAgent.id]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddMemory(memoryPanelAgent.id);
+                  }}
+                  placeholder={`${memoryPanelAgent.name}이 기억할 내용`}
+                  className="min-w-0 flex-1 px-3 py-2 rounded-lg border border-[#dcdcd9] text-xs text-[#37352f] outline-none focus:border-[#d4d4d4]"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleAddMemory(memoryPanelAgent.id)}
+                  className="shrink-0 px-3 py-2 rounded-lg bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] text-xs font-medium hover:bg-[#eeeeee] transition-colors"
+                >
+                  추가
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-2">
+              {memoryPanelMemories.map((memory) => (
+                <div key={memory.id} className="rounded-xl border border-[#efefef] bg-[#fbfbfa] p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-medium text-[#787774]">
+                        {MEMORY_TYPE_LABEL[memory.type]} · {formatTimestamp(memory.lastObservedAt || memory.updatedAt)}
+                      </div>
+                      <div className="mt-1 text-xs leading-relaxed text-[#37352f] break-words">{memory.content}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onForgetPersonaMemory(memory.id)}
+                      className="shrink-0 p-1 rounded-md text-[#9b9a97] hover:text-[#cf3f3f] hover:bg-[#fff0f0] transition-colors"
+                      title="메모리 삭제"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
-              ) : null;
-            })()}
+              ))}
+              {memoryPanelMemories.length === 0 && (
+                <div className="rounded-xl border border-dashed border-[#dcdcd9] p-5 text-center">
+                  <div className="text-sm font-medium text-[#37352f]">아직 메모리가 없어요</div>
+                  <p className="mt-1 text-xs text-[#9b9a97]">직접 추가하거나 채팅 중 중요한 내용을 저장하면 여기에 모입니다.</p>
+                </div>
+              )}
+            </div>
           </div>
-        ))}
-      </div>
-
-      <div className="bg-white border border-[#e9e9e8] rounded-xl p-5 mb-8">
-        <h3 className="text-lg text-[#37352f] mb-3">동작 옵션</h3>
-        <label className="flex items-center justify-between gap-4 py-3 cursor-pointer border-b border-[#f2f2f0] last:border-0 relative">
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-[#37352f] truncate">AI 자동 반응</div>
-            <div className="text-xs text-[#9b9a97] mt-0.5 leading-relaxed break-keep">일기, 할 일, 일정 이벤트에 AI가 반응을 자동 생성합니다.</div>
-          </div>
-          <div className="relative inline-flex items-center shrink-0">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={settings.autoAiReactions}
-              onChange={(e) => onUpdateSettings({ ...settings, autoAiReactions: e.target.checked })}
-            />
-            <div className="w-11 h-6 bg-[#d9d9d7] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-[#d9d9d7] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#37352f] shadow-inner"></div>
-          </div>
-        </label>
-        <label className="flex items-center justify-between gap-4 py-3 cursor-pointer border-b border-[#f2f2f0] last:border-0 relative">
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-[#37352f] truncate">채팅 실행 전 확인</div>
-            <div className="text-xs text-[#9b9a97] mt-0.5 leading-relaxed break-keep">채팅에서 일정/할 일 생성 전에 추가 확인 단계를 거칩니다.</div>
-          </div>
-          <div className="relative inline-flex items-center shrink-0">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={settings.chatActionConfirm}
-              onChange={(e) => onUpdateSettings({ ...settings, chatActionConfirm: e.target.checked })}
-            />
-            <div className="w-11 h-6 bg-[#d9d9d7] rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-[#d9d9d7] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#37352f] shadow-inner"></div>
-          </div>
-        </label>
-      </div>
-
-
+        </div>
+      )}
 
       {editingId && draft && (
-        <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm flex items-center justify-center p-0 sm:p-4 overflow-hidden">
-          <div className="w-full h-full sm:h-auto sm:max-w-xl bg-white sm:rounded-2xl border-x sm:border border-[#e9e9e8] shadow-2xl max-h-none sm:max-h-[85vh] flex flex-col overflow-hidden">
+        <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-hidden">
+          <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-2xl h-auto max-h-[92dvh] sm:max-h-[90vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
             <div className="px-5 py-4 border-b border-[#efefef] flex items-center justify-between shrink-0 bg-white">
-              <h4 className="text-[#37352f] font-semibold">{editingTarget ? '페르소나 편집' : '새 페르소나'}</h4>
+              <div>
+                <h4 className="text-[#37352f] font-medium">{editingTarget ? '페르소나 편집' : '새 페르소나'}</h4>
+                <p className="text-xs text-[#9b9a97] mt-1">말투와 프로필을 이곳에서 깔끔하게 정리할 수 있어요.</p>
+              </div>
               <button onClick={closeEditor} className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774] transition-colors">
                 <X size={18} />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain">
-              <div className="p-6 flex flex-col items-center border-b border-[#efefef] bg-[#fbfbfa]">
-                <div className="w-20 h-20 rounded-full overflow-hidden flex items-center justify-center text-4xl text-white shadow-md mb-3" style={{ backgroundColor: draft.color || '#37352f' }}>
-                  {draft.avatar ? (
-                    <img src={draft.avatar} alt={draft.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <span>{draft.emoji || '🤖'}</span>
-                  )}
-                </div>
-                <div className="text-sm font-bold text-[#37352f]">{draft.name || '새 페르소나'}</div>
-                <div className="text-xs text-[#9b9a97]">{draft.role || '역할을 입력하세요'}</div>
-              </div>
-
-              <div className="p-5 space-y-4">
-                <label className="block">
-                  <span className="text-xs font-semibold text-[#787774] ml-1 uppercase">이름</span>
+              <div className="p-5 space-y-5">
+                <div className="flex flex-col items-center border border-[#efefef] rounded-2xl bg-[#fbfbfa] px-5 py-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draft.avatar) {
+                        setIsAvatarCropOpen(true);
+                        return;
+                      }
+                      document.getElementById(`persona-avatar-upload-${editingId}`)?.click();
+                    }}
+                    className="relative w-28 h-28 rounded-full overflow-hidden flex items-center justify-center text-4xl text-white mb-3 transition-transform hover:scale-[1.02] group"
+                    style={{ backgroundColor: draft.color || '#37352f' }}
+                    title="이미지 변경"
+                  >
+                    {draft.avatar ? (
+                      <img src={draft.avatar} alt={draft.name} style={getAvatarImageStyle(draft.avatarFrame)} className="w-full h-full object-cover" />
+                    ) : (
+                      <span>{draft.emoji || '🤖'}</span>
+                    )}
+                    <span className="absolute inset-0 bg-transparent group-hover:bg-white/25 transition-colors" />
+                    <span className="absolute bottom-1.5 right-1.5 w-9 h-9 rounded-full bg-white/90 border border-[#e9e9e8] text-[#37352f] flex items-center justify-center">
+                      <Edit3 size={15} />
+                    </span>
+                  </button>
                   <input
-                    value={draft.name}
-                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#37352f] focus:ring-1 focus:ring-[#37352f] transition-all outline-none"
+                    id={`persona-avatar-upload-${editingId}`}
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    onChange={(e) => handleImageUpload(e, (url) => setDraftAvatarSource(url, true))}
                   />
-                </label>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <label className="block">
-                    <span className="text-xs font-semibold text-[#787774] ml-1 uppercase">역할</span>
-                    <input
-                      value={draft.role}
-                      onChange={(e) => setDraft({ ...draft, role: e.target.value })}
-                      className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#37352f] focus:ring-1 focus:ring-[#37352f] transition-all outline-none"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs font-semibold text-[#787774] ml-1 uppercase">톤</span>
-                    <input
-                      value={draft.tone}
-                      onChange={(e) => setDraft({ ...draft, tone: e.target.value })}
-                      className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#37352f] focus:ring-1 focus:ring-[#37352f] transition-all outline-none"
-                    />
-                  </label>
+                  <div className="text-sm font-medium text-[#37352f]">{draft.name || '새 페르소나'}</div>
+                  <div className="text-xs text-[#9b9a97]">{draft.role || '역할을 입력하세요'}</div>
                 </div>
 
-                <label className="block">
-                  <span className="text-xs font-semibold text-[#787774] ml-1 uppercase">성격</span>
-                  <textarea
-                    value={draft.personality}
-                    onChange={(e) => setDraft({ ...draft, personality: e.target.value })}
-                    rows={3}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#37352f] focus:ring-1 focus:ring-[#37352f] transition-all outline-none resize-none"
-                  />
-                </label>
+                <div className="grid grid-cols-2 gap-1 rounded-xl border border-[#e9e9e8] bg-[#f7f7f5] p-1">
+                  {([
+                    ['profile', '프로필'],
+                    ['api', 'API'],
+                  ] as Array<[PersonaEditorTab, string]>).map(([tab, label]) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setEditorTab(tab)}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${editorTab === tab
+                        ? 'bg-white text-[#37352f]'
+                        : 'text-[#787774] hover:text-[#37352f]'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
 
-                <div className="space-y-2">
-                  <span className="text-xs font-semibold text-[#787774] ml-1 uppercase">아바타 이미지</span>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      value={draft.avatar || ''}
-                      onChange={(e) => setDraft({ ...draft, avatar: e.target.value })}
-                      className="flex-1 px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#37352f] outline-none"
-                      placeholder="이미지 URL"
-                    />
-                    <label className="flex items-center justify-center gap-1.5 px-4 py-2 bg-white border border-[#dcdcd9] rounded-lg hover:bg-[#f7f7f5] cursor-pointer text-[#37352f] text-sm transition-colors whitespace-nowrap">
-                      <Upload size={14} />
-                      <span className="font-semibold">파일 선택</span>
+                {editorTab === 'profile' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <label className="block">
+                        <span className="text-xs font-medium text-[#787774] ml-1 uppercase">이름</span>
+                        <input
+                          value={draft.name}
+                          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                          className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none"
+                        />
+                      </label>
+
+                      <label className="block">
+                        <span className="text-xs font-medium text-[#787774] ml-1 uppercase">역할</span>
+                        <input
+                          value={draft.role}
+                          onChange={(e) => setDraft({ ...draft, role: e.target.value })}
+                          className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none"
+                        />
+                      </label>
+                    </div>
+
+                    <label className="block">
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">말투</span>
                       <input
-                        type="file"
-                        className="hidden"
-                        accept="image/*"
-                        onChange={(e) => handleImageUpload(e, (url) => setDraft({ ...draft, avatar: url }))}
+                        value={draft.tone || ''}
+                        onChange={(e) => setDraft({ ...draft, tone: e.target.value })}
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none"
+                        placeholder="예: 다정하고 자연스러운 존댓말"
                       />
                     </label>
-                  </div>
-                </div>
 
-                <label className="block">
-                  <span className="text-xs font-semibold text-[#787774] ml-1 uppercase">API 연결</span>
-                  <select
-                    value={draft.connectionId || ''}
-                    onChange={(e) => setDraft({ ...draft, connectionId: e.target.value || undefined })}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#37352f] focus:ring-1 focus:ring-[#37352f] transition-all outline-none bg-white"
-                  >
-                    <option value="" disabled>연결을 선택하세요</option>
-                    {supportedChatConnections.map(conn => (
-                      <option key={conn.id} value={conn.id}>
-                        {conn.provider.toUpperCase()} · {conn.modelName}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="text-[10px] text-[#9b9a97] ml-1">전역 기본 연결은 사용하지 않으며, 각 페르소나마다 Gemini/xAI 연결이 필수입니다</span>
-                </label>
+                    <label className="block">
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">성격과 행동 방식</span>
+                      <textarea
+                        value={draft.personality || ''}
+                        onChange={(e) => setDraft({ ...draft, personality: e.target.value })}
+                        rows={7}
+                        className="mt-1 w-full px-3 py-3 rounded-lg border border-[#dcdcd9] text-sm leading-relaxed focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none resize-y min-h-[170px]"
+                        placeholder="성격, 행동 방식, 대화 규칙을 자유롭게 적어주세요."
+                      />
+                      <span className="mt-1 block text-[11px] text-[#9b9a97]">이제 첫 줄부터 전부 성격/지침으로 저장됩니다.</span>
+                    </label>
+                  </div>
+                )}
+
+                {editorTab === 'api' && (
+                  <div className="space-y-4">
+                    <label className="block">
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API 연결</span>
+                      <select
+                        value={draft.connectionId || ''}
+                        onChange={(e) => setDraft({ ...draft, connectionId: e.target.value || undefined })}
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                      >
+                        <option value="" disabled>연결을 선택하세요</option>
+                        {supportedChatConnections.map(conn => (
+                          <option key={conn.id} value={conn.id}>
+                            {conn.provider.toUpperCase()} · {conn.modelName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">채팅 응답 길이</span>
+                      <select
+                        value={draft.responseLength || 'medium'}
+                        onChange={(e) => setDraft({ ...draft, responseLength: e.target.value as AIAgent['responseLength'] })}
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                      >
+                        {RESPONSE_LENGTH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -313,15 +528,29 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                 취소
               </button>
               <button
-                onClick={saveAgent}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#37352f] text-sm text-white hover:bg-[#2b2924] transition-all active:scale-95 shadow-sm"
+                onClick={() => void saveAgent()}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#f7f7f7] border border-[#e9e9e8] text-sm text-[#171717] hover:bg-[#eeeeee] transition-all active:scale-95"
+                disabled={isSaving}
               >
                 <Save size={16} />
-                <span>저장하기</span>
+                <span>{isSaving ? '저장 중...' : '저장하기'}</span>
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {editingId && draft?.avatar && (
+        <AvatarCropperModal
+          isOpen={isAvatarCropOpen}
+          avatar={draft.avatar}
+          frame={draft.avatarFrame}
+          title={`${draft.name || '페르소나'} 이미지 편집`}
+          name={draft.name}
+          onAvatarChange={(avatar) => setDraftAvatarSource(avatar, true)}
+          onFrameChange={updateDraftAvatarFrame}
+          onClose={() => setIsAvatarCropOpen(false)}
+        />
       )}
     </div>
   );

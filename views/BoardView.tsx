@@ -55,9 +55,9 @@ const BoardView: React.FC<BoardViewProps> = ({ posts, events, todos, entries, se
 
       {/* Main Feed Area */}
       <div className="flex-1 overflow-y-auto pr-2 pb-20">
-        <div className="mb-8 pt-4">
-          <h1 className="text-4xl font-bold mb-3 tracking-tight">AI 인사이트</h1>
-          <p className="text-[#9b9a97] text-lg font-medium">나의 기록을 분석하여 더 나은 하루를 제안합니다.</p>
+        <div className="mb-8 flex min-h-16 flex-col justify-center border-b border-[#e9e9e8]">
+          <h1 className="text-lg font-medium tracking-normal">AI 인사이트</h1>
+          <p className="mt-1 text-sm font-normal text-[#9b9a97]">나의 기록을 분석하여 더 나은 하루를 제안합니다.</p>
         </div>
 
         {/* Generate Button */}
@@ -66,17 +66,17 @@ const BoardView: React.FC<BoardViewProps> = ({ posts, events, todos, entries, se
             onClick={handleGenerateInsight}
             disabled={isGenerating}
             className={`
-              w-full py-4 rounded-xl border border-[#e9e9e8] shadow-sm flex items-center justify-center gap-3 transition-all group
-              ${isGenerating ? 'bg-[#f7f7f5] text-[#9b9a97] cursor-not-allowed' : 'bg-white hover:bg-[#fbfbfa] hover:border-[#d3d1cb] hover:shadow-md'}
+              w-full py-4 rounded-xl border border-[#e9e9e8] flex items-center justify-center gap-3 transition-all group
+              ${isGenerating ? 'bg-[#f7f7f5] text-[#9b9a97] cursor-not-allowed' : 'bg-white hover:bg-[#fbfbfa] hover:border-[#d3d1cb]'}
             `}
           >
             <div className={`
               w-8 h-8 rounded-full flex items-center justify-center
-              ${isGenerating ? 'bg-[#e0e0e0]' : 'bg-gradient-to-tr from-indigo-500 to-purple-500 text-white'}
+              ${isGenerating ? 'bg-[#e0e0e0]' : 'bg-[var(--color-primary)] text-white shadow-sm'}
             `}>
               <Sparkles size={16} className={isGenerating ? 'animate-spin' : ''} />
             </div>
-            <span className="font-semibold text-lg">
+            <span className="font-medium text-lg">
               {isGenerating ? '기록을 분석하고 있습니다...' : '새로운 인사이트 생성하기'}
             </span>
           </button>
@@ -92,10 +92,10 @@ const BoardView: React.FC<BoardViewProps> = ({ posts, events, todos, entries, se
             </div>
           ) : (
             posts.map(post => (
-              <article key={post.id} className="bg-white rounded-xl border border-[#e9e9e8] p-6 shadow-sm hover:shadow-md transition-shadow">
+              <article key={post.id} className="bg-white rounded-xl border border-[#e9e9e8] p-6 transition-colors">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex items-center gap-2">
-                    <span className="bg-gradient-to-tr from-indigo-500 to-purple-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
+                    <span className="bg-[var(--color-primary-light)] text-[var(--color-primary)] text-[10px] font-medium px-2 py-0.5 rounded-full uppercase tracking-wide">
                       AI Analysis
                     </span>
                     <span className="text-sm text-[#9b9a97]">
@@ -104,7 +104,7 @@ const BoardView: React.FC<BoardViewProps> = ({ posts, events, todos, entries, se
                   </div>
                 </div>
 
-                <h3 className="text-2xl font-bold mb-3 text-[#37352f]">{post.title}</h3>
+                <h3 className="text-2xl font-medium mb-3 text-[#37352f]">{post.title}</h3>
                 <p className="text-[#37352f] leading-relaxed whitespace-pre-line mb-6 text-lg">
                   {post.content}
                 </p>
@@ -132,22 +132,22 @@ const BoardView: React.FC<BoardViewProps> = ({ posts, events, todos, entries, se
           {/* Calendar Widget */}
           <section>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-[#9b9a97] uppercase tracking-wider flex items-center gap-2">
+              <h3 className="text-sm font-medium text-[#9b9a97] uppercase tracking-wider flex items-center gap-2">
                 <CalendarIcon size={16} /> 일정 요약
               </h3>
             </div>
-            <div className="bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl p-4 shadow-sm">
+            <div className="bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl p-4">
               {todayEvents.length === 0 ? (
                 <p className="text-sm text-[#9b9a97] text-center py-2">오늘 예정된 일정이 없습니다.</p>
               ) : (
                 <div className="space-y-3">
                   {todayEvents.map(event => (
                     <div key={event.id} className="flex items-center gap-3">
-                      <div className={`w-1.5 h-1.5 rounded-full ${event.type === 'important' ? 'bg-[#37352f]' : 'bg-[#d3d1cb]'}`} />
+                      <div className={`w-1.5 h-1.5 rounded-full ${event.type === 'important' ? 'bg-[#eb5757]' : 'bg-[#d3d1cb]'}`} />
                       <div className="flex-1 truncate">
                         <div className="text-sm font-medium text-[#37352f] truncate">{event.title}</div>
                         <div className="text-xs text-[#9b9a97]">
-                          {event.startTime || 'All Day'}
+                          {(event.isAllDay || event.description?.includes('[TODO_LINK:')) ? '하루 종일' : (event.startTime || '하루 종일')}
                         </div>
                       </div>
                     </div>
@@ -160,11 +160,11 @@ const BoardView: React.FC<BoardViewProps> = ({ posts, events, todos, entries, se
           {/* Todo Widget */}
           <section>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-[#9b9a97] uppercase tracking-wider flex items-center gap-2">
+              <h3 className="text-sm font-medium text-[#9b9a97] uppercase tracking-wider flex items-center gap-2">
                 <CheckSquare size={16} /> 할 일
               </h3>
             </div>
-            <div className="bg-white border border-[#e9e9e8] rounded-xl p-1 shadow-sm">
+            <div className="bg-white border border-[#e9e9e8] rounded-xl p-1">
               {pendingTodos.length === 0 ? (
                 <p className="text-sm text-[#9b9a97] text-center py-6">모든 작업을 완료했습니다!</p>
               ) : (
@@ -176,7 +176,7 @@ const BoardView: React.FC<BoardViewProps> = ({ posts, events, todos, entries, se
                       className="w-full flex items-center p-3 hover:bg-[#f7f7f5] rounded-lg transition-colors group cursor-pointer text-left"
                       onClick={() => onToggleTodo(todo.id)}
                     >
-                      <div className="w-4 h-4 rounded border border-[#d3d1cb] flex items-center justify-center mr-3 group-hover:border-[#37352f] transition-colors">
+                      <div className="w-4 h-4 rounded border border-[#d3d1cb] flex items-center justify-center mr-3 group-hover:border-[#d4d4d4] transition-colors">
                         {/* Custom Checkbox */}
                       </div>
                       <span className="text-sm text-[#37352f] flex-1">{todo.text}</span>

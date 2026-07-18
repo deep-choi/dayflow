@@ -47,6 +47,7 @@ const DIGEST_HOURS = 4;
 const RETRY_LIMIT = 3;
 const MAX_JOBS_DEFAULT = 20;
 const MAX_JOBS_LIMIT = 60;
+const PROCESSING_STALE_MINUTES = 10;
 
 const DEFAULT_AGENT: AgentRow = {
   id: 'ARIA',
@@ -164,7 +165,7 @@ const buildPrompt = (
     'This is NOT a message to the user. This is your private diary.',
     'Write from first-person AI perspective.',
     'Do not address the user directly.',
-    'When referring to the human in this diary, always use "주인님".',
+    'When referring to the human in this diary, always use "사용자님".',
     'Never use other labels for the human (such as "사용자", "너", or a name).',
     'Write like a human diary entry in natural prose.',
     'Do not use markdown, bullets, numbered lists, or section headers.',
@@ -376,6 +377,30 @@ const claimJobs = async (
   return claimed;
 };
 
+const recoverStaleProcessingJobs = async (
+  supabase: ReturnType<typeof createClient>
+): Promise<number> => {
+  const staleBefore = new Date(Date.now() - PROCESSING_STALE_MINUTES * 60_000).toISOString();
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('ai_trigger_queue')
+    .update({
+      status: 'retry',
+      locked_at: null,
+      scheduled_for: nowIso,
+      last_error: `Recovered stale lock at ${nowIso}`,
+    })
+    .eq('status', 'processing')
+    .lt('locked_at', staleBefore)
+    .select('id');
+
+  if (error) {
+    throw new Error(`Failed to recover stale queue locks: ${error.message}`);
+  }
+
+  return Array.isArray(data) ? data.length : 0;
+};
+
 const processQueueItem = async (
   supabase: ReturnType<typeof createClient>,
   job: QueueRow
@@ -475,12 +500,19 @@ Deno.serve(async (req) => {
     return new Response('ok', { status: 200 });
   }
 
+  return json(410, {
+    ok: false,
+    disabled: true,
+    error: 'AI diary trigger automation has been removed from this app.',
+  });
+
   const expectedSecret = Deno.env.get('LS_AI_WORKER_SECRET');
-  if (expectedSecret) {
-    const provided = req.headers.get('x-ls-ai-secret');
-    if (provided !== expectedSecret) {
-      return json(401, { ok: false, error: 'Unauthorized' });
-    }
+  if (!expectedSecret) {
+    return json(500, { ok: false, error: 'LS_AI_WORKER_SECRET is missing.' });
+  }
+  const provided = req.headers.get('x-ls-ai-secret');
+  if (provided !== expectedSecret) {
+    return json(401, { ok: false, error: 'Unauthorized' });
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -513,6 +545,7 @@ Deno.serve(async (req) => {
 
   const summary = {
     digestEnqueued: 0,
+    recoveredLocks: 0,
     claimed: 0,
     completed: 0,
     retried: 0,
@@ -526,6 +559,7 @@ Deno.serve(async (req) => {
       summary.digestEnqueued = await enqueueScheduledDigests(supabase);
     }
 
+    summary.recoveredLocks = await recoverStaleProcessingJobs(supabase);
     const claimed = await claimJobs(supabase, maxJobs);
     summary.claimed = claimed.length;
 

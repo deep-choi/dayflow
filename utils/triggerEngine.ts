@@ -16,7 +16,7 @@ const DEFAULT_AGENTS: AIAgent[] = [
 
 const ARIA_RESPONSES: Record<string, string[]> = {
   journal_added: [
-    '주인님 기록을 기준으로 오늘의 흐름을 다시 정리해 봤어요.',
+    '사용자님 기록을 기준으로 오늘의 흐름을 다시 정리해 봤어요.',
   ],
   event_added: [
     '새 일정이 추가되어 오늘의 리듬이 조금 달라졌어요.',
@@ -246,7 +246,7 @@ Current snapshot:
         : '감정의 균형을 잡아가려는 흐름이 안정적으로 보였어요.';
 
   const fallbackContent = [
-    '주인님, 지금 남겨주신 기록을 꼼꼼히 읽어봤어요.',
+    '사용자님, 지금 남겨주신 기록을 꼼꼼히 읽어봤어요.',
     moodLine,
     `오늘 기준으로 일정 ${todayEvents}개, 완료된 할 일 ${completedTodos}개, 남은 할 일 ${pendingTodos}개로 확인돼요.`,
     '지금은 한 번에 많이 바꾸기보다, 다음 행동 1가지만 아주 작게 정해서 바로 실행하는 게 가장 효율적이에요.',

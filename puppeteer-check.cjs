@@ -8,7 +8,7 @@ const puppeteer = require('puppeteer');
     await page.goto('http://localhost:3001', { waitUntil: 'networkidle0' });
 
     const content = await page.content();
-    console.log('PAGE HAS AUTH VIEW:', content.includes('AuthView') || content.includes('로그인 / 가입하기') || content.includes('LifeSync AI') ? 'YES' : 'NO');
+    console.log('PAGE HAS AUTH VIEW:', content.includes('AuthView') || content.includes('로그인 / 가입하기') || content.includes('Dayflow') ? 'YES' : 'NO');
     console.log('PAGE HAS BACKGROUND DIV:', content.includes('min-h-screen bg-white') ? 'YES' : 'NO');
 
     await browser.close();

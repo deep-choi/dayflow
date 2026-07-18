@@ -17,35 +17,36 @@ export default defineConfig(({ mode }) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'masked-icon.svg'],
+        includeAssets: ['favicon.svg', 'apple-touch-icon.svg', 'masked-icon.svg', 'robots.txt', 'sitemap.xml'],
         manifest: {
-          name: 'LifeSync AI',
-          short_name: 'LifeSync',
-          description: 'AI-powered Life Management Assistant',
-          theme_color: '#ffffff',
-          background_color: '#f8fafc',
+          name: 'Dayflow - AI Daily Flow Assistant',
+          short_name: 'Dayflow',
+          description: 'AI와 함께 일정, 할 일, 메모, 대화를 정리하는 개인 생산성 대시보드입니다.',
+          theme_color: '#4169E1',
+          background_color: '#ffffff',
           display: 'standalone',
+          lang: 'ko',
           icons: [
             {
-              src: 'pwa-192x192.png',
-              sizes: '192x192',
-              type: 'image/png'
+              src: 'favicon.svg',
+              sizes: '64x64',
+              type: 'image/svg+xml'
             },
             {
-              src: 'pwa-512x512.png',
-              sizes: '512x512',
-              type: 'image/png'
+              src: 'apple-touch-icon.svg',
+              sizes: '180x180',
+              type: 'image/svg+xml'
             },
             {
-              src: 'pwa-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
+              src: 'masked-icon.svg',
+              sizes: 'any',
+              type: 'image/svg+xml',
               purpose: 'any maskable'
             }
           ]
         },
         devOptions: {
-          enabled: true
+          enabled: false
         }
       })
     ],
@@ -56,6 +57,22 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+      }
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('@supabase')) return 'vendor-supabase';
+            if (id.includes('@google/genai')) return 'vendor-ai';
+            if (id.includes('@dnd-kit')) return 'vendor-dnd';
+            if (id.includes('date-fns')) return 'vendor-date';
+            if (id.includes('lucide-react')) return 'vendor-icons';
+            if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
+            return 'vendor';
+          }
+        }
       }
     }
   };
