@@ -1557,7 +1557,13 @@ const App: React.FC = () => {
 
   const hydrateChatSessionsFromIndexedCache = async (userId: string) => {
     const cachedSessions = await loadChatSessionsCache(userId);
-    if (!cachedSessions || latestSessionUserIdRef.current !== userId) return;
+    // IndexedDB is only a fast, offline-friendly placeholder. Never let a
+    // delayed cache read replace the authoritative chat state from Supabase.
+    if (
+      !cachedSessions ||
+      latestSessionUserIdRef.current !== userId ||
+      hasSuccessfulServerHydrationRef.current
+    ) return;
     setChatSessions(cachedSessions);
   };
 
@@ -2008,8 +2014,15 @@ const App: React.FC = () => {
       const dbEvents = eventsRes?.data;
       const dbUserData = isMissingUserDataResourceError(userDataRes?.error) ? null : userDataRes?.data;
       const isChatTableUnavailable = (errorCode?: string) => errorCode === '42P01' || errorCode === '42703';
-      const dbChatSessions = isChatTableUnavailable(chatSessionsRes?.error?.code) ? [] : chatSessionsRes?.data;
-      const dbChatMessages = isChatTableUnavailable(chatMessagesRes?.error?.code) ? [] : chatMessagesRes?.data;
+      const chatSessionsTableUnavailable = isChatTableUnavailable(chatSessionsRes?.error?.code);
+      const chatMessagesTableUnavailable = isChatTableUnavailable(chatMessagesRes?.error?.code);
+      const canHydrateChatFromTables =
+        !chatSessionsTableUnavailable &&
+        !chatMessagesTableUnavailable &&
+        !chatSessionsRes?.error &&
+        !chatMessagesRes?.error;
+      const dbChatSessions = chatSessionsTableUnavailable ? [] : chatSessionsRes?.data;
+      const dbChatMessages = chatMessagesTableUnavailable ? [] : chatMessagesRes?.data;
 
       if (!skipFetchedTodoStateApply && dbTodoTabs && dbTodoTabs.length > 0) {
         setTodoTabs(dbTodoTabs.map((tab: any) => ({
@@ -2132,7 +2145,9 @@ const App: React.FC = () => {
         if (dbUserData.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...dbUserData.settings }));
       }
 
-      if (chatSessionsFromTables.length > 0) {
+      if (canHydrateChatFromTables) {
+        // An empty server result is authoritative too. Without this, an old
+        // IndexedDB snapshot can survive a refresh and later overwrite sync.
         setChatSessions(chatSessionsFromTables);
       } else if (Array.isArray(dbUserData?.chat_sessions)) {
         // Backward compatibility: read legacy blob once, then migrate to normalized table on next sync.
