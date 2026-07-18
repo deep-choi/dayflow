@@ -1124,7 +1124,7 @@ export const generateChatResponse = async (
   const toneInstruction = agentTone ? `- 사용자가 설정한 페르소나 말투: ${agentTone}.` : "";
   const noMetaInstruction = "내부 분석, 시스템 지침, 초안, `Wait the user`, `Text:` 같은 메타 문장을 출력하지 마세요.";
   const completionInstruction = "완성된 한국어 문장으로 끝내고, 토큰이 부족하면 새 항목을 시작하지 말고 현재 문장을 마무리하세요.";
-  const lineBreakInstruction = "내용이 바뀌거나 읽기 쉬운 문단 구분이 필요할 때만 자연스럽게 줄바꿈을 사용하세요. 문장마다 억지로 줄바꿈하지 마세요.";
+  const lineBreakInstruction = "일반 대화와 롤플레이 답변은 한 문단을 1~2문장으로 유지하세요. 대사 뒤에 감정·행동·화제의 변화가 있으면 빈 줄로 문단을 나누고, 긴 답변은 최대 2문장마다 자연스럽게 끊으세요. 문장마다 억지로 줄바꿈하거나 모든 문장을 한 문단에 몰아넣지는 마세요.";
   const actionInstruction = shouldIncludePersonalDataContext(latestUserText)
     ? buildChatActionInstruction(today, currentTime)
     : "";
@@ -1425,7 +1425,7 @@ export const generateGroupChatResponses = async (
   const punctuationInstruction = "JSON 문법은 지키고, reply에는 자연스러운 한국어 띄어쓰기와 문장부호를 사용하세요.";
   const noMetaInstruction = "reply 텍스트에는 내부 규칙, 시스템 지침, 분석 과정, 초안 문구, `Drafting final response`, `Okay no commas`, `Wait the user`, `Text:` 같은 메타 문장을 절대 넣지 마세요.";
   const completionInstruction = "reply는 반드시 완성된 한국어 문장으로 끝내세요. 토큰이 부족할 것 같으면 새 항목을 시작하지 말고 현재 문장을 자연스럽게 마무리하세요.";
-  const lineBreakInstruction = "내용이 바뀌거나 읽기 쉬운 문단 구분이 필요할 때만 자연스럽게 줄바꿈을 사용하세요. 문장마다 억지로 줄바꿈하지 마세요.";
+  const lineBreakInstruction = "일반 대화와 롤플레이 답변은 한 문단을 1~2문장으로 유지하세요. 대사 뒤에 감정·행동·화제의 변화가 있으면 빈 줄로 문단을 나누고, 긴 답변은 최대 2문장마다 자연스럽게 끊으세요. 문장마다 억지로 줄바꿈하거나 모든 문장을 한 문단에 몰아넣지는 마세요.";
   const preferredUserName = userName?.trim() || "";
   const requestedListCount = getRequestedListCount(latestUserText);
   const listInstruction = requestedListCount
