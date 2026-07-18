@@ -201,11 +201,18 @@ const retryTodoListUpsertWithFallback = async (
     return { error: finalResult.error, rows: payloadRows };
 };
 
+const normalizeLegacyGreetingMessageId = (messageId: string, sessionId: string): string => {
+    if (messageId === 'welcome') return `welcome-${sessionId}`;
+    if (messageId === 'onboarding-1') return `onboarding-${sessionId}`;
+    return messageId;
+};
+
 const toPersistedChatSession = (session: ChatSession): ChatSession => ({
     ...session,
     title: (session.title || '새 대화').slice(0, 240),
     messages: (Array.isArray(session.messages) ? session.messages : []).map((message) => ({
         ...message,
+        id: normalizeLegacyGreetingMessageId(message.id, session.id),
         content: (message.content || '').slice(0, 12000),
         imageUrl: sanitizeStoredMediaUrl(message.imageUrl) || undefined,
         videoUrl: sanitizeStoredMediaUrl(message.videoUrl) || undefined,
@@ -221,6 +228,21 @@ export const setOnSyncError = (callback: (err: any) => void) => {
     onSyncErrorCallback = callback;
 };
 
+const describeSyncError = (error: any): string => {
+    if (!error || typeof error !== 'object') return String(error || 'Unknown sync error');
+    try {
+        return JSON.stringify({
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            status: error.status,
+        });
+    } catch {
+        return String(error?.message || error);
+    }
+};
+
 const debouncedSync = (key: string, fn: () => Promise<void>, delayMs = 350) => {
     const existing = pendingTimers.get(key);
     if (existing) clearTimeout(existing);
@@ -229,7 +251,7 @@ const debouncedSync = (key: string, fn: () => Promise<void>, delayMs = 350) => {
         try {
             await fn();
         } catch (err) {
-            console.error(`[Sync] ${key} failed:`, err);
+            console.error(`[Sync] ${key} failed: ${describeSyncError(err)}`);
             onSyncErrorCallback(err);
         }
     }, delayMs));

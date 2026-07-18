@@ -64,6 +64,8 @@ interface ChatViewProps {
 
 const CHAT_HISTORY_LIMIT = 12;
 const MAX_GROUP_AGENTS = 4;
+const SHARED_SCENE_MESSAGE_LIMIT = 16;
+const SHARED_SCENE_CHAR_LIMIT = 2400;
 const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
     [/페르소나 설정에서\s*Gemini\/xAI를\s*지정해 주세요/g, '페르소나 설정에서 모델을 지정해 주세요'],
     [/페르소나 설정에서\s*Gemini를\s*연결해 주세요/g, '페르소나 설정에서 채팅용 모델을 지정해 주세요'],
@@ -77,6 +79,16 @@ const RESPONSE_LENGTH_OPTIONS = [
     { value: 'medium', label: '보통' },
     { value: 'long', label: '길게' },
 ] as const;
+
+const isInitialGreetingMessage = (message?: ChatMessage): boolean => {
+    if (!message || message.role !== 'assistant') return false;
+    return (
+        message.id === 'welcome' ||
+        message.id === 'onboarding-1' ||
+        message.id.startsWith('welcome-') ||
+        message.id.startsWith('onboarding-')
+    );
+};
 
 type UsageContext = {
     agentId?: string;
@@ -387,7 +399,7 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (onboardingStep === 0 && !userName) {
             // First time user - start onboarding
             return {
-                id: 'onboarding-1',
+                id: `onboarding-${crypto.randomUUID()}`,
                 role: 'assistant',
                 content: `${getTimeBasedGreeting()}\n\n처음 오셨네요! 저는 ${agent?.name || 'Dayflow'}예요. ${agent?.emoji || '💬'}\n당신의 일상을 함께 정리하고 더 나은 하루를 만들어 드릴게요.\n\n먼저, 뭐라고 불러드리면 될까요?`,
                 timestamp: new Date().toISOString(),
@@ -398,7 +410,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
         // Returning user - personalized greeting
         return {
-            id: 'welcome',
+            id: `welcome-${crypto.randomUUID()}`,
             role: 'assistant',
             content: `사용자님! 무엇을 도와드릴까요? ❤️\n\n오늘 하고 싶은 이야기나 정리하고 싶은 생각이 있다면 편하게 말씀해주세요.\n제가 흐름을 잡고 필요한 건 조용히 기억해둘게요.`,
             timestamp: new Date().toISOString(),
@@ -615,10 +627,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                 
                 if (isNewSession) {
                     setMessages(prev => {
-                        const isAlreadyWelcome =
-                            prev.length === 1 &&
-                            prev[0].role === 'assistant' &&
-                            (prev[0].id === 'welcome' || prev[0].id === 'onboarding-1');
+                        const isAlreadyWelcome = prev.length === 1 && isInitialGreetingMessage(prev[0]);
                         return isAlreadyWelcome ? prev : [getWelcomeMessage()];
                     });
                 }
@@ -627,10 +636,7 @@ const ChatView: React.FC<ChatViewProps> = ({
             hydratingSessionIdRef.current = null;
             // No session - reset to welcome
             setMessages(prev => {
-                const isAlreadyWelcome =
-                    prev.length === 1 &&
-                    prev[0].role === 'assistant' &&
-                    (prev[0].id === 'welcome' || prev[0].id === 'onboarding-1');
+                const isAlreadyWelcome = prev.length === 1 && isInitialGreetingMessage(prev[0]);
                 return isAlreadyWelcome ? prev : [getWelcomeMessage()];
             });
         }
@@ -948,6 +954,23 @@ const ChatView: React.FC<ChatViewProps> = ({
         return history.slice(-CHAT_HISTORY_LIMIT);
     };
 
+    const buildSharedSceneContext = (allMessages: ChatMessage[]): string => {
+        const lines = allMessages
+            .slice(-SHARED_SCENE_MESSAGE_LIMIT)
+            .map((message) => {
+                const content = (message.content || '').trim();
+                if (!content) return '';
+                if (message.role === 'user') return `${userName || '사용자'}: ${content}`;
+                const speaker = availableAgents.find((candidate) => candidate.id === message.agentId)?.name || '페르소나';
+                return `${speaker}: ${content}`;
+            })
+            .filter(Boolean);
+        const joined = lines.join('\n');
+        return joined.length > SHARED_SCENE_CHAR_LIMIT
+            ? joined.slice(-SHARED_SCENE_CHAR_LIMIT)
+            : joined;
+    };
+
     const handleSend = async (text?: string) => {
         const messageText = text || inputValue;
         if (!messageText.trim() || isProcessing) return;
@@ -1025,11 +1048,16 @@ const ChatView: React.FC<ChatViewProps> = ({
                             .filter((name) => Boolean(name && name.trim()))
                         : [];
 
-                    const agentResults = await Promise.all(respondingAgents.map(async (currentAgent, index) => {
+                    const agentResults: Array<{ message: ChatMessage; config: ReturnType<typeof resolveAgentConfig> }> = [];
+                    const peerTurnReplies: Array<{ name: string; content: string }> = [];
+                    const sharedSceneContext = buildSharedSceneContext(messageTimeline);
+
+                    for (let index = 0; index < respondingAgents.length; index += 1) {
+                        const currentAgent = respondingAgents[index];
                         const currentMemory =
                             personaMemoryContextByAgent?.[currentAgent.id]
                             || (currentAgent.id === primaryAgent?.id ? personaMemoryContext : '');
-                        const agentHistory = buildHistoryForAgent(messageTimeline, currentAgent);
+                        const agentHistory = buildHistoryForAgent(messageTimeline, currentAgent, { includePeerPersonaContext: true });
                         const otherPersonaNames = activeAgents
                             .filter((activeAgent) => activeAgent.id !== currentAgent.id)
                             .map((activeAgent) => activeAgent.name)
@@ -1047,7 +1075,8 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 timestamp: new Date().toISOString(),
                                 agentId: currentAgent.id,
                             };
-                            return { message: warningMessage, config: agentConfig };
+                            agentResults.push({ message: warningMessage, config: agentConfig });
+                            continue;
                         }
 
                         const result = await generateChatResponse(
@@ -1064,6 +1093,8 @@ const ChatView: React.FC<ChatViewProps> = ({
                             {
                                 otherPersonaNames,
                                 addressedPersonaNames,
+                                peerTurnReplies,
+                                sharedSceneContext,
                                 isNewSession,
                                 sessionStartedAt,
                                 sessionTimePeriod,
@@ -1096,8 +1127,10 @@ const ChatView: React.FC<ChatViewProps> = ({
                             action: chatAction || undefined,
                         };
 
-                        return { message: withConfigMeta(assistantMessage, agentConfig), config: agentConfig };
-                    }));
+                        const finalizedMessage = withConfigMeta(assistantMessage, agentConfig);
+                        agentResults.push({ message: finalizedMessage, config: agentConfig });
+                        peerTurnReplies.push({ name: currentAgent.name, content: finalizedMessage.content });
+                    }
 
                     setMessages((prev) => [...prev, ...agentResults.map((result) => result.message)]);
                 } else {

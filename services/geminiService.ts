@@ -18,6 +18,7 @@ import { callOllamaChatAPI } from "./ollamaService";
 const CHAT_HISTORY_LIMIT = 8;
 const MODEL_MESSAGE_CHAR_LIMIT = 420;
 const PERSONA_MEMORY_CHAR_LIMIT = 1000;
+const SHARED_SCENE_CONTEXT_CHAR_LIMIT = 2400;
 const PEER_REPLY_CHAR_LIMIT = 180;
 const SELF_REPLY_CHAR_LIMIT = 120;
 const CHAT_MAX_OUTPUT_TOKENS = 8192;
@@ -1070,6 +1071,7 @@ export interface ChatGenerationOptions {
   addressedPersonaNames?: string[];
   peerTurnReplies?: Array<{ name: string; content: string }>;
   recentSelfReplies?: string[];
+  sharedSceneContext?: string;
   isNewSession?: boolean;
   sessionStartedAt?: string;
   sessionTimePeriod?: string;
@@ -1099,6 +1101,7 @@ export const generateChatResponse = async (
     addressedPersonaNames = [],
     peerTurnReplies = [],
     recentSelfReplies = [],
+    sharedSceneContext = "",
     isNewSession = false,
     sessionStartedAt = "",
     sessionTimePeriod = "",
@@ -1147,6 +1150,9 @@ export const generateChatResponse = async (
   const memoryInstruction = personaMemoryContext
     ? `[이전 대화에서 누적된 장기 기억]\n${truncateForModel(personaMemoryContext, PERSONA_MEMORY_CHAR_LIMIT)}\n[Standing Instructions] 항목은 말투와 행동 규칙이므로 현재 답변에 우선 적용하세요.\n\n`
     : "";
+  const sharedSceneInstruction = sharedSceneContext
+    ? `[그룹 공유 장면 기억]\n${truncateForModel(sharedSceneContext, SHARED_SCENE_CONTEXT_CHAR_LIMIT)}\n이 내용은 같은 채팅방에서 모든 페르소나가 함께 겪은 최근 상황입니다. 다른 페르소나의 행동과 발화를 이미 알고 있는 전제로 자연스럽게 이어가세요.\n\n`
+    : "";
   const otherPersonaInstruction = otherPersonaNames.length > 0
     ? `현재 이 채팅에 함께 있는 다른 페르소나 이름: ${otherPersonaNames.join(", ")}.\n그 이름을 앞에 붙인 대사 형식으로 출력하지 마세요.`
     : "";
@@ -1176,6 +1182,7 @@ export const generateChatResponse = async (
 
   const geminiSystemInstruction = `
 ${memoryInstruction}
+${sharedSceneInstruction}
 ${personaIdentityInstruction}
 
 대화 상황:
