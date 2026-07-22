@@ -531,10 +531,24 @@ const normalizeAgentAvatarForSave = async (agent: AIAgent, previousAvatar?: stri
 };
 
 const DEFAULT_TAGS: CalendarTag[] = [
-  { id: 'tag_1', name: '일정', color: '#4c2889' },
-  { id: 'tag_2', name: '할 일', color: '#DEB13B' },
-  { id: 'tag_3', name: '생일', color: '#35B37E' },
+  { id: 'tag_1', name: '일정', color: '#2563EB' },
+  { id: 'tag_2', name: '할 일', color: '#F59E0B' },
+  { id: 'tag_3', name: '생일', color: '#10B981' },
 ];
+
+const LEGACY_DEFAULT_TAG_COLORS: Record<string, string> = {
+  tag_1: '#4c2889',
+  tag_2: '#DEB13B',
+  tag_3: '#35B37E',
+};
+
+const normalizeDefaultCalendarTagColors = (tags: CalendarTag[]): CalendarTag[] => tags.map(tag => {
+  const legacyColor = LEGACY_DEFAULT_TAG_COLORS[tag.id];
+  const nextDefault = DEFAULT_TAGS.find(defaultTag => defaultTag.id === tag.id);
+  return legacyColor && nextDefault && tag.color.toLowerCase() === legacyColor.toLowerCase()
+    ? { ...tag, color: nextDefault.color }
+    : tag;
+});
 
 const DEFAULT_TODO_TABS: TodoTab[] = [
   { id: 'tab_todo', name: '할 일', color: '#1a73e8', order: 0 },
@@ -1560,7 +1574,7 @@ const App: React.FC = () => {
     );
     setActivityLog(cachedActivityLog);
     setSettings({ ...DEFAULT_SETTINGS, ...cachedSettings });
-    setCalendarTags(cachedTags.length > 0 ? cachedTags : DEFAULT_TAGS);
+    setCalendarTags(cachedTags.length > 0 ? normalizeDefaultCalendarTagColors(cachedTags) : DEFAULT_TAGS);
     setJournalCategories(cachedCategories);
     setSelectedAiAgentId(prev => normalizedAgents.some(agent => agent.id === prev) ? prev : (normalizedAgents[0]?.id || 'ARIA'));
   };
@@ -2167,7 +2181,9 @@ const App: React.FC = () => {
 
       if (dbUserData) {
         if (Array.isArray(dbUserData.activity_log)) setActivityLog(dbUserData.activity_log);
-        if (Array.isArray(dbUserData.calendar_tags) && dbUserData.calendar_tags.length > 0) setCalendarTags(dbUserData.calendar_tags);
+        if (Array.isArray(dbUserData.calendar_tags) && dbUserData.calendar_tags.length > 0) {
+          setCalendarTags(normalizeDefaultCalendarTagColors(dbUserData.calendar_tags));
+        }
         if (dbUserData.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...dbUserData.settings }));
       }
 
