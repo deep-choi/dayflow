@@ -1,11 +1,23 @@
 import React, { useMemo, useState } from 'react';
-import { AIAgent, AppSettings, PersonaMemory } from '../types';
-import { Plus, Trash2, Save, RotateCcw, Edit3, X } from 'lucide-react';
+import { AIAgent, ApiConnection, AppSettings, PersonaMemory } from '../types';
+import { Plus, Trash2, Save, RotateCcw, Edit3, X, FlaskConical } from 'lucide-react';
 import { DEFAULT_AGENTS } from '../data/defaultAgents';
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
 import AvatarCropperModal from '../components/AvatarCropperModal';
-import { isChatSupportedProvider } from '../utils/aiConfig';
+import { callGeminiAPI } from '../utils/gemini';
+import { testXaiConnection } from '../services/xaiService';
+import { testOpenAIConnection } from '../services/openaiService';
+import { testAnthropicConnection } from '../services/anthropicService';
+import { testOllamaConnection } from '../services/ollamaService';
+import {
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_OLLAMA_BASE_URL,
+  getDefaultModelForProvider,
+  getModelOptionsForProvider,
+  isChatSupportedProvider,
+  normalizeProviderModelName,
+} from '../utils/aiConfig';
 
 interface PersonaSettingsViewProps {
   agents: AIAgent[];
@@ -19,6 +31,33 @@ interface PersonaSettingsViewProps {
 }
 
 type PersonaEditorTab = 'profile' | 'api';
+type ApiSelection = '__default__' | '__new__' | string;
+
+const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama'];
+
+const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
+  if (provider === 'xai') return 'xAI';
+  if (provider === 'openai') return 'OpenAI';
+  if (provider === 'anthropic') return 'Anthropic';
+  if (provider === 'gemini') return 'Gemini';
+  if (provider === 'ollama') return 'Ollama';
+  return 'Custom';
+};
+
+const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
+  if (provider === 'xai') return 'xai-...';
+  if (provider === 'openai') return 'sk-...';
+  if (provider === 'anthropic') return 'sk-ant-...';
+  if (provider === 'gemini') return 'AIza...';
+  return 'API Key';
+};
+
+const createEmptyConnectionDraft = (): Partial<ApiConnection> => ({
+  provider: 'gemini',
+  modelName: DEFAULT_GEMINI_MODEL,
+  apiKey: '',
+  isActive: true,
+});
 
 const RESPONSE_LENGTH_OPTIONS = [
   { value: 'short', label: '짧게' },
@@ -56,7 +95,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   agents,
   onUpdateAgents,
   settings,
-  onUpdateSettings: _onUpdateSettings,
+  onUpdateSettings,
   personaMemories,
   onAddPersonaMemory,
   onForgetPersonaMemory,
@@ -70,9 +109,18 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   const [memoryTypes, setMemoryTypes] = useState<Record<string, PersonaMemory['type']>>({});
   const [memoryPanelAgentId, setMemoryPanelAgentId] = useState<string | null>(null);
   const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
+  const [apiSelection, setApiSelection] = useState<ApiSelection>('__default__');
+  const [apiConnectionDraft, setApiConnectionDraft] = useState<Partial<ApiConnection>>(createEmptyConnectionDraft);
+  const [isApiConnectionDirty, setIsApiConnectionDirty] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
   const supportedChatConnections = (settings.apiConnections || []).filter(
     (connection) => isChatSupportedProvider(connection.provider)
   );
+  const activeConnection = supportedChatConnections.find(connection => connection.id === settings.activeConnectionId)
+    || supportedChatConnections[0];
+  const apiModelOptions = apiConnectionDraft.provider
+    ? getModelOptionsForProvider(apiConnectionDraft.provider)
+    : [];
 
   const editingTarget = useMemo(
     () => agents.find((agent) => agent.id === editingId) || null,
@@ -89,10 +137,15 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
     [personaMemories, memoryPanelAgentId]
   );
   const openEditor = (agent: AIAgent) => {
+    const selectedConnection = supportedChatConnections.find(connection => connection.id === agent.connectionId);
+    const initialConnection = selectedConnection || activeConnection;
     setIsAvatarCropOpen(false);
     setEditorTab('profile');
     setEditingId(agent.id);
     setDraft({ ...agent });
+    setApiSelection(selectedConnection ? selectedConnection.id : '__default__');
+    setApiConnectionDraft(initialConnection ? { ...initialConnection } : createEmptyConnectionDraft());
+    setIsApiConnectionDirty(false);
   };
 
   const closeEditor = () => {
@@ -100,18 +153,127 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
     setIsAvatarCropOpen(false);
     setEditingId(null);
     setDraft(null);
+    setIsApiConnectionDirty(false);
+  };
+
+  const updateApiDraft = (updates: Partial<ApiConnection>) => {
+    setApiConnectionDraft(prev => ({ ...prev, ...updates }));
+    setIsApiConnectionDirty(true);
+  };
+
+  const handleApiSelectionChange = (selection: ApiSelection) => {
+    setApiSelection(selection);
+    if (selection === '__new__') {
+      setApiConnectionDraft(createEmptyConnectionDraft());
+      setIsApiConnectionDirty(true);
+      return;
+    }
+
+    const connection = selection === '__default__'
+      ? activeConnection
+      : supportedChatConnections.find(candidate => candidate.id === selection);
+    setApiConnectionDraft(connection ? { ...connection } : createEmptyConnectionDraft());
+    setIsApiConnectionDirty(false);
+  };
+
+  const validateApiDraft = (): string | null => {
+    const provider = apiConnectionDraft.provider || 'gemini';
+    if (!(apiConnectionDraft.modelName || '').trim()) return '사용할 모델을 선택하거나 입력해 주세요.';
+    if (provider === 'ollama') {
+      if (!(apiConnectionDraft.baseUrl || '').trim()) return 'Ollama 서버 주소를 입력해 주세요.';
+      return null;
+    }
+    if (!(apiConnectionDraft.apiKey || '').trim()) return 'API Key를 입력해 주세요.';
+    return null;
+  };
+
+  const testApiDraft = async () => {
+    const validationError = validateApiDraft();
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
+
+    const provider = apiConnectionDraft.provider || 'gemini';
+    const modelName = normalizeProviderModelName(provider, apiConnectionDraft.modelName || '');
+    const apiKey = (apiConnectionDraft.apiKey || '').trim();
+    setIsTestingConnection(true);
+    try {
+      if (provider === 'ollama') {
+        await testOllamaConnection(apiConnectionDraft.baseUrl, modelName);
+      } else if (provider === 'xai') {
+        await testXaiConnection(apiKey, modelName);
+      } else if (provider === 'openai') {
+        await testOpenAIConnection(apiKey, modelName);
+      } else if (provider === 'anthropic') {
+        await testAnthropicConnection(apiKey, modelName);
+      } else {
+        await callGeminiAPI(apiKey, '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.', undefined, modelName);
+      }
+      alert(`연결 성공: ${modelName}`);
+    } catch (error: any) {
+      alert(`연결 실패: ${error?.message || '알 수 없는 오류'}`);
+    } finally {
+      setIsTestingConnection(false);
+    }
   };
 
   const saveAgent = async () => {
     if (!editingId || !draft) return;
-    if (!draft.connectionId) {
-      alert('이 페르소나에 사용할 모델을 지정해 주세요.');
-      return;
+
+    let nextConnectionId = apiSelection === '__default__' ? undefined : draft.connectionId;
+    let connectionToPersist: ApiConnection | null = null;
+    if (isApiConnectionDirty || apiSelection === '__new__') {
+      const validationError = validateApiDraft();
+      if (validationError) {
+        setEditorTab('api');
+        alert(validationError);
+        return;
+      }
+
+      const provider = apiConnectionDraft.provider || 'gemini';
+      const connectionId = apiSelection === '__new__'
+        ? crypto.randomUUID()
+        : (apiConnectionDraft.id || crypto.randomUUID());
+      connectionToPersist = {
+        id: connectionId,
+        provider,
+        modelName: normalizeProviderModelName(provider, apiConnectionDraft.modelName || ''),
+        apiKey: provider === 'ollama' ? '' : (apiConnectionDraft.apiKey || '').trim(),
+        baseUrl: provider === 'ollama' ? (apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL).trim() : undefined,
+        isActive: true,
+      };
+      nextConnectionId = apiSelection === '__default__' ? undefined : connectionId;
+    } else if (apiSelection !== '__default__') {
+      nextConnectionId = apiSelection;
     }
 
     setIsSaving(true);
     try {
-      const nextAgentDraft: AIAgent = { ...draft };
+      if (connectionToPersist) {
+        const savedConnection = connectionToPersist;
+        onUpdateSettings(prev => {
+          const currentConnections = prev.apiConnections || [];
+          const exists = currentConnections.some(connection => connection.id === savedConnection.id);
+          const nextConnections = exists
+            ? currentConnections.map(connection => connection.id === savedConnection.id ? savedConnection : connection)
+            : [...currentConnections, savedConnection];
+          const hasCurrentDefault = nextConnections.some(connection => connection.id === prev.activeConnectionId);
+          const activeConnectionId = apiSelection === '__default__' || !hasCurrentDefault
+            ? savedConnection.id
+            : prev.activeConnectionId;
+          const activeGemini = nextConnections.find(connection => connection.id === activeConnectionId && connection.provider === 'gemini')
+            || nextConnections.find(connection => connection.provider === 'gemini');
+          return {
+            ...prev,
+            apiConnections: nextConnections.map(connection => ({ ...connection, isActive: true })),
+            activeConnectionId,
+            geminiApiKey: activeGemini?.apiKey || '',
+          };
+        });
+      }
+
+      const nextAgentDraft: AIAgent = { ...draft, connectionId: nextConnectionId };
       await Promise.resolve(
         onUpdateAgents(
           agents.map((agent) => (agent.id === editingId ? { ...agent, ...nextAgentDraft } : agent))
@@ -472,6 +634,19 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                     </label>
 
                     <label className="block">
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">채팅 응답 길이</span>
+                      <select
+                        value={draft.responseLength || 'medium'}
+                        onChange={(e) => setDraft({ ...draft, responseLength: e.target.value as AIAgent['responseLength'] })}
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                      >
+                        {RESPONSE_LENGTH_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="block">
                       <span className="text-xs font-medium text-[#787774] ml-1 uppercase">성격과 행동 방식</span>
                       <textarea
                         value={draft.personality || ''}
@@ -486,35 +661,115 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                 )}
 
                 {editorTab === 'api' && (
-                  <div className="space-y-4">
+                  <div className="space-y-5">
                     <label className="block">
-                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API 연결</span>
+                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">사용 방식</span>
                       <select
-                        value={draft.connectionId || ''}
-                        onChange={(e) => setDraft({ ...draft, connectionId: e.target.value || undefined })}
+                        value={apiSelection}
+                        onChange={(e) => handleApiSelectionChange(e.target.value)}
                         className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
                       >
-                        <option value="" disabled>연결을 선택하세요</option>
+                        <option value="__default__">
+                          {activeConnection
+                            ? `기본 API 연결 사용 · ${getProviderDisplayName(activeConnection.provider)} · ${activeConnection.modelName}`
+                            : '새 기본 API 연결 만들기'}
+                        </option>
                         {supportedChatConnections.map(conn => (
                           <option key={conn.id} value={conn.id}>
-                            {conn.provider.toUpperCase()} · {conn.modelName}
+                            이 페르소나만 사용 · {getProviderDisplayName(conn.provider)} · {conn.modelName}
                           </option>
                         ))}
+                        <option value="__new__">이 페르소나만 새 연결 추가</option>
                       </select>
                     </label>
 
-                    <label className="block">
-                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">채팅 응답 길이</span>
-                      <select
-                        value={draft.responseLength || 'medium'}
-                        onChange={(e) => setDraft({ ...draft, responseLength: e.target.value as AIAgent['responseLength'] })}
-                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
-                      >
-                        {RESPONSE_LENGTH_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="rounded-xl border border-[#e9e9e8] bg-[#fbfbfa] p-4 space-y-4">
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <label className="block">
+                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API 공급자</span>
+                          <select
+                            value={apiConnectionDraft.provider || 'gemini'}
+                            onChange={(e) => {
+                              const provider = e.target.value as ApiConnection['provider'];
+                              updateApiDraft({
+                                provider,
+                                modelName: getDefaultModelForProvider(provider),
+                                apiKey: '',
+                                baseUrl: provider === 'ollama' ? (apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL) : undefined,
+                              });
+                            }}
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                          >
+                            {CHAT_PROVIDERS.map(provider => (
+                              <option key={provider} value={provider}>{getProviderDisplayName(provider)}</option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="block">
+                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">모델</span>
+                          {apiModelOptions.length > 0 ? (
+                            <select
+                              value={apiConnectionDraft.modelName || getDefaultModelForProvider(apiConnectionDraft.provider || 'gemini')}
+                              onChange={(e) => updateApiDraft({ modelName: e.target.value })}
+                              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                            >
+                              {apiModelOptions.map(model => (
+                                <option key={model.id} value={model.id}>{model.label}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              value={apiConnectionDraft.modelName || ''}
+                              onChange={(e) => updateApiDraft({ modelName: e.target.value })}
+                              placeholder={apiConnectionDraft.provider === 'ollama' ? '예: llama3.2' : '모델 이름'}
+                              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                            />
+                          )}
+                        </label>
+                      </div>
+
+                      {apiConnectionDraft.provider === 'ollama' ? (
+                        <label className="block">
+                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">Ollama 서버 주소</span>
+                          <input
+                            value={apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL}
+                            onChange={(e) => updateApiDraft({ baseUrl: e.target.value })}
+                            placeholder={DEFAULT_OLLAMA_BASE_URL}
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
+                          />
+                        </label>
+                      ) : (
+                        <label className="block">
+                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API Key</span>
+                          <input
+                            type="password"
+                            value={apiConnectionDraft.apiKey || ''}
+                            onChange={(e) => updateApiDraft({ apiKey: e.target.value })}
+                            placeholder={getApiKeyPlaceholder(apiConnectionDraft.provider)}
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
+                          />
+                        </label>
+                      )}
+
+                      <div className="flex items-center justify-between gap-3 border-t border-[#e9e9e8] pt-3">
+                        <p className="text-[12px] leading-5 text-[#9b9a97]">
+                          {apiSelection === '__default__'
+                            ? '이 연결은 모든 페르소나의 기본값으로 사용됩니다.'
+                            : '이 연결은 현재 페르소나에만 지정됩니다.'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void testApiDraft()}
+                          disabled={isTestingConnection}
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#dcdcd9] bg-white px-3 py-2 text-sm text-[#37352f] transition-colors hover:bg-[#f3f3f3] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <FlaskConical size={14} />
+                          {isTestingConnection ? '연결 중...' : '연결 테스트'}
+                        </button>
+                      </div>
+                    </div>
+
                   </div>
                 )}
               </div>

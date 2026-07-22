@@ -11,6 +11,11 @@ import {
 } from "../types";
 import { DEFAULT_GEMINI_MODEL, normalizeGeminiModelName } from "../utils/aiConfig";
 import { callAnthropicChatAPI, callAnthropicChatJSON } from "./anthropicService";
+import {
+  DAYFLOW_TRIAL_API_KEY,
+  generateTrialGeminiContent,
+  isTrialExhaustedError,
+} from "./trialChatService";
 import { callOpenAIChatAPI, callOpenAIChatJSON } from "./openaiService";
 import { callXaiChatAPI, callXaiChatJSON } from "./xaiService";
 import { callOllamaChatAPI } from "./ollamaService";
@@ -1077,6 +1082,7 @@ export interface ChatGenerationOptions {
   sessionTimePeriod?: string;
   sessionTimezone?: string;
   ollamaBaseUrl?: string;
+  trialTurnId?: string;
 }
 
 const sanitizeAction = (): ChatActionResult["action"] => ({ type: "none" });
@@ -1313,9 +1319,28 @@ ${actionInstruction}
     }
 
     // --- Gemini branch ---
-    const ai = new GoogleGenAI({ apiKey });
+    const isTrialChat = apiKey === DAYFLOW_TRIAL_API_KEY;
+    const ai = isTrialChat ? null : new GoogleGenAI({ apiKey });
     const normalizedModelName = normalizeGeminiModelName(modelName);
-    const response = await generateGeminiContentWithRetry(ai, {
+    const generateGeminiChatContent = async (
+      request: Parameters<GoogleGenAI["models"]["generateContent"]>[0],
+    ) => {
+      if (!isTrialChat) {
+        return generateGeminiContentWithRetry(ai as GoogleGenAI, request);
+      }
+      if (!options.trialTurnId) {
+        throw new Error('Trial turn ID is required.');
+      }
+      return generateTrialGeminiContent({
+        contents: request.contents,
+        systemInstruction: request.config?.systemInstruction,
+        safetySettings: request.config?.safetySettings,
+        temperature: request.config?.temperature,
+        maxOutputTokens: request.config?.maxOutputTokens,
+        trialTurnId: options.trialTurnId,
+      });
+    };
+    const response = await generateGeminiChatContent({
       model: normalizedModelName,
       contents: validContents,
       config: {
@@ -1331,7 +1356,7 @@ ${actionInstruction}
     let outputLimitReached = endedByOutputLimit(firstResult.finishReason);
 
     if (text && shouldRepairStructuredReply(latestUserText, text)) {
-      const repair = await generateGeminiContentWithRetry(ai, {
+      const repair = await generateGeminiChatContent({
         model: normalizedModelName,
         contents: [
           ...validContents,
@@ -1366,7 +1391,7 @@ ${actionInstruction}
       const textBeforeContinuation = stripDanglingReplyTail(text) || text;
       let continuation;
       try {
-        continuation = await generateGeminiContentWithRetry(ai, {
+        continuation = await generateGeminiChatContent({
           model: normalizedModelName,
           contents: [
             ...validContents,
@@ -1403,6 +1428,7 @@ ${actionInstruction}
 
     return finalizeChatResult(text, agentName, otherPersonaNames);
   } catch (error) {
+    if (isTrialExhaustedError(error)) throw error;
     console.error("Chat generation failed:", error);
     return { reply: "죄송해요 잠시 후 다시 시도해 주세요.", action: { type: "none" } };
   }

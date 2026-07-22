@@ -1,18 +1,7 @@
 import { CommunityPost, AIAgent, ApiUsageStats, TriggerContext } from '../types';
 import { callGeminiAPI, createAgentPrompt } from './gemini';
 import { DEFAULT_GEMINI_MODEL } from './aiConfig';
-
-const DEFAULT_AGENTS: AIAgent[] = [
-  {
-    id: 'ARIA',
-    name: 'Aria',
-    emoji: ':)',
-    role: 'Life Analyst',
-    personality: 'Data-driven and empathetic assistant focused on practical improvement.',
-    tone: 'Warm, direct, and structured.',
-    color: '#37352f',
-  },
-];
+import { DEFAULT_AGENTS } from '../data/defaultAgents';
 
 const ARIA_RESPONSES: Record<string, string[]> = {
   journal_added: [

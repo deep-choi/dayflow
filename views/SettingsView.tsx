@@ -389,7 +389,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                         <p className="text-base font-medium mt-1 text-[#37352f]">
                             {selectedConnection ? `${selectedConnection.modelName} (${selectedConnection.provider})` : '선택된 모델 없음'}
                         </p>
-                        <p className="text-[13px] leading-5 text-[#9b9a97] mt-2">채팅 페르소나는 각자 지정된 연결을 사용합니다. 페르소나 설정에서 연결을 지정하세요.</p>
+                        <p className="text-[13px] leading-5 text-[#9b9a97] mt-2">모든 페르소나는 이 기본 연결을 함께 사용하며, 필요한 페르소나만 별도 연결로 바꿀 수 있습니다.</p>
                     </div>
 
                     <div className="space-y-4">

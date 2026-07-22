@@ -7,6 +7,7 @@ import {
     TodoList,
     AppSettings,
     AIAgent,
+    ApiConnection,
     ChatMessage,
     ChatSession,
     ChatGeneratedAction,
@@ -15,9 +16,28 @@ import {
 } from '../types';
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
 import { Sparkles, Plus } from '../components/Icons';
-import { ArrowUp, Edit3, Save, X } from 'lucide-react';
-import { getAgentAIConfig, isChatSupportedProvider } from '../utils/aiConfig';
+import { ArrowUp, Edit3, Save, X, FlaskConical } from 'lucide-react';
+import {
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
+    getActiveAIConfig,
+    getAgentAIConfig,
+    getDefaultModelForProvider,
+    getModelOptionsForProvider,
+    isChatSupportedProvider,
+    normalizeProviderModelName,
+} from '../utils/aiConfig';
 import { ApiUsageStats } from '../types';
+import { callGeminiAPI } from '../utils/gemini';
+import { testXaiConnection } from '../services/xaiService';
+import { testOpenAIConnection } from '../services/openaiService';
+import { testAnthropicConnection } from '../services/anthropicService';
+import { testOllamaConnection } from '../services/ollamaService';
+import {
+    DAYFLOW_TRIAL_API_KEY,
+    DAYFLOW_TRIAL_MODEL,
+    isTrialExhaustedError,
+} from '../services/trialChatService';
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
 import AvatarCropperModal from '../components/AvatarCropperModal';
@@ -57,6 +77,8 @@ interface ChatViewProps {
     onUpdateMessages?: (sessionId: string, messages: ChatMessage[]) => void;
     chatSessions?: ChatSession[];
     currentSessionId?: string | null;
+    isGuest?: boolean;
+    onRequestAuth?: () => void;
     personaMemoryContext?: string;
     personaMemoryContextByAgent?: Record<string, string>;
     defaultUserName?: string;
@@ -73,6 +95,33 @@ const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
     [/Gemini API Key/g, 'API Key'],
 ];
 type PersonaEditorTab = 'profile' | 'api';
+type ApiSelection = '__default__' | '__new__' | string;
+
+const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama'];
+
+const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
+    if (provider === 'xai') return 'xAI';
+    if (provider === 'openai') return 'OpenAI';
+    if (provider === 'anthropic') return 'Anthropic';
+    if (provider === 'gemini') return 'Gemini';
+    if (provider === 'ollama') return 'Ollama';
+    return 'Custom';
+};
+
+const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
+    if (provider === 'xai') return 'xai-...';
+    if (provider === 'openai') return 'sk-...';
+    if (provider === 'anthropic') return 'sk-ant-...';
+    if (provider === 'gemini') return 'AIza...';
+    return 'API Key';
+};
+
+const createEmptyConnectionDraft = (): Partial<ApiConnection> => ({
+    provider: 'gemini',
+    modelName: DEFAULT_GEMINI_MODEL,
+    apiKey: '',
+    isActive: true,
+});
 
 const RESPONSE_LENGTH_OPTIONS = [
     { value: 'short', label: '짧게' },
@@ -383,6 +432,8 @@ const ChatView: React.FC<ChatViewProps> = ({
     onSelectAgents,
     onUpdateAgent,
     onUserMessage,
+    isGuest = false,
+    onRequestAuth,
     initialMessages,
     onUpdateMessages,
     chatSessions = [],
@@ -412,10 +463,10 @@ const ChatView: React.FC<ChatViewProps> = ({
         return {
             id: `welcome-${crypto.randomUUID()}`,
             role: 'assistant',
-            content: `사용자님! 무엇을 도와드릴까요? ❤️\n\n오늘 하고 싶은 이야기나 정리하고 싶은 생각이 있다면 편하게 말씀해주세요.\n제가 흐름을 잡고 필요한 건 조용히 기억해둘게요.`,
+            content: `${userName ? `${userName}님, ` : ''}무엇부터 함께 해볼까요? ❤️\n\n일정과 할 일을 정리하거나 머릿속 생각을 편하게 나눠주세요.\n필요한 내용은 제가 차근차근 정리해드릴게요.`,
             timestamp: new Date().toISOString(),
             agentId: agent?.id,
-            quickReplies: ['오늘 이야기하기', '기억해둘 내용 말하기', '아이디어 정리하기', '그냥 대화하기'],
+            quickReplies: ['오늘 일정 정리', '할 일 정리', '생각 정리', '편하게 대화'],
         };
     };
 
@@ -431,6 +482,10 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [agentEditorTab, setAgentEditorTab] = useState<PersonaEditorTab>('profile');
     const [isSavingAgent, setIsSavingAgent] = useState(false);
     const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
+    const [agentApiSelection, setAgentApiSelection] = useState<ApiSelection>('__default__');
+    const [agentApiDraft, setAgentApiDraft] = useState<Partial<ApiConnection>>(createEmptyConnectionDraft);
+    const [isAgentApiDirty, setIsAgentApiDirty] = useState(false);
+    const [isTestingAgentApi, setIsTestingAgentApi] = useState(false);
     const [executingActionMessageId, setExecutingActionMessageId] = useState<string | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const pendingSessionHydrationRef = useRef(false);
@@ -458,6 +513,11 @@ const ChatView: React.FC<ChatViewProps> = ({
     const supportedChatConnections = (settings.apiConnections || []).filter(
         (connection) => isChatSupportedProvider(connection.provider)
     );
+    const activeConnection = supportedChatConnections.find(connection => connection.id === settings.activeConnectionId)
+        || supportedChatConnections[0];
+    const agentApiModelOptions = agentApiDraft.provider
+        ? getModelOptionsForProvider(agentApiDraft.provider)
+        : [];
     const updateApiUsage = (stats?: Partial<ApiUsageStats>, context?: UsageContext) => {
         if (!stats || !onUpdateSettings) return;
 
@@ -501,10 +561,19 @@ const ChatView: React.FC<ChatViewProps> = ({
 
     const openAgentEditor = (target?: AIAgent) => {
         if (!target || !onUpdateAgent) return;
+        if (isGuest) {
+            onRequestAuth?.();
+            return;
+        }
+        const selectedConnection = supportedChatConnections.find(connection => connection.id === target.connectionId);
+        const initialConnection = selectedConnection || activeConnection;
         setIsAvatarCropOpen(false);
         setAgentEditorTab('profile');
         setEditingAgentId(target.id);
         setAgentDraft({ ...target });
+        setAgentApiSelection(selectedConnection ? selectedConnection.id : '__default__');
+        setAgentApiDraft(initialConnection ? { ...initialConnection } : createEmptyConnectionDraft());
+        setIsAgentApiDirty(false);
     };
 
     const closeAgentEditor = (force = false) => {
@@ -512,6 +581,67 @@ const ChatView: React.FC<ChatViewProps> = ({
         setIsAvatarCropOpen(false);
         setEditingAgentId(null);
         setAgentDraft(null);
+        setIsAgentApiDirty(false);
+    };
+
+    const updateAgentApiDraft = (updates: Partial<ApiConnection>) => {
+        setAgentApiDraft(prev => ({ ...prev, ...updates }));
+        setIsAgentApiDirty(true);
+    };
+
+    const handleAgentApiSelectionChange = (selection: ApiSelection) => {
+        setAgentApiSelection(selection);
+        if (selection === '__new__') {
+            setAgentApiDraft(createEmptyConnectionDraft());
+            setIsAgentApiDirty(true);
+            return;
+        }
+        const connection = selection === '__default__'
+            ? activeConnection
+            : supportedChatConnections.find(candidate => candidate.id === selection);
+        setAgentApiDraft(connection ? { ...connection } : createEmptyConnectionDraft());
+        setIsAgentApiDirty(false);
+    };
+
+    const validateAgentApiDraft = (): string | null => {
+        const provider = agentApiDraft.provider || 'gemini';
+        if (!(agentApiDraft.modelName || '').trim()) return '사용할 모델을 선택하거나 입력해 주세요.';
+        if (provider === 'ollama') {
+            if (!(agentApiDraft.baseUrl || '').trim()) return 'Ollama 서버 주소를 입력해 주세요.';
+            return null;
+        }
+        if (!(agentApiDraft.apiKey || '').trim()) return 'API Key를 입력해 주세요.';
+        return null;
+    };
+
+    const testAgentApiDraft = async () => {
+        const validationError = validateAgentApiDraft();
+        if (validationError) {
+            alert(validationError);
+            return;
+        }
+        const provider = agentApiDraft.provider || 'gemini';
+        const modelName = normalizeProviderModelName(provider, agentApiDraft.modelName || '');
+        const apiKey = (agentApiDraft.apiKey || '').trim();
+        setIsTestingAgentApi(true);
+        try {
+            if (provider === 'ollama') {
+                await testOllamaConnection(agentApiDraft.baseUrl, modelName);
+            } else if (provider === 'xai') {
+                await testXaiConnection(apiKey, modelName);
+            } else if (provider === 'openai') {
+                await testOpenAIConnection(apiKey, modelName);
+            } else if (provider === 'anthropic') {
+                await testAnthropicConnection(apiKey, modelName);
+            } else {
+                await callGeminiAPI(apiKey, '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.', undefined, modelName);
+            }
+            alert(`연결 성공: ${modelName}`);
+        } catch (error: any) {
+            alert(`연결 실패: ${error?.message || '알 수 없는 오류'}`);
+        } finally {
+            setIsTestingAgentApi(false);
+        }
     };
 
     const handleAgentImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -539,8 +669,60 @@ const ChatView: React.FC<ChatViewProps> = ({
     const handleSaveAgent = async () => {
         if (!editingAgentId || !agentDraft || !onUpdateAgent) return;
 
+        let nextConnectionId = agentApiSelection === '__default__' ? undefined : agentDraft.connectionId;
+        let connectionToPersist: ApiConnection | null = null;
+        if (isAgentApiDirty || agentApiSelection === '__new__') {
+            const validationError = validateAgentApiDraft();
+            if (validationError) {
+                setAgentEditorTab('api');
+                alert(validationError);
+                return;
+            }
+            if (!onUpdateSettings) {
+                alert('API 연결을 저장할 수 없습니다. 설정에서 다시 시도해 주세요.');
+                return;
+            }
+            const provider = agentApiDraft.provider || 'gemini';
+            const connectionId = agentApiSelection === '__new__'
+                ? crypto.randomUUID()
+                : (agentApiDraft.id || crypto.randomUUID());
+            connectionToPersist = {
+                id: connectionId,
+                provider,
+                modelName: normalizeProviderModelName(provider, agentApiDraft.modelName || ''),
+                apiKey: provider === 'ollama' ? '' : (agentApiDraft.apiKey || '').trim(),
+                baseUrl: provider === 'ollama' ? (agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL).trim() : undefined,
+                isActive: true,
+            };
+            nextConnectionId = agentApiSelection === '__default__' ? undefined : connectionId;
+        } else if (agentApiSelection !== '__default__') {
+            nextConnectionId = agentApiSelection;
+        }
+
         setIsSavingAgent(true);
         try {
+            if (connectionToPersist && onUpdateSettings) {
+                const savedConnection = connectionToPersist;
+                onUpdateSettings(prev => {
+                    const currentConnections = prev.apiConnections || [];
+                    const exists = currentConnections.some(connection => connection.id === savedConnection.id);
+                    const nextConnections = exists
+                        ? currentConnections.map(connection => connection.id === savedConnection.id ? savedConnection : connection)
+                        : [...currentConnections, savedConnection];
+                    const hasCurrentDefault = nextConnections.some(connection => connection.id === prev.activeConnectionId);
+                    const activeConnectionId = agentApiSelection === '__default__' || !hasCurrentDefault
+                        ? savedConnection.id
+                        : prev.activeConnectionId;
+                    const activeGemini = nextConnections.find(connection => connection.id === activeConnectionId && connection.provider === 'gemini')
+                        || nextConnections.find(connection => connection.provider === 'gemini');
+                    return {
+                        ...prev,
+                        apiConnections: nextConnections.map(connection => ({ ...connection, isActive: true })),
+                        activeConnectionId,
+                        geminiApiKey: activeGemini?.apiKey || '',
+                    };
+                });
+            }
             await Promise.resolve(onUpdateAgent(editingAgentId, {
                 name: agentDraft.name,
                 role: agentDraft.role,
@@ -548,7 +730,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                 personality: agentDraft.personality,
                 avatar: (agentDraft.avatar || '').trim() || undefined,
                 avatarFrame: agentDraft.avatar ? agentDraft.avatarFrame : undefined,
-                connectionId: agentDraft.connectionId || undefined,
+                connectionId: nextConnectionId,
                 responseLength: agentDraft.responseLength || 'medium',
             }));
             closeAgentEditor(true);
@@ -844,12 +1026,16 @@ const ChatView: React.FC<ChatViewProps> = ({
     };
 
     const resolveAgentConfig = (targetAgent?: AIAgent) => {
-        return getAgentAIConfig(settings, targetAgent?.connectionId);
+        return getAgentAIConfig(settings, targetAgent?.connectionId) || {
+            provider: 'gemini' as const,
+            apiKey: DAYFLOW_TRIAL_API_KEY,
+            modelName: DAYFLOW_TRIAL_MODEL,
+        };
     };
 
     const getAgentConnectionWarning = (targetAgent?: AIAgent): string => {
         if (!targetAgent) return '사용 가능한 AI 연결을 찾지 못했어요. 설정에서 API 연결을 확인해 주세요.';
-        if (!targetAgent.connectionId) return `${targetAgent.name}에 API 연결이 지정되지 않았어요. 전역 기본 연결은 사용하지 않으니 페르소나 설정에서 모델을 지정해 주세요.`;
+        if (!targetAgent.connectionId && !getActiveAIConfig(settings)) return '사용 가능한 기본 API 연결이 없어요. 설정이나 페르소나 편집에서 API를 연결해 주세요.';
 
         const conn = (settings.apiConnections || []).find(c => c.id === targetAgent.connectionId);
         if (!conn) {
@@ -974,6 +1160,10 @@ const ChatView: React.FC<ChatViewProps> = ({
     const handleSend = async (text?: string) => {
         const messageText = text || inputValue;
         if (!messageText.trim() || isProcessing) return;
+        if (isGuest) {
+            onRequestAuth?.();
+            return;
+        }
 
         const trimmedMessage = messageText.trim();
         const addressedAgentIdsForInput = resolveDirectAddressedAgentIds(trimmedMessage, activeAgents);
@@ -984,6 +1174,7 @@ const ChatView: React.FC<ChatViewProps> = ({
         const sessionTimePeriod = getSessionTimePeriod(sessionStartDate);
         const sessionTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time';
         const isNewSession = !hasPriorUserMessages;
+        const trialTurnId = crypto.randomUUID();
         if (!currentSessionId) {
             pendingSessionHydrationRef.current = true;
         }
@@ -1100,6 +1291,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 sessionTimePeriod,
                                 sessionTimezone,
                                 ollamaBaseUrl: agentConfig.baseUrl,
+                                trialTurnId,
                             }
                         );
 
@@ -1172,6 +1364,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             sessionTimePeriod,
                             sessionTimezone,
                             ollamaBaseUrl: singleAgentConfig.baseUrl,
+                            trialTurnId,
                         }
                     );
 
@@ -1205,7 +1398,9 @@ const ChatView: React.FC<ChatViewProps> = ({
                 const assistantMessage: ChatMessage = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
-                    content: "죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?",
+                    content: isTrialExhaustedError(error)
+                        ? '무료 체험 10회를 모두 사용했어요. 계속 대화하려면 설정이나 페르소나 편집에서 개인 API를 연결해 주세요.'
+                        : '죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?',
                     timestamp: new Date().toISOString(),
                     agentId: primaryAgent?.id,
                 };
@@ -1342,7 +1537,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
                             <div className={`flex flex-col min-w-0 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'} gap-2`}>
                                 {msg.role === 'assistant' && (
-                                    <span className="text-xs font-medium text-[#9b9a97] mb-0 ml-1">
+                                    <span className="text-[13px] font-medium text-[#5f5f5f] mb-0 ml-1">
                                         {messageAgent?.name || 'Dayflow'}
                                     </span>
                                 )}
@@ -1350,7 +1545,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 {msg.content && (
                                     <div
                                         className={`
-                                            p-3.5 rounded-2xl text-[15px] leading-7 font-normal break-words [word-break:normal] [overflow-wrap:anywhere]
+                                            p-3.5 rounded-2xl text-[16px] leading-7 font-normal break-words [word-break:normal] [overflow-wrap:anywhere]
                                             ${msg.role === 'user'
                                                 ? 'bg-[var(--color-primary)] text-white'
                                                 : 'bg-white border border-[#e9e9e8] text-[#37352f]'}
@@ -1421,7 +1616,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             )}
                         </button>
                         <div className="flex flex-col items-start">
-                            <span className="text-xs font-medium text-[#9b9a97] mb-1.5 ml-1">
+                            <span className="text-[13px] font-medium text-[#5f5f5f] mb-1.5 ml-1">
                                 {activeAgents.length > 1
                                     ? `${activeAgents.length}명 페르소나 응답 생성 중`
                                     : (primaryAgent?.name || 'Dayflow')}
@@ -1536,7 +1731,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             value={inputValue}
                             onChange={(e) => setInputValue(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                            placeholder={onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요..."}
+                            placeholder={isGuest ? "로그인하고 Dayflow와 대화해보세요..." : (onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요...")}
                             className="chat-input-field flex-1 min-w-0 h-full px-2 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
                             disabled={isProcessing}
                         />
@@ -1555,7 +1750,7 @@ const ChatView: React.FC<ChatViewProps> = ({
             </div>
             {editingAgentId && agentDraft && (
                 <div className="fixed inset-0 z-[90] bg-black/45 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-                    <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-xl h-auto max-h-[92dvh] sm:max-h-[88vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
+                    <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-2xl h-auto max-h-[92dvh] sm:max-h-[88vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
                         <div className="px-5 py-4 border-b border-[#efefef] flex items-center justify-between shrink-0 bg-white">
                             <div>
                                 <h4 className="text-[#37352f] font-medium">페르소나 편집</h4>
@@ -1655,6 +1850,19 @@ const ChatView: React.FC<ChatViewProps> = ({
                                         </label>
 
                                         <label className="block">
+                                            <span className="text-xs font-normal text-[#787774] ml-1">채팅 응답 길이</span>
+                                            <select
+                                                value={agentDraft.responseLength || 'medium'}
+                                                onChange={(e) => setAgentDraft({ ...agentDraft, responseLength: e.target.value as AIAgent['responseLength'] })}
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
+                                            >
+                                                {RESPONSE_LENGTH_OPTIONS.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+
+                                        <label className="block">
                                             <span className="text-xs font-normal text-[#787774] ml-1">성격과 행동 방식</span>
                                             <textarea
                                                 value={agentDraft.personality || ''}
@@ -1669,34 +1877,115 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 )}
 
                                 {agentEditorTab === 'api' && (
-                                    <div className="space-y-4">
+                                    <div className="space-y-5">
                                         <label className="block">
-                                            <span className="text-xs font-normal text-[#787774] ml-1">API 연결</span>
+                                            <span className="text-xs font-normal text-[#787774] ml-1">사용 방식</span>
                                             <select
-                                                value={agentDraft.connectionId || ''}
-                                                onChange={(e) => setAgentDraft({ ...agentDraft, connectionId: e.target.value || undefined })}
+                                                value={agentApiSelection}
+                                                onChange={(e) => handleAgentApiSelectionChange(e.target.value)}
                                                 className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
                                             >
-                                                <option value="">연결 선택 안 함</option>
+                                                <option value="__default__">
+                                                    {activeConnection
+                                                        ? `기본 API 연결 사용 · ${getProviderDisplayName(activeConnection.provider)} · ${activeConnection.modelName}`
+                                                        : '새 기본 API 연결 만들기'}
+                                                </option>
                                                 {supportedChatConnections.map((connection) => (
                                                     <option key={connection.id} value={connection.id}>
-                                                        {connection.provider.toUpperCase()} · {connection.modelName}
+                                                        이 페르소나만 사용 · {getProviderDisplayName(connection.provider)} · {connection.modelName}
                                                     </option>
                                                 ))}
+                                                <option value="__new__">이 페르소나만 새 연결 추가</option>
                                             </select>
                                         </label>
-                                        <label className="block">
-                                            <span className="text-xs font-normal text-[#787774] ml-1">채팅 응답 길이</span>
-                                            <select
-                                                value={agentDraft.responseLength || 'medium'}
-                                                onChange={(e) => setAgentDraft({ ...agentDraft, responseLength: e.target.value as AIAgent['responseLength'] })}
-                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
-                                            >
-                                                {RESPONSE_LENGTH_OPTIONS.map((option) => (
-                                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                                ))}
-                                            </select>
-                                        </label>
+
+                                        <div className="rounded-xl border border-[#e9e9e8] bg-[#fbfbfa] p-4 space-y-4">
+                                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                                <label className="block">
+                                                    <span className="text-xs font-normal text-[#787774] ml-1">API 공급자</span>
+                                                    <select
+                                                        value={agentApiDraft.provider || 'gemini'}
+                                                        onChange={(e) => {
+                                                            const provider = e.target.value as ApiConnection['provider'];
+                                                            updateAgentApiDraft({
+                                                                provider,
+                                                                modelName: getDefaultModelForProvider(provider),
+                                                                apiKey: '',
+                                                                baseUrl: provider === 'ollama' ? (agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL) : undefined,
+                                                            });
+                                                        }}
+                                                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                                                    >
+                                                        {CHAT_PROVIDERS.map(provider => (
+                                                            <option key={provider} value={provider}>{getProviderDisplayName(provider)}</option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+
+                                                <label className="block">
+                                                    <span className="text-xs font-normal text-[#787774] ml-1">모델</span>
+                                                    {agentApiModelOptions.length > 0 ? (
+                                                        <select
+                                                            value={agentApiDraft.modelName || getDefaultModelForProvider(agentApiDraft.provider || 'gemini')}
+                                                            onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
+                                                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                                                        >
+                                                            {agentApiModelOptions.map(model => (
+                                                                <option key={model.id} value={model.id}>{model.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    ) : (
+                                                        <input
+                                                            value={agentApiDraft.modelName || ''}
+                                                            onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
+                                                            placeholder={agentApiDraft.provider === 'ollama' ? '예: llama3.2' : '모델 이름'}
+                                                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                                                        />
+                                                    )}
+                                                </label>
+                                            </div>
+
+                                            {agentApiDraft.provider === 'ollama' ? (
+                                                <label className="block">
+                                                    <span className="text-xs font-normal text-[#787774] ml-1">Ollama 서버 주소</span>
+                                                    <input
+                                                        value={agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL}
+                                                        onChange={(e) => updateAgentApiDraft({ baseUrl: e.target.value })}
+                                                        placeholder={DEFAULT_OLLAMA_BASE_URL}
+                                                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
+                                                    />
+                                                </label>
+                                            ) : (
+                                                <label className="block">
+                                                    <span className="text-xs font-normal text-[#787774] ml-1">API Key</span>
+                                                    <input
+                                                        type="password"
+                                                        value={agentApiDraft.apiKey || ''}
+                                                        onChange={(e) => updateAgentApiDraft({ apiKey: e.target.value })}
+                                                        placeholder={getApiKeyPlaceholder(agentApiDraft.provider)}
+                                                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
+                                                    />
+                                                </label>
+                                            )}
+
+                                            <div className="flex items-center justify-between gap-3 border-t border-[#e9e9e8] pt-3">
+                                                <p className="text-[12px] leading-5 text-[#9b9a97]">
+                                                    {agentApiSelection === '__default__'
+                                                        ? '이 연결은 모든 페르소나의 기본값으로 사용됩니다.'
+                                                        : '이 연결은 현재 페르소나에만 지정됩니다.'}
+                                                </p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void testAgentApiDraft()}
+                                                    disabled={isTestingAgentApi}
+                                                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#dcdcd9] bg-white px-3 py-2 text-sm text-[#37352f] transition-colors hover:bg-[#f3f3f3] disabled:cursor-not-allowed disabled:opacity-60"
+                                                >
+                                                    <FlaskConical size={14} />
+                                                    {isTestingAgentApi ? '연결 중...' : '연결 테스트'}
+                                                </button>
+                                            </div>
+                                        </div>
+
                                     </div>
                                 )}
                             </div>

@@ -198,15 +198,10 @@ export const getActiveAIConfig = (settings: AppSettings): ActiveAIConfig | null 
     return null;
 };
 
-/**
- * Resolve the AI config for a specific agent.
- * This function is strict for persona chat:
- * - If the agent has no connectionId, return null.
- * - If the connection is invalid or unsupported, return null.
- */
+/** Resolve a persona override first, then fall back to the global default connection. */
 export const getAgentAIConfig = (settings: AppSettings, agentConnectionId?: string): ActiveAIConfig | null => {
     if (!agentConnectionId) {
-        return null;
+        return getActiveAIConfig(settings);
     }
 
     const connections = settings.apiConnections || [];
@@ -215,11 +210,11 @@ export const getAgentAIConfig = (settings: AppSettings, agentConnectionId?: stri
     if (agentConnection) {
         if (!hasUsableCredentials(agentConnection)) {
             console.warn('[aiConfig] Agent connection has no usable credentials:', agentConnectionId);
-            return null;
+            return getActiveAIConfig(settings);
         }
         if (!isChatSupportedProvider(agentConnection.provider)) {
             console.warn('[aiConfig] Agent connection provider is not supported in chat:', agentConnection.provider);
-            return null;
+            return getActiveAIConfig(settings);
         }
         console.log('[aiConfig] Found specific connection for agent:', agentConnection.modelName);
         return {
@@ -231,8 +226,8 @@ export const getAgentAIConfig = (settings: AppSettings, agentConnectionId?: stri
         };
     }
 
-    console.warn('[aiConfig] Agent has connectionId but not found or invalid:', agentConnectionId);
-    return null;
+    console.warn('[aiConfig] Agent connection is unavailable; using the global default:', agentConnectionId);
+    return getActiveAIConfig(settings);
 };
 
 /** @deprecated Use getActiveAIConfig instead. Kept for backward compatibility. */

@@ -1122,6 +1122,7 @@ const App: React.FC = () => {
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
   });
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   useEffect(() => {
     console.log(`[App] v2.5 booting id=${bootId}...`);
@@ -1156,6 +1157,15 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isSettingsModalOpen]);
+
+  useEffect(() => {
+    if (!isAuthModalOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isAuthModalOpen]);
 
   useEffect(() => () => {
     if (fetchRetryTimerRef.current) {
@@ -1641,6 +1651,22 @@ const App: React.FC = () => {
       if (activeUserId) clearUserSyncState(activeUserId);
     },
   });
+
+  const openAuthModal = useCallback((mode: 'login' | 'signup' = 'login') => {
+    setAuthMode(mode);
+    setIsMobileMenuOpen(false);
+    setIsAuthModalOpen(true);
+  }, [setAuthMode]);
+
+  const requireAuth = useCallback(() => {
+    if (currentUser) return true;
+    openAuthModal('login');
+    return false;
+  }, [currentUser, openAuthModal]);
+
+  useEffect(() => {
+    if (currentUser) setIsAuthModalOpen(false);
+  }, [currentUser]);
 
   useEffect(() => {
     setOnSyncError((err: any) => {
@@ -3913,9 +3939,9 @@ const App: React.FC = () => {
           <CalendarView
             events={filteredCalendarEvents}
             tags={calendarTags}
-            onAddEvent={addEvent}
-            onDeleteEvent={deleteEvent}
-            onUpdateEvent={updateEvent}
+            onAddEvent={(event) => requireAuth() ? addEvent(event) : undefined}
+            onDeleteEvent={(id) => { if (requireAuth()) deleteEvent(id); }}
+            onUpdateEvent={(event, previous) => { if (requireAuth()) updateEvent(event, previous); }}
           />
         );
       case 'todo':
@@ -3925,20 +3951,20 @@ const App: React.FC = () => {
             lists={todoLists}
             tabs={todoTabs}
             steps={todoSteps}
-            onAddList={addTodoList}
-            onUpdateList={updateTodoList}
-            onUpdateListOrder={updateTodoListOrder}
-            onAddTodo={addTodo}
-            onUpdateTodo={updateTodo}
-            onToggleTodo={toggleTodo}
-            onDeleteTodo={deleteTodo}
-            onDeleteList={deleteTodoList}
-            onAddTab={addTodoTab}
-            onUpdateTab={updateTodoTab}
-            onDeleteTab={deleteTodoTab}
-            onAddStep={addTodoStep}
-            onUpdateStep={updateTodoStep}
-            onDeleteStep={deleteTodoStep}
+            onAddList={(...args) => requireAuth() ? addTodoList(...args) : undefined}
+            onUpdateList={(...args) => { if (requireAuth()) updateTodoList(...args); }}
+            onUpdateListOrder={(...args) => { if (requireAuth()) updateTodoListOrder(...args); }}
+            onAddTodo={(...args) => requireAuth() ? addTodo(...args) : undefined}
+            onUpdateTodo={(...args) => { if (requireAuth()) updateTodo(...args); }}
+            onToggleTodo={(...args) => { if (requireAuth()) toggleTodo(...args); }}
+            onDeleteTodo={(...args) => { if (requireAuth()) deleteTodo(...args); }}
+            onDeleteList={(...args) => { if (requireAuth()) deleteTodoList(...args); }}
+            onAddTab={(...args) => requireAuth() ? addTodoTab(...args) : undefined}
+            onUpdateTab={(...args) => { if (requireAuth()) updateTodoTab(...args); }}
+            onDeleteTab={(...args) => { if (requireAuth()) deleteTodoTab(...args); }}
+            onAddStep={(...args) => requireAuth() ? addTodoStep(...args) : undefined}
+            onUpdateStep={(...args) => { if (requireAuth()) updateTodoStep(...args); }}
+            onDeleteStep={(...args) => { if (requireAuth()) deleteTodoStep(...args); }}
           />
         );
       case 'journal':
@@ -3952,10 +3978,10 @@ const App: React.FC = () => {
             onSelectId={setSelectedJournalId}
             onSelectCategory={setSelectedJournalCategory}
             onSearchQuery={setJournalSearchQuery}
-            onAddCategory={addJournalCategory}
-            onAddEntry={addEntry}
-            onUpdateEntry={updateEntry}
-            onDeleteEntry={deleteEntry}
+            onAddCategory={(...args) => requireAuth() ? addJournalCategory(...args) : undefined}
+            onAddEntry={(...args) => requireAuth() ? addEntry(...args) : undefined}
+            onUpdateEntry={(...args) => { if (requireAuth()) updateEntry(...args); }}
+            onDeleteEntry={(...args) => { if (requireAuth()) deleteEntry(...args); }}
           />
         );
       case 'chat':
@@ -3993,13 +4019,14 @@ const App: React.FC = () => {
             entries={entries}
             posts={posts}
             todoLists={todoLists}
-            onAddEvent={addEvent}
-            onDeleteEvent={deleteEvent}
-            onAddTodo={addTodo}
-            onAddEntry={addEntry}
-            onAddPost={addPost}
+            onAddEvent={(event) => requireAuth() ? addEvent(event) : undefined}
+            onDeleteEvent={(id) => { if (requireAuth()) deleteEvent(id); }}
+            onAddTodo={(...args) => requireAuth() ? addTodo(...args) : undefined}
+            onAddEntry={(...args) => requireAuth() ? addEntry(...args) : undefined}
+            onAddPost={(post) => { if (requireAuth()) addPost(post); }}
             requireConfirm={settings.chatActionConfirm}
             settings={settings}
+            onUpdateSettings={setSettings}
             agent={selectedChatAgents[0] || resolvedAiAgents[0]}
             agents={resolvedAiAgents}
             selectedAgentIds={sessionAgentIds}
@@ -4018,7 +4045,7 @@ const App: React.FC = () => {
                 setActiveChatSessionId(null);
               }
             }}
-            onUpdateAgent={updateAiAgent}
+            onUpdateAgent={(...args) => { if (requireAuth()) updateAiAgent(...args); }}
             onUserMessage={(text, context) => {
               const nextAgentIds = sessionAgentIds.length > 0
                 ? sessionAgentIds
@@ -4057,6 +4084,8 @@ const App: React.FC = () => {
             personaMemoryContextByAgent={personaMemoryContextByAgent}
             defaultUserName={currentUser?.name || ''}
             onUpdateMessages={handleUpdateChatMessages}
+            isGuest={!currentUser}
+            onRequestAuth={() => openAuthModal('login')}
           />
         );
       }
@@ -4096,16 +4125,6 @@ const App: React.FC = () => {
     return <div className="min-h-screen bg-white" />;
   }
 
-  if (!currentUser) {
-    return (
-      <div className="min-h-screen bg-white relative animate-in fade-in duration-300">
-        <React.Suspense fallback={<ViewLoadingFallback />}>
-          <AuthView initialMode={authMode} onLogin={(user) => setCurrentUser(user)} />
-        </React.Suspense>
-      </div>
-    );
-  }
-
 
 
   return (
@@ -4120,7 +4139,7 @@ const App: React.FC = () => {
               <button
                 type="button"
                 onClick={handleNewChat}
-                className="rounded-lg text-left text-[23px] leading-8 font-medium text-[#171717] transition-colors hover:text-[var(--color-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                className="sidebar-brand-logo rounded-lg text-left font-medium tracking-[-0.02em] text-[#171717] transition-colors hover:text-[var(--color-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
                 aria-label="홈 화면으로 이동"
                 title="홈 화면으로 이동"
               >
@@ -4528,7 +4547,7 @@ const App: React.FC = () => {
             <div className={isSidebarCollapsed ? 'flex justify-center' : 'px-1'}>
               <button
                 onClick={() => {
-                  setAuthMode('login');
+                  openAuthModal('login');
                 }}
                 className={`${isSidebarCollapsed ? 'h-11 w-11 px-0' : 'w-full gap-2 px-3 py-2'} flex items-center justify-center border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-[14px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all`}
                 aria-label="로그인 / 가입하기"
@@ -4569,7 +4588,7 @@ const App: React.FC = () => {
             ) : (
               <button
                 onClick={() => {
-                  setAuthMode('login');
+                  openAuthModal('login');
                 }}
                 className="text-[13px] leading-5 font-medium text-[#37352f] px-2.5 py-1 rounded-md border border-[#e9e9e8] bg-white"
               >
@@ -4800,8 +4819,7 @@ const App: React.FC = () => {
               ) : (
                 <button
                   onClick={() => {
-                    setIsMobileMenuOpen(false);
-                    setAuthMode('login');
+                    openAuthModal('login');
                   }}
                   className="w-full flex items-center justify-center gap-2 px-3 py-2 border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-[13px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all"
                 >
@@ -4813,6 +4831,31 @@ const App: React.FC = () => {
           </div>
         </aside>
       </div>
+      {!currentUser && isAuthModalOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/25 p-3 backdrop-blur-[2px] sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="로그인 또는 회원가입"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsAuthModalOpen(false);
+          }}
+        >
+          <div className="max-h-[calc(100dvh-24px)] w-full max-w-[440px] overflow-y-auto rounded-[24px] border border-[#dededb] bg-white p-5 shadow-[0_24px_80px_rgba(15,15,15,0.18)] sm:max-h-[calc(100dvh-48px)] sm:p-8">
+            <React.Suspense fallback={<ViewLoadingFallback />}>
+              <AuthView
+                variant="modal"
+                initialMode={authMode}
+                onClose={() => setIsAuthModalOpen(false)}
+                onLogin={(user) => {
+                  setCurrentUser(user);
+                  setIsAuthModalOpen(false);
+                }}
+              />
+            </React.Suspense>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

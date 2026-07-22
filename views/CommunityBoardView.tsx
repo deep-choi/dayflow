@@ -227,9 +227,6 @@ const CommunityBoardView: React.FC<CommunityBoardViewProps> = ({
                                             <option value={10}>10줄 보기</option>
                                             <option value={20}>20줄 보기</option>
                                         </select>
-                                        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-[#9b9a97]">
-                                            <ChevronRight size={14} className="rotate-90" />
-                                        </div>
                                     </div>
                                 </div>
                             </>
