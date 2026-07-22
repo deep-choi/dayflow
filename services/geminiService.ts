@@ -19,6 +19,7 @@ import {
 import { callOpenAIChatAPI, callOpenAIChatJSON } from "./openaiService";
 import { callXaiChatAPI, callXaiChatJSON } from "./xaiService";
 import { callOllamaChatAPI } from "./ollamaService";
+import { callLocalServerChatAPI } from "./localServerService";
 
 const CHAT_HISTORY_LIMIT = 8;
 const MODEL_MESSAGE_CHAR_LIMIT = 420;
@@ -827,6 +828,9 @@ const callTextProviderChatAPI = async (
   if (provider === "ollama") {
     return callOllamaChatAPI(baseUrl, modelName, messages, options);
   }
+  if (provider === "custom") {
+    return callLocalServerChatAPI(baseUrl, apiKey, modelName, messages, options);
+  }
   if (provider === "xai") {
     return callXaiChatAPI(apiKey, messages, undefined, modelName, options);
   }
@@ -1100,7 +1104,7 @@ export const generateChatResponse = async (
   provider: ApiConnection['provider'] = 'gemini',
   options: ChatGenerationOptions = {}
 ): Promise<ChatActionResult> => {
-  if (!apiKey) throw new Error("API Key is required.");
+  if (!apiKey && provider !== 'ollama' && provider !== 'custom') throw new Error("API Key is required.");
 
   const {
     otherPersonaNames = [],

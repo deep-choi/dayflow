@@ -24,6 +24,7 @@ import {
     getAgentAIConfig,
     getDefaultModelForProvider,
     getModelOptionsForProvider,
+    hasUsableAIConnection,
     isChatSupportedProvider,
     normalizeProviderModelName,
 } from '../utils/aiConfig';
@@ -32,7 +33,8 @@ import { callGeminiAPI } from '../utils/gemini';
 import { testXaiConnection } from '../services/xaiService';
 import { testOpenAIConnection } from '../services/openaiService';
 import { testAnthropicConnection } from '../services/anthropicService';
-import { testOllamaConnection } from '../services/ollamaService';
+import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
+import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
 import {
     DAYFLOW_TRIAL_API_KEY,
     DAYFLOW_TRIAL_MODEL,
@@ -97,7 +99,7 @@ const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
 type PersonaEditorTab = 'profile' | 'api';
 type ApiSelection = '__default__' | '__new__' | string;
 
-const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama'];
+const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama', 'custom'];
 
 const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
     if (provider === 'xai') return 'xAI';
@@ -105,7 +107,7 @@ const getProviderDisplayName = (provider: ApiConnection['provider']): string => 
     if (provider === 'anthropic') return 'Anthropic';
     if (provider === 'gemini') return 'Gemini';
     if (provider === 'ollama') return 'Ollama';
-    return 'Custom';
+    return '기타 로컬 서버';
 };
 
 const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
@@ -113,6 +115,7 @@ const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
     if (provider === 'openai') return 'sk-...';
     if (provider === 'anthropic') return 'sk-ant-...';
     if (provider === 'gemini') return 'AIza...';
+    if (provider === 'custom') return '선택 사항';
     return 'API Key';
 };
 
@@ -486,6 +489,8 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [agentApiDraft, setAgentApiDraft] = useState<Partial<ApiConnection>>(createEmptyConnectionDraft);
     const [isAgentApiDirty, setIsAgentApiDirty] = useState(false);
     const [isTestingAgentApi, setIsTestingAgentApi] = useState(false);
+    const [agentLocalModels, setAgentLocalModels] = useState<string[]>([]);
+    const [isLoadingAgentLocalModels, setIsLoadingAgentLocalModels] = useState(false);
     const [executingActionMessageId, setExecutingActionMessageId] = useState<string | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const pendingSessionHydrationRef = useRef(false);
@@ -573,6 +578,7 @@ const ChatView: React.FC<ChatViewProps> = ({
         setAgentDraft({ ...target });
         setAgentApiSelection(selectedConnection ? selectedConnection.id : '__default__');
         setAgentApiDraft(initialConnection ? { ...initialConnection } : createEmptyConnectionDraft());
+        setAgentLocalModels([]);
         setIsAgentApiDirty(false);
     };
 
@@ -591,6 +597,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
     const handleAgentApiSelectionChange = (selection: ApiSelection) => {
         setAgentApiSelection(selection);
+        setAgentLocalModels([]);
         if (selection === '__new__') {
             setAgentApiDraft(createEmptyConnectionDraft());
             setIsAgentApiDirty(true);
@@ -606,12 +613,33 @@ const ChatView: React.FC<ChatViewProps> = ({
     const validateAgentApiDraft = (): string | null => {
         const provider = agentApiDraft.provider || 'gemini';
         if (!(agentApiDraft.modelName || '').trim()) return '사용할 모델을 선택하거나 입력해 주세요.';
-        if (provider === 'ollama') {
-            if (!(agentApiDraft.baseUrl || '').trim()) return 'Ollama 서버 주소를 입력해 주세요.';
+        if (provider === 'ollama' || provider === 'custom') {
+            if (!(agentApiDraft.baseUrl || '').trim()) return '로컬 서버 주소를 입력해 주세요.';
             return null;
         }
         if (!(agentApiDraft.apiKey || '').trim()) return 'API Key를 입력해 주세요.';
         return null;
+    };
+
+    const loadAgentLocalModels = async () => {
+        const provider = agentApiDraft.provider;
+        if (provider !== 'ollama' && provider !== 'custom') return;
+        setIsLoadingAgentLocalModels(true);
+        try {
+            const models = provider === 'ollama'
+                ? await listOllamaModels(agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL)
+                : await listLocalServerModels(agentApiDraft.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, agentApiDraft.apiKey);
+            setAgentLocalModels(models);
+            if (models.length > 0) {
+                updateAgentApiDraft({ modelName: models.includes(agentApiDraft.modelName || '') ? agentApiDraft.modelName : models[0] });
+            } else {
+                alert('서버에서 불러올 수 있는 모델이 없습니다. 모델 이름을 직접 입력해 주세요.');
+            }
+        } catch (error: any) {
+            alert(`로컬 모델을 불러오지 못했습니다: ${error?.message || '알 수 없는 오류'}`);
+        } finally {
+            setIsLoadingAgentLocalModels(false);
+        }
     };
 
     const testAgentApiDraft = async () => {
@@ -627,6 +655,8 @@ const ChatView: React.FC<ChatViewProps> = ({
         try {
             if (provider === 'ollama') {
                 await testOllamaConnection(agentApiDraft.baseUrl, modelName);
+            } else if (provider === 'custom') {
+                await testLocalServerConnection(agentApiDraft.baseUrl, apiKey, modelName);
             } else if (provider === 'xai') {
                 await testXaiConnection(apiKey, modelName);
             } else if (provider === 'openai') {
@@ -691,7 +721,9 @@ const ChatView: React.FC<ChatViewProps> = ({
                 provider,
                 modelName: normalizeProviderModelName(provider, agentApiDraft.modelName || ''),
                 apiKey: provider === 'ollama' ? '' : (agentApiDraft.apiKey || '').trim(),
-                baseUrl: provider === 'ollama' ? (agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL).trim() : undefined,
+                baseUrl: provider === 'ollama' || provider === 'custom'
+                    ? (agentApiDraft.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim()
+                    : undefined,
                 isActive: true,
             };
             nextConnectionId = agentApiSelection === '__default__' ? undefined : connectionId;
@@ -1041,7 +1073,10 @@ const ChatView: React.FC<ChatViewProps> = ({
         if (!conn) {
             return `${targetAgent.name}에 지정된 API 연결을 찾지 못했어요. 페르소나 설정에서 다시 연결해 주세요.`;
         }
-        if (!conn.apiKey?.trim()) {
+        if ((conn.provider === 'ollama' || conn.provider === 'custom') && !conn.baseUrl?.trim()) {
+            return `${targetAgent.name}의 로컬 서버 주소가 비어 있어 응답할 수 없어요.`;
+        }
+        if (conn.provider !== 'ollama' && conn.provider !== 'custom' && !conn.apiKey?.trim()) {
             return `${targetAgent.name}의 API Key가 비어 있어 응답할 수 없어요.`;
         }
         if (!isChatSupportedProvider(conn.provider)) {
@@ -1205,7 +1240,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
         const messageTimeline = [...messages, userMessage];
 
-        const hasAnyAgentConfig = activeAgents.some((activeAgent) => Boolean(resolveAgentConfig(activeAgent)?.apiKey));
+        const hasAnyAgentConfig = activeAgents.some((activeAgent) => hasUsableAIConnection(resolveAgentConfig(activeAgent)));
         const onboardingAction = parseOnboardingIntent(messageText);
         if (onboardingAction) {
             await executeAction(onboardingAction);
@@ -1258,7 +1293,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                         if (agentConfig) {
                             console.log(`[ChatView] Generating for ${currentAgent.name} using:`, agentConfig.provider, agentConfig.modelName);
                         }
-                        if (!agentConfig?.apiKey) {
+                        if (!hasUsableAIConnection(agentConfig)) {
                             const warningMessage: ChatMessage = {
                                 id: crypto.randomUUID(),
                                 role: 'assistant',
@@ -1333,7 +1368,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                     const singleHistory = buildHistoryForAgent(messageTimeline, singleAgent, { allowUntypedAssistant: true });
 
                     const singleAgentConfig = resolveAgentConfig(singleAgent);
-                    if (!singleAgentConfig?.apiKey) {
+                    if (!hasUsableAIConnection(singleAgentConfig)) {
                         const warningMessage: ChatMessage = {
                             id: crypto.randomUUID(),
                             role: 'assistant',
@@ -1907,11 +1942,12 @@ const ChatView: React.FC<ChatViewProps> = ({
                                                         value={agentApiDraft.provider || 'gemini'}
                                                         onChange={(e) => {
                                                             const provider = e.target.value as ApiConnection['provider'];
+                                                            setAgentLocalModels([]);
                                                             updateAgentApiDraft({
                                                                 provider,
                                                                 modelName: getDefaultModelForProvider(provider),
                                                                 apiKey: '',
-                                                                baseUrl: provider === 'ollama' ? (agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL) : undefined,
+                                                                baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
                                                             });
                                                         }}
                                                         className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
@@ -1924,7 +1960,16 @@ const ChatView: React.FC<ChatViewProps> = ({
 
                                                 <label className="block">
                                                     <span className="text-xs font-normal text-[#787774] ml-1">모델</span>
-                                                    {agentApiModelOptions.length > 0 ? (
+                                                    {(agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom') && agentLocalModels.length > 0 ? (
+                                                        <select
+                                                            title={agentApiDraft.modelName || ''}
+                                                            value={agentApiDraft.modelName || ''}
+                                                            onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
+                                                            className="mt-1 w-full px-3 pr-10 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)] truncate"
+                                                        >
+                                                            {agentLocalModels.map(model => <option key={model} value={model}>{model}</option>)}
+                                                        </select>
+                                                    ) : agentApiModelOptions.length > 0 ? (
                                                         <select
                                                             value={agentApiDraft.modelName || getDefaultModelForProvider(agentApiDraft.provider || 'gemini')}
                                                             onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
@@ -1938,26 +1983,39 @@ const ChatView: React.FC<ChatViewProps> = ({
                                                         <input
                                                             value={agentApiDraft.modelName || ''}
                                                             onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
-                                                            placeholder={agentApiDraft.provider === 'ollama' ? '예: llama3.2' : '모델 이름'}
+                                                            placeholder={agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom' ? '모델 목록을 불러오거나 직접 입력' : '모델 이름'}
                                                             className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
                                                         />
                                                     )}
                                                 </label>
                                             </div>
 
-                                            {agentApiDraft.provider === 'ollama' ? (
+                                            {(agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom') && (
                                                 <label className="block">
-                                                    <span className="text-xs font-normal text-[#787774] ml-1">Ollama 서버 주소</span>
+                                                    <span className="text-xs font-normal text-[#787774] ml-1">{agentApiDraft.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</span>
                                                     <input
-                                                        value={agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL}
+                                                        value={agentApiDraft.baseUrl || (agentApiDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
                                                         onChange={(e) => updateAgentApiDraft({ baseUrl: e.target.value })}
-                                                        placeholder={DEFAULT_OLLAMA_BASE_URL}
+                                                        placeholder={agentApiDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
                                                         className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
                                                     />
                                                 </label>
-                                            ) : (
+                                            )}
+
+                                            {(agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom') && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void loadAgentLocalModels()}
+                                                    disabled={isLoadingAgentLocalModels}
+                                                    className="w-full rounded-lg border border-[#dcdcd9] bg-white px-3 py-2 text-sm text-[#37352f] hover:bg-[#f3f3f3] disabled:opacity-60"
+                                                >
+                                                    {isLoadingAgentLocalModels ? '로컬 모델 불러오는 중...' : '설치된 모델 불러오기'}
+                                                </button>
+                                            )}
+
+                                            {agentApiDraft.provider !== 'ollama' && (
                                                 <label className="block">
-                                                    <span className="text-xs font-normal text-[#787774] ml-1">API Key</span>
+                                                    <span className="text-xs font-normal text-[#787774] ml-1">API Key{agentApiDraft.provider === 'custom' ? ' (선택 사항)' : ''}</span>
                                                     <input
                                                         type="password"
                                                         value={agentApiDraft.apiKey || ''}

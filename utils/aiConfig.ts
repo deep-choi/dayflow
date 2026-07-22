@@ -139,18 +139,23 @@ export interface ActiveAIConfig {
     baseUrl?: string;
 }
 
-const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'xai', 'openai', 'anthropic', 'ollama'];
+const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'xai', 'openai', 'anthropic', 'ollama', 'custom'];
 
 export const isChatSupportedProvider = (provider: ApiConnection['provider']): boolean => {
     return CHAT_SUPPORTED_PROVIDERS.includes(provider);
 };
 
-const hasUsableCredentials = (connection: ApiConnection): boolean => {
-    if (connection.provider === 'ollama') {
+export const hasUsableAIConnection = (
+    connection?: Pick<ActiveAIConfig, 'provider' | 'apiKey' | 'baseUrl'> | null
+): boolean => {
+    if (!connection) return false;
+    if (connection.provider === 'ollama' || connection.provider === 'custom') {
         return typeof connection.baseUrl === 'string' && connection.baseUrl.trim().length > 0;
     }
     return typeof connection.apiKey === 'string' && connection.apiKey.trim().length > 0;
 };
+
+const hasUsableCredentials = (connection: ApiConnection): boolean => hasUsableAIConnection(connection);
 
 export const getActiveAIConfig = (settings: AppSettings): ActiveAIConfig | null => {
     const connections = settings.apiConnections || [];

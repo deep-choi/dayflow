@@ -9,7 +9,8 @@ import { callGeminiAPI } from '../utils/gemini';
 import { testXaiConnection } from '../services/xaiService';
 import { testOpenAIConnection } from '../services/openaiService';
 import { testAnthropicConnection } from '../services/anthropicService';
-import { testOllamaConnection } from '../services/ollamaService';
+import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
+import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
 import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_OLLAMA_BASE_URL,
@@ -33,7 +34,7 @@ interface PersonaSettingsViewProps {
 type PersonaEditorTab = 'profile' | 'api';
 type ApiSelection = '__default__' | '__new__' | string;
 
-const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama'];
+const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama', 'custom'];
 
 const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
   if (provider === 'xai') return 'xAI';
@@ -41,7 +42,7 @@ const getProviderDisplayName = (provider: ApiConnection['provider']): string => 
   if (provider === 'anthropic') return 'Anthropic';
   if (provider === 'gemini') return 'Gemini';
   if (provider === 'ollama') return 'Ollama';
-  return 'Custom';
+  return '기타 로컬 서버';
 };
 
 const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
@@ -49,6 +50,7 @@ const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
   if (provider === 'openai') return 'sk-...';
   if (provider === 'anthropic') return 'sk-ant-...';
   if (provider === 'gemini') return 'AIza...';
+  if (provider === 'custom') return '선택 사항';
   return 'API Key';
 };
 
@@ -113,6 +115,8 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   const [apiConnectionDraft, setApiConnectionDraft] = useState<Partial<ApiConnection>>(createEmptyConnectionDraft);
   const [isApiConnectionDirty, setIsApiConnectionDirty] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [localModels, setLocalModels] = useState<string[]>([]);
+  const [isLoadingLocalModels, setIsLoadingLocalModels] = useState(false);
   const supportedChatConnections = (settings.apiConnections || []).filter(
     (connection) => isChatSupportedProvider(connection.provider)
   );
@@ -145,6 +149,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
     setDraft({ ...agent });
     setApiSelection(selectedConnection ? selectedConnection.id : '__default__');
     setApiConnectionDraft(initialConnection ? { ...initialConnection } : createEmptyConnectionDraft());
+    setLocalModels([]);
     setIsApiConnectionDirty(false);
   };
 
@@ -163,6 +168,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
 
   const handleApiSelectionChange = (selection: ApiSelection) => {
     setApiSelection(selection);
+    setLocalModels([]);
     if (selection === '__new__') {
       setApiConnectionDraft(createEmptyConnectionDraft());
       setIsApiConnectionDirty(true);
@@ -179,12 +185,33 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   const validateApiDraft = (): string | null => {
     const provider = apiConnectionDraft.provider || 'gemini';
     if (!(apiConnectionDraft.modelName || '').trim()) return '사용할 모델을 선택하거나 입력해 주세요.';
-    if (provider === 'ollama') {
-      if (!(apiConnectionDraft.baseUrl || '').trim()) return 'Ollama 서버 주소를 입력해 주세요.';
+    if (provider === 'ollama' || provider === 'custom') {
+      if (!(apiConnectionDraft.baseUrl || '').trim()) return '로컬 서버 주소를 입력해 주세요.';
       return null;
     }
     if (!(apiConnectionDraft.apiKey || '').trim()) return 'API Key를 입력해 주세요.';
     return null;
+  };
+
+  const loadLocalModels = async () => {
+    const provider = apiConnectionDraft.provider;
+    if (provider !== 'ollama' && provider !== 'custom') return;
+    setIsLoadingLocalModels(true);
+    try {
+      const models = provider === 'ollama'
+        ? await listOllamaModels(apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL)
+        : await listLocalServerModels(apiConnectionDraft.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, apiConnectionDraft.apiKey);
+      setLocalModels(models);
+      if (models.length > 0) {
+        updateApiDraft({ modelName: models.includes(apiConnectionDraft.modelName || '') ? apiConnectionDraft.modelName : models[0] });
+      } else {
+        alert('서버에서 불러올 수 있는 모델이 없습니다. 모델 이름을 직접 입력해 주세요.');
+      }
+    } catch (error: any) {
+      alert(`로컬 모델을 불러오지 못했습니다: ${error?.message || '알 수 없는 오류'}`);
+    } finally {
+      setIsLoadingLocalModels(false);
+    }
   };
 
   const testApiDraft = async () => {
@@ -201,6 +228,8 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
     try {
       if (provider === 'ollama') {
         await testOllamaConnection(apiConnectionDraft.baseUrl, modelName);
+      } else if (provider === 'custom') {
+        await testLocalServerConnection(apiConnectionDraft.baseUrl, apiKey, modelName);
       } else if (provider === 'xai') {
         await testXaiConnection(apiKey, modelName);
       } else if (provider === 'openai') {
@@ -240,7 +269,9 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
         provider,
         modelName: normalizeProviderModelName(provider, apiConnectionDraft.modelName || ''),
         apiKey: provider === 'ollama' ? '' : (apiConnectionDraft.apiKey || '').trim(),
-        baseUrl: provider === 'ollama' ? (apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL).trim() : undefined,
+        baseUrl: provider === 'ollama' || provider === 'custom'
+          ? (apiConnectionDraft.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim()
+          : undefined,
         isActive: true,
       };
       nextConnectionId = apiSelection === '__default__' ? undefined : connectionId;
@@ -691,11 +722,12 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                             value={apiConnectionDraft.provider || 'gemini'}
                             onChange={(e) => {
                               const provider = e.target.value as ApiConnection['provider'];
+                              setLocalModels([]);
                               updateApiDraft({
                                 provider,
                                 modelName: getDefaultModelForProvider(provider),
                                 apiKey: '',
-                                baseUrl: provider === 'ollama' ? (apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL) : undefined,
+                                baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
                               });
                             }}
                             className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
@@ -708,7 +740,16 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
 
                         <label className="block">
                           <span className="text-xs font-medium text-[#787774] ml-1 uppercase">모델</span>
-                          {apiModelOptions.length > 0 ? (
+                          {(apiConnectionDraft.provider === 'ollama' || apiConnectionDraft.provider === 'custom') && localModels.length > 0 ? (
+                            <select
+                              title={apiConnectionDraft.modelName || ''}
+                              value={apiConnectionDraft.modelName || ''}
+                              onChange={(e) => updateApiDraft({ modelName: e.target.value })}
+                              className="mt-1 w-full px-3 pr-10 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)] truncate"
+                            >
+                              {localModels.map(model => <option key={model} value={model}>{model}</option>)}
+                            </select>
+                          ) : apiModelOptions.length > 0 ? (
                             <select
                               value={apiConnectionDraft.modelName || getDefaultModelForProvider(apiConnectionDraft.provider || 'gemini')}
                               onChange={(e) => updateApiDraft({ modelName: e.target.value })}
@@ -722,26 +763,39 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                             <input
                               value={apiConnectionDraft.modelName || ''}
                               onChange={(e) => updateApiDraft({ modelName: e.target.value })}
-                              placeholder={apiConnectionDraft.provider === 'ollama' ? '예: llama3.2' : '모델 이름'}
+                              placeholder={apiConnectionDraft.provider === 'ollama' || apiConnectionDraft.provider === 'custom' ? '모델 목록을 불러오거나 직접 입력' : '모델 이름'}
                               className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
                             />
                           )}
                         </label>
                       </div>
 
-                      {apiConnectionDraft.provider === 'ollama' ? (
+                      {(apiConnectionDraft.provider === 'ollama' || apiConnectionDraft.provider === 'custom') && (
                         <label className="block">
-                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">Ollama 서버 주소</span>
+                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">{apiConnectionDraft.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</span>
                           <input
-                            value={apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL}
+                            value={apiConnectionDraft.baseUrl || (apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
                             onChange={(e) => updateApiDraft({ baseUrl: e.target.value })}
-                            placeholder={DEFAULT_OLLAMA_BASE_URL}
+                            placeholder={apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
                             className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
                           />
                         </label>
-                      ) : (
+                      )}
+
+                      {(apiConnectionDraft.provider === 'ollama' || apiConnectionDraft.provider === 'custom') && (
+                        <button
+                          type="button"
+                          onClick={() => void loadLocalModels()}
+                          disabled={isLoadingLocalModels}
+                          className="w-full rounded-lg border border-[#dcdcd9] bg-white px-3 py-2 text-sm text-[#37352f] hover:bg-[#f3f3f3] disabled:opacity-60"
+                        >
+                          {isLoadingLocalModels ? '로컬 모델 불러오는 중...' : '설치된 모델 불러오기'}
+                        </button>
+                      )}
+
+                      {apiConnectionDraft.provider !== 'ollama' && (
                         <label className="block">
-                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API Key</span>
+                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API Key{apiConnectionDraft.provider === 'custom' ? ' (선택 사항)' : ''}</span>
                           <input
                             type="password"
                             value={apiConnectionDraft.apiKey || ''}

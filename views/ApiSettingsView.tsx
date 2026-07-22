@@ -6,6 +6,7 @@ import { testXaiConnection } from '../services/xaiService';
 import { testOpenAIConnection } from '../services/openaiService';
 import { testAnthropicConnection } from '../services/anthropicService';
 import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
+import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
 import { DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL, getDefaultModelForProvider, getModelOptionsForProvider, hasProviderModelOptions, isChatSupportedProvider, normalizeProviderModelName } from '../utils/aiConfig';
 
 interface ApiSettingsViewProps {
@@ -29,7 +30,7 @@ const getProviderDisplayName = (provider: ApiConnection['provider']): string => 
     if (provider === 'anthropic') return 'Anthropic';
     if (provider === 'gemini') return 'Gemini';
     if (provider === 'ollama') return 'Ollama';
-    return 'Custom';
+    return '기타 로컬 서버';
 };
 
 const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
@@ -106,7 +107,9 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
     const loadOllamaModels = async () => {
         setIsLoadingOllamaModels(true);
         try {
-            const models = await listOllamaModels(newConnection.baseUrl || DEFAULT_OLLAMA_BASE_URL);
+            const models = newConnection.provider === 'custom'
+                ? await listLocalServerModels(newConnection.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, newConnection.apiKey)
+                : await listOllamaModels(newConnection.baseUrl || DEFAULT_OLLAMA_BASE_URL);
             setOllamaModels(models);
             if (models.length > 0) {
                 setNewConnection(prev => ({ ...prev, modelName: models.includes(prev.modelName || '') ? prev.modelName : models[0] }));
@@ -124,16 +127,17 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
         const provider = (newConnection.provider as ApiConnection['provider']) || 'gemini';
         const modelName = (newConnection.modelName || '').trim();
         const apiKey = (newConnection.apiKey || '').trim();
-        const baseUrl = (newConnection.baseUrl || DEFAULT_OLLAMA_BASE_URL).trim();
+        const isLocalProvider = provider === 'ollama' || provider === 'custom';
+        const baseUrl = (newConnection.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim();
 
-        if (!modelName || (provider !== 'ollama' && !apiKey) || (provider === 'ollama' && !baseUrl)) return;
+        if (!modelName || (!isLocalProvider && !apiKey) || (isLocalProvider && !baseUrl)) return;
 
         const connection: ApiConnection = {
             id: crypto.randomUUID(),
             provider,
             modelName: normalizeConnectionModelName(provider, modelName),
             apiKey,
-            baseUrl: provider === 'ollama' ? baseUrl : undefined,
+            baseUrl: isLocalProvider ? baseUrl : undefined,
             isActive: true,
         };
 
@@ -172,6 +176,8 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
         try {
             if (connection.provider === 'ollama') {
                 await testOllamaConnection(connection.baseUrl, connection.modelName);
+            } else if (connection.provider === 'custom') {
+                await testLocalServerConnection(connection.baseUrl, connection.apiKey, connection.modelName);
             } else if (connection.provider === 'xai') {
                 await testXaiConnection(connection.apiKey, connection.modelName);
             } else if (connection.provider === 'openai') {
@@ -274,7 +280,7 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
                                             <span className="font-medium text-sm">{conn.modelName}</span>
                                         )}
                                     </div>
-                                    <p className="text-sm text-[#9b9a97] font-mono mt-1">{conn.provider === 'ollama' ? conn.baseUrl : maskApiKey(conn.apiKey)}</p>
+                                    <p className="text-sm text-[#9b9a97] font-mono mt-1">{conn.provider === 'ollama' || conn.provider === 'custom' ? conn.baseUrl : maskApiKey(conn.apiKey)}</p>
                                 </div>
                             </div>
 
@@ -335,13 +341,16 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
                                     return (
                                         <button
                                             key={provider}
-                                            onClick={() => setNewConnection({
-                                                ...newConnection,
-                                                provider,
-                                                modelName: getDefaultModelForProvider(provider),
-                                                apiKey: '',
-                                                baseUrl: provider === 'ollama' ? (newConnection.baseUrl || DEFAULT_OLLAMA_BASE_URL) : undefined,
-                                            })}
+                                            onClick={() => {
+                                                setOllamaModels([]);
+                                                setNewConnection({
+                                                    ...newConnection,
+                                                    provider,
+                                                    modelName: getDefaultModelForProvider(provider),
+                                                    apiKey: '',
+                                                    baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
+                                                });
+                                            }}
                                             className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${newConnection.provider === provider
                                                 ? 'border-[#d4d4d4] bg-[#f3f3f3] text-[#171717]'
                                                 : 'border-[#e9e9e8] bg-white text-[#787774] hover:bg-[#fbfbfa]'
@@ -354,13 +363,13 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
                             </div>
                         </div>
 
-                        {newConnection.provider === 'ollama' && (
+                        {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && (
                             <div>
-                                <label className="block text-sm font-medium mb-2">Ollama 서버 주소</label>
+                                <label className="block text-sm font-medium mb-2">{newConnection.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</label>
                                 <input
                                     type="url"
-                                    placeholder={DEFAULT_OLLAMA_BASE_URL}
-                                    value={newConnection.baseUrl || DEFAULT_OLLAMA_BASE_URL}
+                                    placeholder={newConnection.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
+                                    value={newConnection.baseUrl || (newConnection.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
                                     onChange={e => setNewConnection({ ...newConnection, baseUrl: e.target.value })}
                                     className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] focus:ring-2 focus:ring-[#d4d4d4]/10 font-mono text-sm"
                                 />
@@ -369,7 +378,7 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
 
                         <div>
                             <label className="block text-sm font-medium mb-2">모델</label>
-                            {newConnection.provider === 'ollama' && ollamaModels.length > 0 ? (
+                            {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && ollamaModels.length > 0 ? (
                                 <select
                                     value={newConnection.modelName || ''}
                                     onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })}
@@ -392,7 +401,7 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
                             ) : (
                                 <input
                                     type="text"
-                                    placeholder={newConnection.provider === 'ollama' ? 'Ollama 모델 목록 불러오기 또는 직접 입력' : '예: gpt-4o'}
+                                    placeholder={newConnection.provider === 'ollama' || newConnection.provider === 'custom' ? '모델 목록 불러오기 또는 직접 입력' : '예: gpt-4o'}
                                     value={newConnection.modelName || ''}
                                     onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })}
                                     className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] focus:ring-2 focus:ring-[#d4d4d4]/10"
@@ -400,7 +409,7 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
                             )}
                         </div>
 
-                        {newConnection.provider === 'ollama' && (
+                        {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && (
                             <button
                                 type="button"
                                 onClick={() => void loadOllamaModels()}
@@ -413,7 +422,7 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
 
                         {newConnection.provider !== 'ollama' && (
                         <div>
-                            <label className="block text-sm font-medium mb-2">API Key</label>
+                            <label className="block text-sm font-medium mb-2">API Key{newConnection.provider === 'custom' ? ' (선택 사항)' : ''}</label>
                             <input
                                 type="password"
                                 placeholder={getApiKeyPlaceholder(newConnection.provider)}
@@ -426,7 +435,7 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
 
                         <button
                             onClick={addConnection}
-                            disabled={!newConnection.modelName || (newConnection.provider !== 'ollama' && !newConnection.apiKey)}
+                            disabled={!newConnection.modelName || (!['ollama', 'custom'].includes(newConnection.provider || '') && !newConnection.apiKey)}
                             className="w-full py-3.5 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-xl hover:bg-[#eeeeee] transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed mt-2"
                         >
                             연결 추가하기
