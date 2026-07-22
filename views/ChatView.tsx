@@ -523,6 +523,30 @@ const ChatView: React.FC<ChatViewProps> = ({
     const agentApiModelOptions = agentApiDraft.provider
         ? getModelOptionsForProvider(agentApiDraft.provider)
         : [];
+
+    useEffect(() => {
+        if (!editingAgentId) return;
+        const provider = agentApiDraft.provider;
+        if (provider !== 'ollama' && provider !== 'custom') {
+            setAgentLocalModels([]);
+            return;
+        }
+
+        let cancelled = false;
+        const restoreLocalModels = async () => {
+            try {
+                const models = provider === 'ollama'
+                    ? await listOllamaModels(agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL)
+                    : await listLocalServerModels(agentApiDraft.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, agentApiDraft.apiKey);
+                if (!cancelled) setAgentLocalModels(models);
+            } catch {
+                if (!cancelled) setAgentLocalModels([]);
+            }
+        };
+        void restoreLocalModels();
+        return () => { cancelled = true; };
+    }, [editingAgentId, agentApiDraft.provider, agentApiDraft.baseUrl]);
+
     const updateApiUsage = (stats?: Partial<ApiUsageStats>, context?: UsageContext) => {
         if (!stats || !onUpdateSettings) return;
 

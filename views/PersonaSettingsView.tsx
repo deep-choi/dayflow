@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AIAgent, ApiConnection, AppSettings, PersonaMemory } from '../types';
 import { Plus, Trash2, Save, RotateCcw, Edit3, X, FlaskConical } from 'lucide-react';
 import { DEFAULT_AGENTS } from '../data/defaultAgents';
@@ -125,6 +125,29 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   const apiModelOptions = apiConnectionDraft.provider
     ? getModelOptionsForProvider(apiConnectionDraft.provider)
     : [];
+
+  useEffect(() => {
+    if (!editingId) return;
+    const provider = apiConnectionDraft.provider;
+    if (provider !== 'ollama' && provider !== 'custom') {
+      setLocalModels([]);
+      return;
+    }
+
+    let cancelled = false;
+    const restoreLocalModels = async () => {
+      try {
+        const models = provider === 'ollama'
+          ? await listOllamaModels(apiConnectionDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL)
+          : await listLocalServerModels(apiConnectionDraft.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, apiConnectionDraft.apiKey);
+        if (!cancelled) setLocalModels(models);
+      } catch {
+        if (!cancelled) setLocalModels([]);
+      }
+    };
+    void restoreLocalModels();
+    return () => { cancelled = true; };
+  }, [editingId, apiConnectionDraft.provider, apiConnectionDraft.baseUrl]);
 
   const editingTarget = useMemo(
     () => agents.find((agent) => agent.id === editingId) || null,
