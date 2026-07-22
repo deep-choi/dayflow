@@ -37,6 +37,7 @@ export const callOllamaChatAPI = async (
       model: modelName,
       messages,
       stream: false,
+      think: false,
       options: {
         temperature: options.temperature ?? 0.5,
         num_predict: options.maxTokens,
@@ -52,4 +53,4 @@ export const callOllamaChatAPI = async (
 };
 
 export const testOllamaConnection = async (baseUrl: string | undefined, modelName: string): Promise<string> =>
-  callOllamaChatAPI(baseUrl, modelName, [{ role: 'user', content: '연결 성공이라고만 답하세요.' }], { maxTokens: 32, temperature: 0.2 });
+  callOllamaChatAPI(baseUrl, modelName, [{ role: 'user', content: '연결 성공이라고만 답하세요.' }], { maxTokens: 64, temperature: 0.2 });
