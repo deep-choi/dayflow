@@ -15,7 +15,7 @@ import {
     ChatSingleGeneratedAction,
 } from '../types';
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
-import { Sparkles, Plus } from '../components/Icons';
+import { Sparkles, Plus, Check } from '../components/Icons';
 import { ArrowUp, Edit3, Save, X, FlaskConical } from 'lucide-react';
 import {
     DEFAULT_GEMINI_MODEL,
@@ -1696,15 +1696,18 @@ const ChatView: React.FC<ChatViewProps> = ({
             <div className="px-2 py-3 bg-white overflow-x-hidden">
                 <div className="space-y-3">
                     {showToolbar && (
-                        <div className="p-3 sm:p-4 rounded-2xl border border-[#e9e9e8] bg-white space-y-4 relative">
-                            <div className="flex items-start justify-between gap-3 pb-3 border-b border-[#f1f1f0]">
-                                <div className="min-w-0">
-                                    <span className="text-sm font-normal text-[#37352f]">페르소나 선택</span>
-                                    <span className="block text-xs text-[#9b9a97] mt-0.5">누구와 대화할지 눌러서 선택하거나 해제하세요.</span>
-                                </div>
-                                <span className="shrink-0 text-xs font-normal px-2.5 py-1 rounded-full bg-[#f7f7f5] text-[#787774] border border-[#e9e9e8]">
-                                    {activeAgents.length}명 선택
-                                </span>
+                        <div id="chat-persona-selector" className="p-3 sm:p-4 rounded-2xl border border-[#e9e9e8] bg-white space-y-4 relative">
+                            <div className="flex items-center justify-between gap-3 pb-3 border-b border-[#f1f1f0]">
+                                <span className="text-sm font-normal text-[#37352f]">페르소나 선택</span>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowToolbar(false)}
+                                    className="shrink-0 w-8 h-8 -my-1 rounded-full flex items-center justify-center text-[#9b9a97] hover:text-[#37352f] hover:bg-[#f7f7f5] transition-colors"
+                                    aria-label="페르소나 선택 닫기"
+                                    title="닫기"
+                                >
+                                    <X size={18} strokeWidth={2} />
+                                </button>
                             </div>
 
                             {/* Persona Grid */}
@@ -1720,20 +1723,30 @@ const ChatView: React.FC<ChatViewProps> = ({
                                         const isActive = activeAgents.some((a) => a.id === availableAgent.id);
                                         const currentIds = activeAgents.map((a) => a.id);
                                         const canRemoveFromGroup = isActive && currentIds.length > 1;
+                                        const toggleAgent = () => {
+                                            if (isActive) {
+                                                if (!canRemoveFromGroup) return;
+                                                onSelectAgents?.(currentIds.filter((id) => id !== availableAgent.id));
+                                                return;
+                                            }
+                                            if (currentIds.length >= MAX_GROUP_AGENTS) return;
+                                            onSelectAgents?.([...currentIds, availableAgent.id]);
+                                        };
                                         return (
                                             <div
                                                 key={availableAgent.id}
-                                                className={`relative rounded-xl border transition-all overflow-hidden ${isActive
+                                                className={`relative rounded-xl border overflow-hidden ${isActive
                                                     ? 'border-[#d4d4d4] bg-[#f7f7f7]'
                                                     : 'border-[#e9e9e8] bg-white hover:border-[#d3d1cb] hover:bg-[#fcfcfb]'}`}
                                             >
                                                 <button
                                                     type="button"
-                                                    onClick={() => onSelectAgents?.([availableAgent.id])}
-                                                    className="flex w-full items-center gap-3 p-2.5 pr-9 text-left"
-                                                    title={`${availableAgent.name} 단독 선택`}
+                                                    onClick={toggleAgent}
+                                                    className="flex w-full items-center gap-3 p-2.5 pr-11 text-left"
+                                                    aria-pressed={isActive}
+                                                    title={isActive ? (canRemoveFromGroup ? `${availableAgent.name} 참여 해제` : `${availableAgent.name} 선택됨`) : `${availableAgent.name} 참여 추가`}
                                                 >
-                                                    <div className={`w-8 h-8 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center border transition-colors ${isActive ? 'border-[#d4d4d4]' : 'border-[#e9e9e8]'}`}>
+                                                    <div className={`w-8 h-8 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center border ${isActive ? 'border-[#d4d4d4]' : 'border-[#e9e9e8]'}`}>
                                                         {availableAgent.avatar ? (
                                                             <img src={availableAgent.avatar} alt="" style={getAvatarImageStyle(availableAgent.avatarFrame)} className="w-full h-full object-cover" />
                                                         ) : (
@@ -1748,23 +1761,15 @@ const ChatView: React.FC<ChatViewProps> = ({
                                                 </button>
                                                 <button
                                                     type="button"
-                                                    onClick={() => {
-                                                        if (isActive) {
-                                                            if (!canRemoveFromGroup) return;
-                                                            onSelectAgents?.(currentIds.filter((id) => id !== availableAgent.id));
-                                                            return;
-                                                        }
-                                                        if (currentIds.length >= MAX_GROUP_AGENTS) return;
-                                                        onSelectAgents?.([...currentIds, availableAgent.id]);
-                                                    }}
+                                                    onClick={toggleAgent}
                                                     disabled={isActive && !canRemoveFromGroup}
-                                                    className={`absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full border text-xs font-normal flex items-center justify-center transition-colors ${isActive
-                                                        ? 'border-[var(--color-primary)] bg-[var(--color-primary)] text-white disabled:opacity-100'
-                                                        : 'border-[#dcdcd9] bg-white text-[#787774] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]'}`}
+                                                    className={`absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full text-sm font-normal flex items-center justify-center ${isActive
+                                                        ? 'bg-[var(--color-primary)] text-white disabled:opacity-100'
+                                                        : 'bg-[#f1f1ef] text-[#787774] hover:bg-[#e9e9e6] hover:text-[var(--color-primary)]'}`}
                                                     aria-label={isActive ? `${availableAgent.name} 그룹에서 해제` : `${availableAgent.name} 그룹에 추가`}
                                                     title={isActive ? (canRemoveFromGroup ? '그룹에서 해제' : '현재 단독 선택됨') : '그룹에 추가'}
                                                 >
-                                                    {isActive ? '✓' : '+'}
+                                                    {isActive ? <Check size={16} strokeWidth={2.6} /> : <Plus size={16} strokeWidth={2.2} />}
                                                 </button>
                                             </div>
                                         );
@@ -1775,15 +1780,19 @@ const ChatView: React.FC<ChatViewProps> = ({
                         </div>
                     )}
 
-                    <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-2xl border border-[#e9e9e8] bg-white shadow-[0_8px_18px_rgba(15,23,42,0.045)] focus-within:border-[#d4d4d4] transition-all">
+                    <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-[9999px] border border-[#e9e9e8] bg-white shadow-none focus-within:border-[#d4d4d4] transition-all">
                         <button
                             type="button"
                             onClick={() => setShowToolbar(prev => !prev)}
                             className="shrink-0 w-12 h-full flex items-center justify-center text-[#787774] hover:text-[#37352f] transition-colors"
-                            aria-label="대화 도구 열기"
-                            title={activeAgents.map((activeAgent) => activeAgent.name).join(', ') || 'Dayflow'}
+                            aria-label={showToolbar ? "페르소나 선택 닫기" : "페르소나 선택 열기"}
+                            aria-expanded={showToolbar}
+                            aria-controls="chat-persona-selector"
+                            title={showToolbar ? "닫기" : "페르소나 선택"}
                         >
-                            <Plus size={17} />
+                            <span className={`flex items-center justify-center transition-transform duration-200 ease-out motion-reduce:transition-none ${showToolbar ? 'rotate-45' : 'rotate-0'}`}>
+                                <Plus size={20} />
+                            </span>
                         </button>
                         <input
                             type="text"
@@ -1798,7 +1807,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             type="button"
                             onClick={() => handleSend()}
                             disabled={!inputValue.trim() || isProcessing}
-                            className="chat-send-button mr-2 shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
+                            className="chat-send-button mr-2 shrink-0 w-9 h-9 rounded-[9999px] flex items-center justify-center transition-all disabled:cursor-not-allowed"
                             aria-label="메시지 전송"
                             title="메시지 전송"
                         >

@@ -1047,17 +1047,12 @@ select {
 :root[data-theme='dark'] .chat-input-shell {
   background-color: #232323 !important;
   border-color: rgba(240, 240, 240, 0.14) !important;
-  box-shadow:
-    0 8px 20px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  box-shadow: none;
 }
 
 :root[data-theme='dark'] .chat-input-shell:focus-within {
   border-color: rgba(94, 234, 212, 0.34) !important;
-  box-shadow:
-    0 10px 24px rgba(0, 0, 0, 0.2),
-    0 0 0 1px rgba(94, 234, 212, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: none;
 }
 
 :root[data-theme='dark'] .chat-input-shell .chat-input-field {
