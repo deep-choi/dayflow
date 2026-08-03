@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
-import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, ChevronRight, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, Headphones, CreditCard } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
 import { supabase } from './utils/supabase';
@@ -21,6 +21,8 @@ const JournalView = React.lazy(() => import('./views/JournalView'));
 const SettingsView = React.lazy(() => import('./views/SettingsView'));
 const ChatView = React.lazy(() => import('./views/ChatView'));
 const AuthView = React.lazy(() => import('./views/AuthView'));
+const SupportCenterView = React.lazy(() => import('./views/SupportCenterView'));
+import type { SupportTabId } from './views/SupportCenterView';
 
 type ChatObservation = {
   text: string;
@@ -1040,7 +1042,8 @@ const recoverFromStorageQuota = (userId: string, key: CacheKey): void => {
   });
 };
 
-const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat'];
+const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat', 'support'];
+const VALID_SUPPORT_TABS: SupportTabId[] = ['main', 'pricing', 'terms', 'privacy', 'refund', 'support', 'ai'];
 
 const normalizeView = (rawView: string | null): ViewState => {
   if (!rawView) return 'chat';
@@ -1058,6 +1061,12 @@ const resolveViewFromUrl = (): ViewState => {
   if (typeof window === 'undefined') return 'chat';
   const params = new URLSearchParams(window.location.search);
   return normalizeView(params.get('view'));
+};
+
+const resolveSupportTabFromUrl = (): SupportTabId => {
+  if (typeof window === 'undefined') return 'main';
+  const tab = new URLSearchParams(window.location.search).get('tab');
+  return VALID_SUPPORT_TABS.includes(tab as SupportTabId) ? (tab as SupportTabId) : 'main';
 };
 
 type ViewErrorBoundaryProps = {
@@ -1130,12 +1139,14 @@ const App: React.FC = () => {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error'>('idle');
   const [currentView, setCurrentView] = useState<ViewState>(() => resolveViewFromUrl());
+  const [supportTab, setSupportTab] = useState<SupportTabId>(() => resolveSupportTabFromUrl());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
   });
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   useEffect(() => {
@@ -1171,6 +1182,26 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isSettingsModalOpen]);
+
+  useEffect(() => {
+    if (!isAccountMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-account-menu]')) return;
+      setIsAccountMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsAccountMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isAccountMenuOpen]);
 
   useEffect(() => {
     if (!isAuthModalOpen) return;
@@ -1832,6 +1863,7 @@ const App: React.FC = () => {
     const onPopState = () => {
       const next = resolveViewFromUrl();
       setCurrentView(prev => (prev === next ? prev : next));
+      setSupportTab(resolveSupportTabFromUrl());
     };
 
     window.addEventListener('popstate', onPopState);
@@ -1840,12 +1872,19 @@ const App: React.FC = () => {
   useEffect(() => {
     if (isAuthInitializing) return;
     const url = new URL(window.location.href);
-    if (url.searchParams.get('view') === currentView) return;
+    const nextTab = currentView === 'support' ? supportTab : null;
+    if (url.searchParams.get('view') === currentView && url.searchParams.get('tab') === nextTab) return;
     url.searchParams.set('view', currentView);
+    if (nextTab) {
+      url.searchParams.set('tab', nextTab);
+    } else {
+      url.searchParams.delete('tab');
+    }
     window.history.replaceState({}, document.title, `${url.pathname}?${url.searchParams.toString()}${url.hash}`);
-  }, [currentView, isAuthInitializing]);
+  }, [currentView, supportTab, isAuthInitializing]);
   useEffect(() => {
     setIsMobileMenuOpen(false);
+    setIsAccountMenuOpen(false);
   }, [currentView]);
   useEffect(() => {
     if (!isMobileMenuOpen) return;
@@ -3916,9 +3955,7 @@ const App: React.FC = () => {
     { id: 'todo', label: '할 일', icon: CheckSquare },
     { id: 'journal', label: '메모장', icon: BookOpen },
   ];
-  const mobileNavItems: { id: ViewState; label: string; icon: React.ElementType }[] = [
-    ...navItems,
-  ];
+  const mobileNavItems: { id: ViewState; label: string; icon: React.ElementType }[] = navItems;
 
   const renderSettingsView = () => (
     <SettingsView
@@ -3998,6 +4035,16 @@ const App: React.FC = () => {
             onAddEntry={(...args) => requireAuth() ? addEntry(...args) : undefined}
             onUpdateEntry={(...args) => { if (requireAuth()) updateEntry(...args); }}
             onDeleteEntry={(...args) => { if (requireAuth()) deleteEntry(...args); }}
+          />
+        );
+      case 'support':
+        return (
+          <SupportCenterView
+            activeTab={supportTab}
+            onTabChange={setSupportTab}
+            onBack={() => setCurrentView('chat')}
+            isAuthenticated={Boolean(currentUser)}
+            onLogin={() => openAuthModal('login')}
           />
         );
       case 'chat':
@@ -4128,6 +4175,96 @@ const App: React.FC = () => {
     setCurrentView('chat');
   };
 
+  const openSupportCenter = (tab: SupportTabId = 'main') => {
+    setSupportTab(tab);
+    setCurrentView('support');
+    setIsMobileMenuOpen(false);
+    setIsAccountMenuOpen(false);
+  };
+
+  const openSettings = () => {
+    setIsAccountMenuOpen(false);
+    setIsMobileMenuOpen(false);
+    setIsSettingsModalOpen(true);
+  };
+
+  const renderAccountMenu = (mobile = false) => (
+    <div
+      data-account-menu
+      className={`${mobile
+        ? 'absolute bottom-full left-3 right-3 mb-2'
+        : isSidebarCollapsed
+          ? 'absolute bottom-3 left-full ml-2 w-60'
+          : 'absolute bottom-full left-3 right-3 mb-2'} z-[110] rounded-2xl border border-[#dededb] bg-white p-2 shadow-[0_12px_36px_rgba(15,15,15,0.16)]`}
+      role="menu"
+      aria-label="계정 메뉴"
+    >
+      <div className="flex items-center gap-3 border-b border-[#e9e9e8] px-2 py-2.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#f3f3f3] text-[13px] font-medium text-[#171717]">
+          {currentUser?.avatar ? (
+            <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
+          ) : (
+            currentUser?.name?.[0] || 'U'
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14px] font-medium text-[#171717]">{currentUser?.name || '사용자'}</div>
+          <div className="mt-0.5 text-[12px] text-[#8a8a8a]">내 계정</div>
+        </div>
+      </div>
+
+      <div className="py-1.5">
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => openSupportCenter('pricing')}
+          className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[14px] text-[#37352f] transition-colors hover:bg-[#f3f3f3]"
+        >
+          <CreditCard size={17} className="shrink-0 text-[#5f5f5f]" />
+          <span className="min-w-0 flex-1">요금제 안내</span>
+          <span className="text-[11px] font-medium text-[var(--color-primary)]">준비 중</span>
+          <ChevronRight size={14} className="shrink-0 text-[#9b9b98]" />
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => openSupportCenter('support')}
+          className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[14px] text-[#37352f] transition-colors hover:bg-[#f3f3f3]"
+        >
+          <Headphones size={17} className="shrink-0 text-[#5f5f5f]" />
+          <span className="min-w-0 flex-1">고객지원</span>
+          <ChevronRight size={14} className="shrink-0 text-[#9b9b98]" />
+        </button>
+      </div>
+
+      <div className="border-t border-[#e9e9e8] pt-1.5">
+        <button
+          type="button"
+          role="menuitem"
+          onClick={openSettings}
+          className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[14px] text-[#37352f] transition-colors hover:bg-[#f3f3f3]"
+        >
+          <SettingsIcon size={17} />
+          <span>설정</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            setIsAccountMenuOpen(false);
+            setIsMobileMenuOpen(false);
+            handleLogout();
+          }}
+          disabled={isLoggingOut}
+          className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[14px] text-[#37352f] transition-colors hover:bg-[#f3f3f3] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <LogOut size={17} className="shrink-0 text-[#5f5f5f]" />
+          <span>{isLoggingOut ? '처리 중...' : '로그아웃'}</span>
+        </button>
+      </div>
+    </div>
+  );
+
   const handleMobileNavigate = (view: ViewState) => {
     if (view === 'chat') {
       handleNewChat();
@@ -4147,6 +4284,7 @@ const App: React.FC = () => {
     <div className="flex h-[100dvh] bg-[#fbfbfa] font-sans selection:bg-black/10 relative overflow-x-hidden">
       {/* Full Page Loading Overlay Removed in v2.6 for "Instant" feel */}
       {/* Sidebar Navigation */}
+      {currentView !== 'support' && (
       <aside className={`hidden lg:flex ${isSidebarCollapsed ? 'lg:w-[76px] xl:w-[76px]' : 'lg:w-[280px] xl:w-[300px]'} bg-white border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0`}>
         <div>
           {/* Logo Section */}
@@ -4528,37 +4666,42 @@ const App: React.FC = () => {
 
         </div>
 
-        {/* Bottom Section: Pro & Auth */}
-        <div className={isSidebarCollapsed ? 'p-3' : 'p-4 space-y-3'}>
+        {/* Bottom Section: Account */}
+        <div className={`${isSidebarCollapsed ? 'p-3' : 'p-4'} relative border-t border-[#e9e9e8]`} data-account-menu>
           {currentUser ? (
-            <button
-              type="button"
-              onClick={() => setIsSettingsModalOpen(true)}
-              className={`${isSidebarCollapsed ? 'mx-auto flex h-11 w-11 items-center justify-center rounded-xl p-0' : 'w-full rounded-[14px] p-3 text-left'} bg-white transition-colors hover:bg-[#f7f7f7]`}
-              title="설정"
-              aria-label="설정 열기"
-            >
-              <div className={`flex items-center min-w-0 ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
-                <div className="w-9 h-9 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[14px] leading-5 font-medium text-[#171717] flex-shrink-0 overflow-hidden">
-                  {currentUser?.avatar ? (
-                    <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
-                  ) : (
-                    currentUser?.name?.[0] || 'J'
+            <>
+              {isAccountMenuOpen && renderAccountMenu()}
+              <button
+                type="button"
+                onClick={() => setIsAccountMenuOpen((open) => !open)}
+                className={`${isSidebarCollapsed ? 'mx-auto flex h-11 w-11 items-center justify-center rounded-xl p-0' : 'w-full rounded-[14px] p-3 text-left'} bg-white transition-colors hover:bg-[#f7f7f7]`}
+                title="계정 메뉴"
+                aria-label="계정 메뉴 열기"
+                aria-expanded={isAccountMenuOpen}
+                aria-haspopup="menu"
+              >
+                <div className={`flex min-w-0 items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#f3f3f3] text-[14px] font-medium text-[#171717]">
+                    {currentUser?.avatar ? (
+                      <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
+                    ) : (
+                      currentUser?.name?.[0] || 'J'
+                    )}
+                  </div>
+                  {!isSidebarCollapsed && (
+                    <>
+                      <div className="min-w-0 flex-1 text-left">
+                        <div className="truncate text-[14px] font-medium leading-5 text-[#171717]">{currentUser?.name || 'JNMED'}</div>
+                        <div className="mt-0.5 truncate text-[13px] font-normal leading-5 text-[#8a8a8a]">내 계정</div>
+                      </div>
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
+                        <SettingsIcon size={16} />
+                      </span>
+                    </>
                   )}
                 </div>
-                {!isSidebarCollapsed && (
-                  <>
-                    <div className="min-w-0 flex-1 text-left">
-                      <div className="text-[14px] leading-5 font-medium text-[#171717] truncate">{currentUser?.name || 'JNMED'}</div>
-                      <div className="text-[13px] leading-5 font-normal text-[#8a8a8a] truncate mt-0.5">내 계정</div>
-                    </div>
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
-                      <SettingsIcon size={16} />
-                    </span>
-                  </>
-                )}
-              </div>
-            </button>
+              </button>
+            </>
           ) : (
             <div className={isSidebarCollapsed ? 'flex justify-center' : 'px-1'}>
               <button
@@ -4576,10 +4719,12 @@ const App: React.FC = () => {
           )}
         </div>
       </aside>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-white pb-0">
         {/* Top Mobile Bar (Visible only on small screens) */}
+        {currentView !== 'support' && (
         <header className="lg:hidden h-14 bg-white border-b border-[#e9e9e8] flex items-center justify-between px-4 font-medium text-sm z-40 relative">
           <div className="flex items-center gap-2 min-w-0">
             <button
@@ -4613,10 +4758,11 @@ const App: React.FC = () => {
             )}
           </div>
         </header>
+        )}
 
         {/* Scrollable View Content */}
         <div className={`flex-1 relative scroll-smooth ${['todo', 'journal', 'calendar'].includes(currentView) ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-          <div className={`h-full mx-auto ${['todo', 'journal', 'calendar'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1440px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
+          <div className={`h-full mx-auto ${['todo', 'journal', 'calendar', 'support'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1440px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
             <ViewErrorBoundary view={currentView} onRecover={() => setCurrentView('chat')}>
               <React.Suspense fallback={<ViewLoadingFallback />}>
                 {renderView()}
@@ -4792,18 +4938,18 @@ const App: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="p-3 border-t border-[#e9e9e8]">
+            <div className="relative border-t border-[#e9e9e8] p-3" data-account-menu>
               {currentUser ? (
-                <div className="flex items-center justify-between gap-2">
+                <>
+                  {isAccountMenuOpen && renderAccountMenu(true)}
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      setIsSettingsModalOpen(true);
-                    }}
-                    className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left transition-colors hover:bg-[#f7f7f7]"
-                    title="설정"
-                    aria-label="설정 열기"
+                    onClick={() => setIsAccountMenuOpen((open) => !open)}
+                    className="flex w-full min-w-0 items-center gap-3 rounded-lg p-2 text-left transition-colors hover:bg-[#f7f7f7]"
+                    title="계정 메뉴"
+                    aria-label="계정 메뉴 열기"
+                    aria-expanded={isAccountMenuOpen}
+                    aria-haspopup="menu"
                   >
                     <div className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] flex-shrink-0 overflow-hidden">
                       {currentUser?.avatar ? (
@@ -4817,21 +4963,7 @@ const App: React.FC = () => {
                       <SettingsIcon size={15} />
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      handleLogout();
-                    }}
-                    disabled={isLoggingOut}
-                    className="flex items-center gap-1 px-2 py-1.5 hover:bg-[#f3f3f3] rounded text-[#8a8a8a] hover:text-[#171717] transition-colors text-[13px] leading-5 font-normal disabled:opacity-60 disabled:cursor-not-allowed"
-                    title="로그아웃"
-                    aria-label="로그아웃"
-                  >
-                    <LogOut size={14} />
-                    <span>{isLoggingOut ? '처리 중...' : '로그아웃'}</span>
-                  </button>
-                </div>
+                </>
               ) : (
                 <button
                   onClick={() => {

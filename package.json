@@ -9,14 +9,15 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run check:encoding && vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && firebase deploy --only hosting:app"
+    "deploy": "npm run build && npx --yes firebase-tools@15.25.1 deploy --only hosting:app"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@google/genai": "^1.39.0",
+    "@google/genai": "^1.52.0",
     "@supabase/supabase-js": "^2.95.3",
+    "@tosspayments/tosspayments-sdk": "^2.7.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.563.0",
     "react": "^19.2.4",
@@ -28,7 +29,6 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^5.0.0",
-    "firebase-tools": "^15.5.1",
     "tailwindcss": "^4.1.18",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
