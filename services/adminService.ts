@@ -205,6 +205,13 @@ export type AdminDashboardData = {
   };
   system: {
     billingEvents: AdminBillingEvent[];
+    configuration: {
+      tossKeyMode: 'test' | 'live' | 'missing' | 'mismatch' | 'unknown';
+      billingCronSecretConfigured: boolean;
+      tossWebhookTokenConfigured: boolean;
+      lastRenewalAttemptAt?: string | null;
+      lastWebhookReceivedAt?: string | null;
+    };
   };
 };
 

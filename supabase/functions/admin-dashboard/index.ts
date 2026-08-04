@@ -29,6 +29,14 @@ const asTime = (value: unknown): number => {
   return Number.isFinite(time) ? time : 0;
 };
 
+const readTossKeyMode = (clientKey: string, secretKey: string): 'test' | 'live' | 'missing' | 'mismatch' | 'unknown' => {
+  if (!clientKey || !secretKey) return 'missing';
+  const clientMode = clientKey.startsWith('test_') ? 'test' : clientKey.startsWith('live_') ? 'live' : 'unknown';
+  const secretMode = secretKey.startsWith('test_') ? 'test' : secretKey.startsWith('live_') ? 'live' : 'unknown';
+  if (clientMode === 'unknown' || secretMode === 'unknown') return 'unknown';
+  return clientMode === secretMode ? clientMode : 'mismatch';
+};
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') {
@@ -38,6 +46,10 @@ Deno.serve(async (request) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  const tossClientKey = Deno.env.get('TOSS_CLIENT_KEY') || '';
+  const tossSecretKey = Deno.env.get('TOSS_SECRET_KEY') || '';
+  const billingCronSecret = Deno.env.get('BILLING_CRON_SECRET') || '';
+  const tossWebhookToken = Deno.env.get('TOSS_WEBHOOK_TOKEN') || '';
   const authorization = request.headers.get('Authorization') || '';
 
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
@@ -307,6 +319,13 @@ Deno.serve(async (request) => {
     },
     system: {
       billingEvents,
+      configuration: {
+        tossKeyMode: readTossKeyMode(tossClientKey, tossSecretKey),
+        billingCronSecretConfigured: billingCronSecret.length >= 32,
+        tossWebhookTokenConfigured: tossWebhookToken.length >= 32,
+        lastRenewalAttemptAt: attempts[0]?.created_at || null,
+        lastWebhookReceivedAt: billingEvents[0]?.received_at || null,
+      },
     },
   });
 });
