@@ -20,12 +20,15 @@ type UseAuthSessionOptions = {
 const getMetadataAvatar = (metadata: any): string =>
   metadata?.avatar_url || metadata?.picture || '';
 
+const hasAdminRole = (appMetadata: any): boolean =>
+  appMetadata?.role === 'admin' || appMetadata?.is_admin === true;
+
 const mapSupabaseUser = (sessionUser: any, profile: any): User => ({
   id: sessionUser.id,
   email: sessionUser.email || '',
   name: profile?.name || sessionUser.user_metadata?.full_name || sessionUser.email?.split('@')[0] || 'User',
   avatar: profile?.avatar_url || getMetadataAvatar(sessionUser.user_metadata) || '',
-  geminiApiKey: profile?.gemini_api_key || '',
+  isAdmin: hasAdminRole(sessionUser.app_metadata),
 });
 
 export const useAuthSession = (options: UseAuthSessionOptions = {}) => {
@@ -77,7 +80,6 @@ export const useAuthSession = (options: UseAuthSessionOptions = {}) => {
             id: user.id,
             name: user.user_metadata?.full_name || user.email?.split('@')[0],
             avatar_url: getMetadataAvatar(user.user_metadata),
-            gemini_api_key: ''
           }])
           .select()
           .maybeSingle();

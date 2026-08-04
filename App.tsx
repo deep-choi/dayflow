@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
-import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, ChevronRight, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, Headphones, CreditCard } from 'lucide-react';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, ChevronRight, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, Headphones, CreditCard, ShieldCheck } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
 import { supabase } from './utils/supabase';
@@ -22,6 +22,8 @@ const SettingsView = React.lazy(() => import('./views/SettingsView'));
 const ChatView = React.lazy(() => import('./views/ChatView'));
 const AuthView = React.lazy(() => import('./views/AuthView'));
 const SupportCenterView = React.lazy(() => import('./views/SupportCenterView'));
+const AdminView = React.lazy(() => import('./views/AdminView'));
+const AdminLoginView = React.lazy(() => import('./views/AdminLoginView'));
 import type { SupportTabId } from './views/SupportCenterView';
 
 type ChatObservation = {
@@ -349,7 +351,6 @@ const buildPersonaMemoryBuckets = (
     const bTime = new Date(b.lastObservedAt || b.updatedAt || b.createdAt).getTime();
     return bTime - aTime;
   });
-
   for (const memory of sorted) {
     if (!memory?.agentId || !memory?.content) continue;
     if (!output[memory.agentId]) {
@@ -715,6 +716,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoAiReactions: false,
   chatActionConfirm: true,
   theme: DEFAULT_THEME,
+  preferredDayflowModel: 'gemini-3-flash-preview',
   apiConnections: [],
   activeConnectionId: undefined,
   agentProfiles: {},
@@ -1042,7 +1044,7 @@ const recoverFromStorageQuota = (userId: string, key: CacheKey): void => {
   });
 };
 
-const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat', 'support'];
+const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat', 'support', 'admin'];
 const VALID_SUPPORT_TABS: SupportTabId[] = ['main', 'pricing', 'terms', 'privacy', 'refund', 'support', 'ai'];
 
 const normalizeView = (rawView: string | null): ViewState => {
@@ -1696,6 +1698,8 @@ const App: React.FC = () => {
       if (activeUserId) clearUserSyncState(activeUserId);
     },
   });
+  const isAdmin = currentUser?.isAdmin === true;
+  const isAdminLoginView = currentView === 'admin' && !isAdmin;
 
   const openAuthModal = useCallback((mode: 'login' | 'signup' = 'login') => {
     setAuthMode(mode);
@@ -1712,7 +1716,6 @@ const App: React.FC = () => {
   useEffect(() => {
     if (currentUser) setIsAuthModalOpen(false);
   }, [currentUser]);
-
   useEffect(() => {
     setOnSyncError((err: any) => {
       console.error('[App] Global Sync Error Caught:', err);
@@ -4047,6 +4050,10 @@ const App: React.FC = () => {
             onLogin={() => openAuthModal('login')}
           />
         );
+      case 'admin':
+        return isAdmin
+          ? <AdminView />
+          : <AdminLoginView currentEmail={currentUser?.email} onBack={() => setCurrentView('chat')} />;
       case 'chat':
       default: {
         const activeSession = chatSessions.find(s => s.id === activeChatSessionId);
@@ -4157,7 +4164,7 @@ const App: React.FC = () => {
 
   const headerLabel =
     mobileNavItems.find(i => i.id === currentView)?.label ||
-    'Dashboard';
+    (currentView === 'admin' ? '관리자' : 'Dashboard');
   const historySessions = chatSessions
     .filter((session: ChatSession) => hasUserChatMessage(session))
     .sort((a, b) => getChatSessionActivityTime(b) - getChatSessionActivityTime(a));
@@ -4186,6 +4193,12 @@ const App: React.FC = () => {
     setIsAccountMenuOpen(false);
     setIsMobileMenuOpen(false);
     setIsSettingsModalOpen(true);
+  };
+
+  const openAdmin = () => {
+    setIsAccountMenuOpen(false);
+    setIsMobileMenuOpen(false);
+    setCurrentView('admin');
   };
 
   const renderAccountMenu = (mobile = false) => (
@@ -4238,6 +4251,17 @@ const App: React.FC = () => {
       </div>
 
       <div className="border-t border-[#e9e9e8] pt-1.5">
+        {isAdmin && (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={openAdmin}
+            className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[14px] text-[#37352f] transition-colors hover:bg-[#f3f3f3]"
+          >
+            <ShieldCheck size={17} className="shrink-0 text-[#5f5f5f]" />
+            <span>관리자</span>
+          </button>
+        )}
         <button
           type="button"
           role="menuitem"
@@ -4284,7 +4308,7 @@ const App: React.FC = () => {
     <div className="flex h-[100dvh] bg-[#fbfbfa] font-sans selection:bg-black/10 relative overflow-x-hidden">
       {/* Full Page Loading Overlay Removed in v2.6 for "Instant" feel */}
       {/* Sidebar Navigation */}
-      {currentView !== 'support' && (
+      {currentView !== 'support' && !isAdminLoginView && (
       <aside className={`hidden lg:flex ${isSidebarCollapsed ? 'lg:w-[76px] xl:w-[76px]' : 'lg:w-[280px] xl:w-[300px]'} bg-white border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0`}>
         <div>
           {/* Logo Section */}
@@ -4724,7 +4748,7 @@ const App: React.FC = () => {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-white pb-0">
         {/* Top Mobile Bar (Visible only on small screens) */}
-        {currentView !== 'support' && (
+        {currentView !== 'support' && !isAdminLoginView && (
         <header className="lg:hidden h-14 bg-white border-b border-[#e9e9e8] flex items-center justify-between px-4 font-medium text-sm z-40 relative">
           <div className="flex items-center gap-2 min-w-0">
             <button
@@ -4762,7 +4786,7 @@ const App: React.FC = () => {
 
         {/* Scrollable View Content */}
         <div className={`flex-1 relative scroll-smooth ${['todo', 'journal', 'calendar'].includes(currentView) ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-          <div className={`h-full mx-auto ${['todo', 'journal', 'calendar', 'support'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1440px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
+          <div className={`h-full mx-auto ${['todo', 'journal', 'calendar', 'support', 'admin'].includes(currentView) ? 'max-w-none p-0' : 'max-w-[1440px] p-3 sm:p-4 lg:p-8 lg:pt-10'}`}>
             <ViewErrorBoundary view={currentView} onRecover={() => setCurrentView('chat')}>
               <React.Suspense fallback={<ViewLoadingFallback />}>
                 {renderView()}

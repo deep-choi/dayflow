@@ -1,16 +1,9 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { AIAgent, AppSettings, ApiConnection, PersonaMemory, ThemeMode, User } from '../types';
-import { Plus, Trash2, Save, RotateCcw, Download, Trash, Edit3, X, CheckCircle2, Circle, FlaskConical, Upload, Image as ImageIcon, SunMedium, Moon, Monitor, LogOut } from 'lucide-react';
-import { callGeminiAPI } from '../utils/gemini';
-import { testXaiConnection } from '../services/xaiService';
-import { testOpenAIConnection } from '../services/openaiService';
-import { testAnthropicConnection } from '../services/anthropicService';
-import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
-import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
-import { DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL, getDefaultModelForProvider, getModelOptionsForProvider, hasProviderModelOptions, isChatSupportedProvider, normalizeProviderModelName } from '../utils/aiConfig';
+import React, { useState, useEffect } from 'react';
+import { AIAgent, AppSettings, PersonaMemory, ThemeMode, User } from '../types';
+import { Trash2, Save, Download, Trash, Upload, SunMedium, Moon, Monitor, LogOut } from 'lucide-react';
 import PersonaSettingsView from './PersonaSettingsView';
 
-type SettingsTab = 'account' | 'theme' | 'api' | 'persona' | 'data';
+type SettingsTab = 'account' | 'theme' | 'persona' | 'data';
 
 interface SettingsViewProps {
     agents: AIAgent[];
@@ -35,39 +28,11 @@ interface SettingsViewProps {
     onClearAgentPersonaMemories: (agentId: string) => void;
 }
 
-const maskApiKey = (key: string): string => {
-    if (!key) return '';
-    if (key.length <= 10) return `${key.slice(0, 3)}...`;
-    return `${key.slice(0, 6)}...${key.slice(-4)}`;
-};
-
 const THEME_OPTIONS: { id: ThemeMode; label: string; description: string; icon: React.ElementType }[] = [
     { id: 'system', label: '시스템', description: 'OS 설정을 따릅니다.', icon: Monitor },
     { id: 'light', label: '라이트', description: '밝은 테마를 사용합니다.', icon: SunMedium },
     { id: 'dark', label: '다크', description: '어두운 테마를 사용합니다.', icon: Moon },
 ];
-
-const normalizeConnectionModelName = (provider: ApiConnection['provider'], modelName: string): string => {
-    return normalizeProviderModelName(provider, modelName);
-};
-
-const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xAI';
-    if (provider === 'openai') return 'OpenAI';
-    if (provider === 'anthropic') return 'Anthropic';
-    if (provider === 'gemini') return 'Gemini';
-    if (provider === 'ollama') return 'Ollama';
-    return '기타 로컬 서버';
-};
-
-const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xai-...';
-    if (provider === 'openai') return 'sk-...';
-    if (provider === 'anthropic') return 'sk-ant-...';
-    if (provider === 'gemini') return 'AIza...';
-    if (provider === 'custom') return '선택 사항';
-    return 'API Key';
-};
 
 const SettingsView: React.FC<SettingsViewProps> = ({
     agents,
@@ -93,132 +58,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
     const [activeTab, setActiveTab] = useState<SettingsTab>('account');
 
-    // API states
-    const [isAdding, setIsAdding] = useState(false);
-    const [testingId, setTestingId] = useState<string | null>(null);
-    const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false);
-    const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-    const [newConnection, setNewConnection] = useState<Partial<ApiConnection>>({
-        provider: 'gemini',
-        isActive: true,
-        modelName: DEFAULT_GEMINI_MODEL,
-        apiKey: '',
-    });
-
     const [userDraft, setUserDraft] = useState<User | null>(currentUser);
     useEffect(() => {
         if (currentUser) setUserDraft(currentUser);
     }, [currentUser]);
 
-    const connections = settings.apiConnections || [];
-    const selectedConnection = useMemo(() => {
-        const byId = connections.find(c => c.id === settings.activeConnectionId);
-        if (byId) return byId;
-        return connections.find(c => c.isActive);
-    }, [connections, settings.activeConnectionId]);
-
-    // --- API helpers ---
-    const persistConnections = (nextConnections: ApiConnection[], preferredId?: string) => {
-        const normalizedConnections = nextConnections.map(connection => ({
-            ...connection,
-            modelName: normalizeConnectionModelName(connection.provider, connection.modelName),
-        }));
-
-        onUpdateSettings((prev) => {
-            const resolvedId =
-                preferredId && normalizedConnections.some(c => c.id === preferredId)
-                    ? preferredId
-                    : prev.activeConnectionId && normalizedConnections.some(c => c.id === prev.activeConnectionId)
-                        ? prev.activeConnectionId
-                        : normalizedConnections[0]?.id;
-            // Keep ALL connections isActive:true — activeConnectionId tracks the global default
-            const normalized = normalizedConnections.map(c => ({ ...c, isActive: true }));
-            const activeGemini = normalized.find(c => c.id === resolvedId && c.provider === 'gemini') || normalized.find(c => c.provider === 'gemini');
-            return {
-                ...prev,
-                apiConnections: normalized,
-                activeConnectionId: resolvedId,
-                geminiApiKey: activeGemini?.apiKey || '',
-            };
-        });
-    };
-    const updateConnectionModel = (connectionId: string, modelName: string) => {
-        const updated = connections.map(conn => {
-            if (conn.id !== connectionId) return conn;
-            const normalized = normalizeConnectionModelName(conn.provider, modelName);
-            return { ...conn, modelName: normalized };
-        });
-        persistConnections(updated);
-    };
-
-    const isSelectableProvider = (provider: ApiConnection['provider']) => isChatSupportedProvider(provider);
-    const loadLocalModels = async () => {
-        setIsLoadingOllamaModels(true);
-        try {
-            const models = newConnection.provider === 'custom'
-                ? await listLocalServerModels(newConnection.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, newConnection.apiKey)
-                : await listOllamaModels(newConnection.baseUrl || DEFAULT_OLLAMA_BASE_URL);
-            setOllamaModels(models);
-            if (models.length > 0) {
-                setNewConnection(prev => ({ ...prev, modelName: models.includes(prev.modelName || '') ? prev.modelName : models[0] }));
-            } else {
-                alert('서버에서 불러올 수 있는 모델이 없습니다. 모델 이름을 직접 입력해 주세요.');
-            }
-        } catch (error: any) {
-            alert(`로컬 모델을 불러오지 못했습니다: ${error?.message || '알 수 없는 오류'}`);
-        } finally {
-            setIsLoadingOllamaModels(false);
-        }
-    };
-    const addConnection = () => {
-        const provider = (newConnection.provider as ApiConnection['provider']) || 'gemini';
-        const modelName = (newConnection.modelName || '').trim();
-        const apiKey = (newConnection.apiKey || '').trim();
-        const isLocalProvider = provider === 'ollama' || provider === 'custom';
-        const baseUrl = (newConnection.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim();
-        if (!modelName || (!isLocalProvider && !apiKey) || (isLocalProvider && !baseUrl)) return;
-        const connection: ApiConnection = {
-            id: crypto.randomUUID(),
-            provider,
-            modelName: normalizeConnectionModelName(provider, modelName),
-            apiKey,
-            baseUrl: isLocalProvider ? baseUrl : undefined,
-            isActive: true
-        };
-        persistConnections([...connections, connection], connection.id);
-        setIsAdding(false);
-        setNewConnection({ provider: 'gemini', isActive: true, modelName: DEFAULT_GEMINI_MODEL, apiKey: '', baseUrl: undefined });
-    };
-    const deleteConnection = (id: string) => {
-        if (!window.confirm('이 API 연결을 삭제할까요?')) return;
-        persistConnections(connections.filter(c => c.id !== id));
-    };
-    const selectModelConnection = (conn: ApiConnection) => {
-        if (!isSelectableProvider(conn.provider)) { alert('현재 앱은 지원되는 채팅용 모델 연결만 AI 기능에 사용합니다.'); return; }
-        persistConnections(connections, conn.id);
-    };
-    const testConnection = async (conn: ApiConnection) => {
-        if (!isSelectableProvider(conn.provider)) { alert('지원되는 채팅용 모델만 연결할 수 있습니다.'); return; }
-        setTestingId(conn.id);
-        try {
-            if (conn.provider === 'ollama') {
-                await testOllamaConnection(conn.baseUrl, conn.modelName);
-            } else if (conn.provider === 'custom') {
-                await testLocalServerConnection(conn.baseUrl, conn.apiKey, conn.modelName);
-            } else if (conn.provider === 'xai') {
-                await testXaiConnection(conn.apiKey, conn.modelName);
-            } else if (conn.provider === 'openai') {
-                await testOpenAIConnection(conn.apiKey, conn.modelName);
-            } else if (conn.provider === 'anthropic') {
-                await testAnthropicConnection(conn.apiKey, conn.modelName);
-            } else {
-                await callGeminiAPI(conn.apiKey, '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.', undefined, conn.modelName);
-            }
-            alert(`연결 성공: ${conn.modelName}`);
-        } catch (error: any) {
-            alert(`연결 실패: ${error?.message || '알 수 없는 오류'}`);
-        } finally { setTestingId(null); }
-    };
 
     const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
         const file = e.target.files?.[0];
@@ -241,7 +85,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     const tabs: { id: SettingsTab; label: string }[] = [
         { id: 'account', label: '계정' },
         { id: 'theme', label: '테마' },
-        { id: 'api', label: 'API 연결' },
         { id: 'persona', label: '페르소나' },
         { id: 'data', label: '데이터 관리' },
     ];
@@ -251,7 +94,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             {/* Header */}
             <div className="pt-4 mb-6">
                 <h1 className="text-base font-medium text-[#37352f] tracking-normal">설정</h1>
-                <p className="text-sm text-[#9b9a97] mt-1">AI 연결, 페르소나, 데이터를 관리합니다.</p>
+                <p className="text-sm text-[#9b9a97] mt-1">계정, 페르소나와 데이터를 관리합니다.</p>
             </div>
 
             {/* Tab Navigation */}
@@ -388,167 +231,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
             )}
 
-            {/* ===== API 연결 탭 ===== */}
-            {activeTab === 'api' && (
-                <div className="space-y-6">
-                    <div className="rounded-xl border border-[#e9e9e8] bg-white p-5">
-                        <p className="text-sm text-[#787774]">현재 선택된 API 연결</p>
-                        <p className="text-base font-medium mt-1 text-[#37352f]">
-                            {selectedConnection ? `${selectedConnection.modelName} (${selectedConnection.provider})` : '선택된 모델 없음'}
-                        </p>
-                        <p className="text-[13px] leading-5 text-[#9b9a97] mt-2">모든 페르소나는 이 기본 연결을 함께 사용하며, 필요한 페르소나만 별도 연결로 바꿀 수 있습니다.</p>
-                    </div>
-
-                    <div className="space-y-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-1 gap-2">
-                            <h3 className="font-medium text-base text-[#37352f]">연결된 API ({connections.length})</h3>
-                            <button onClick={() => setIsAdding(true)} className="inline-flex items-center gap-2 px-3 py-1.5 bg-[#f7f7f7] text-[#171717] rounded-lg hover:bg-[#eeeeee] transition-colors text-sm font-medium w-full sm:w-auto justify-center">
-                                <Plus size={14} /> API 연결 추가
-                            </button>
-                        </div>
-
-                        {connections.length === 0 && (
-                            <div className="bg-[#fbfbfa] rounded-xl p-8 text-center text-[#9b9a97]">
-                                연결된 API가 없습니다. API Key를 추가하고 모델을 선택해주세요.
-                            </div>
-                        )}
-
-                        {connections.map(conn => {
-                            const isSelected = conn.id === selectedConnection?.id;
-                            const isSelectable = isSelectableProvider(conn.provider);
-                            const modelOptions = getModelOptionsForProvider(conn.provider);
-                            const hasModelDropdown = modelOptions.length > 0;
-                            return (
-                                <div key={conn.id} className={`rounded-xl border p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 transition-colors ${isSelected ? 'border-[var(--color-primary)] bg-[#f7f7f7]' : 'border-[#e9e9e8] bg-white'}`}>
-                                    <div className="flex items-start sm:items-center gap-4 min-w-0 flex-1">
-                                        <button onClick={() => selectModelConnection(conn)} className={`w-5 h-5 rounded-full flex items-center justify-center ${isSelected ? 'text-[#27c93f]' : 'text-[#d3d1cb]'}`}>
-                                            {isSelected ? <CheckCircle2 size={18} /> : <Circle size={18} />}
-                                        </button>
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <span className="text-[13px] leading-5 font-medium px-1.5 py-0.5 bg-[#f1f1f0] text-[#787774] rounded">{conn.provider}</span>
-                                                {hasModelDropdown ? (
-                                                    <select value={conn.modelName} onChange={(e) => updateConnectionModel(conn.id, e.target.value)} className="text-sm font-medium border border-[#e9e9e8] rounded-lg px-2 py-1 bg-white w-full sm:w-auto min-w-0 outline-none focus:border-[var(--color-primary)]">
-                                                        {modelOptions.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
-                                                    </select>
-                                                ) : <span className="font-medium text-sm">{conn.modelName}</span>}
-                                            </div>
-                                            <p className="text-sm text-[#9b9a97] font-mono mt-1 break-all">{conn.provider === 'ollama' || conn.provider === 'custom' ? conn.baseUrl : maskApiKey(conn.apiKey)}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
-                                        <button onClick={() => selectModelConnection(conn)} disabled={!isSelectable} className={`px-3 py-1.5 rounded-lg text-[13px] leading-5 font-medium transition-colors ${isSelected ? 'bg-white text-[#171717]' : isSelectable ? 'bg-[#f1f1f0] text-[#37352f] hover:bg-[#e9e9e8]' : 'bg-[#f7f7f5] text-[#b4b3af] cursor-not-allowed'}`}>
-                                            {isSelected ? '선택됨' : isSelectable ? '선택' : '준비중'}
-                                        </button>
-                                        <button onClick={() => testConnection(conn)} disabled={!isSelectable || testingId === conn.id} className={`px-3 py-1.5 rounded-lg text-[13px] leading-5 font-medium transition-colors ${!isSelectable ? 'bg-[#f7f7f5] text-[#b4b3af] cursor-not-allowed' : 'bg-[#f3f3f3] text-[#171717] hover:bg-[#e9e9e9]'}`}>
-                                            <span className="inline-flex items-center gap-1.5"><FlaskConical size={13} />{testingId === conn.id ? '연결 중...' : '연결하기'}</span>
-                                        </button>
-                                        <button onClick={() => deleteConnection(conn.id)} className="p-2 text-[#9b9a97] hover:text-[#eb5757] hover:bg-[#fff0f0] rounded-lg transition-colors"><Trash2 size={16} /></button>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="rounded-xl border border-[#e9e9e8] bg-white p-6">
-                            <h3 className="font-medium mb-1 text-[#37352f]">보안 안내</h3>
-                            <p className="text-sm text-[#787774] leading-relaxed">API Key는 브라우저와 앱 데이터 동기화 저장소에 보관될 수 있습니다. 개인용 키 사용을 권장합니다.</p>
-                        </div>
-                        <div className="rounded-xl border border-[#e9e9e8] bg-white p-6">
-                            <h3 className="font-medium mb-1 text-[#37352f]">사용량 안내</h3>
-                            <div className="flex justify-between items-center mt-2">
-                                <span className="text-sm text-[#787774]">전체 요청 수</span>
-                                <span className="font-medium">{settings.apiUsage?.totalRequests || 0}회</span>
-                            </div>
-                            <div className="flex justify-between items-center mt-1">
-                                <span className="text-sm text-[#787774]">누적 토큰</span>
-                                <span className="font-medium">{(settings.apiUsage?.totalTokens || 0).toLocaleString()}</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Add Connection Modal */}
-                    {isAdding && (
-                        <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
-                            <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5">
-                                <div className="flex justify-between items-center mb-2">
-                                    <h3 className="text-base font-medium">새 API 연결 추가</h3>
-                                    <button onClick={() => setIsAdding(false)} className="p-1 hover:bg-[#f1f1f0] rounded-full"><X size={20} className="text-[#9b9a97]" /></button>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">Provider</label>
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {(['gemini', 'xai', 'openai', 'anthropic', 'ollama', 'custom'] as const).map(provider => {
-                                            return (
-                                                <button key={provider} onClick={() => {
-                                                    setOllamaModels([]);
-                                                    setNewConnection({
-                                                        ...newConnection,
-                                                        provider,
-                                                        modelName: getDefaultModelForProvider(provider),
-                                                        apiKey: '',
-                                                        baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
-                                                    });
-                                                }}
-                                                    className={`px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${newConnection.provider === provider ? 'bg-[#eeeeee] text-[#171717]' : 'bg-[#f7f7f7] text-[#787774] hover:bg-[#eeeeee]'}`}>
-                                                    {getProviderDisplayName(provider)}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                                {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && (
-                                    <div>
-                                        <label className="block text-sm font-medium mb-2">{newConnection.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</label>
-                                        <input
-                                            type="url"
-                                            placeholder={newConnection.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
-                                            value={newConnection.baseUrl || (newConnection.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
-                                            onChange={e => setNewConnection({ ...newConnection, baseUrl: e.target.value })}
-                                            className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[var(--color-primary)] font-mono text-sm"
-                                        />
-                                    </div>
-                                )}
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">모델</label>
-                                    {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && ollamaModels.length > 0 ? (
-                                        <select title={newConnection.modelName || ''} value={newConnection.modelName || ''} onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })} className="w-full p-3 pr-10 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[var(--color-primary)] truncate">
-                                            {ollamaModels.map(model => <option key={model} value={model}>{model}</option>)}
-                                        </select>
-                                    ) : newConnection.provider && hasProviderModelOptions(newConnection.provider) ? (
-                                        <select value={newConnection.modelName || getDefaultModelForProvider(newConnection.provider)} onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })} className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[var(--color-primary)]">
-                                            {getModelOptionsForProvider(newConnection.provider).map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
-                                        </select>
-                                    ) : (
-                                        <input type="text" placeholder={newConnection.provider === 'ollama' || newConnection.provider === 'custom' ? '모델 목록을 불러오거나 직접 입력' : '예: gpt-4o'} value={newConnection.modelName || ''} onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })} className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[var(--color-primary)]" />
-                                    )}
-                                </div>
-                                {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && (
-                                    <button type="button" onClick={() => void loadLocalModels()} disabled={isLoadingOllamaModels} className="w-full py-2.5 border border-[#e9e9e8] rounded-xl text-sm text-[#37352f] hover:bg-[#f7f7f7] transition-colors disabled:opacity-50">
-                                        {isLoadingOllamaModels ? '로컬 모델 불러오는 중...' : '로컬 모델 목록 불러오기'}
-                                    </button>
-                                )}
-                                {newConnection.provider !== 'ollama' && <div>
-                                    <label className="block text-sm font-medium mb-2">API Key{newConnection.provider === 'custom' ? ' (선택 사항)' : ''}</label>
-                                    <input type="password" placeholder={getApiKeyPlaceholder(newConnection.provider)} value={newConnection.apiKey || ''} onChange={e => setNewConnection({ ...newConnection, apiKey: e.target.value })} className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[var(--color-primary)] font-mono text-sm" />
-                                </div>}
-                                <button onClick={addConnection} disabled={!newConnection.modelName || (!['ollama', 'custom'].includes(newConnection.provider || '') && !newConnection.apiKey)} className="w-full py-3.5 bg-[#f7f7f7] text-[#171717] rounded-xl hover:bg-[#eeeeee] transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed mt-2">
-                                    연결 추가하기
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* ===== 페르소나 탭 ===== */}
+           {/* ===== 페르소나 탭 ===== */}
             {activeTab === 'persona' && (
                 <PersonaSettingsView
                     agents={agents}
                     onUpdateAgents={onUpdateAgents}
-                    settings={settings}
-                    onUpdateSettings={onUpdateSettings}
                     personaMemories={personaMemories}
                     onAddPersonaMemory={onAddPersonaMemory}
                     onForgetPersonaMemory={onForgetPersonaMemory}

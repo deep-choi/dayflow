@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Mail, Lock, User, ArrowRight, Loader2, KeyRound, X } from 'lucide-react';
+import { Mail, Lock, User, ArrowRight, Loader2, X } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 
 interface AuthViewProps {
@@ -23,7 +23,6 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [name, setName] = useState('');
-    const [apiKey, setApiKey] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -88,7 +87,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
                         email: data.user.email,
                         name: profile?.name || data.user.email?.split('@')[0],
                         avatar: profile?.avatar_url || data.user.user_metadata?.avatar_url || data.user.user_metadata?.picture || '',
-                        geminiApiKey: profile?.gemini_api_key || ''
+                        isAdmin: data.user.app_metadata?.role === 'admin' || data.user.app_metadata?.is_admin === true,
                     };
                     onLogin(userData);
                 }
@@ -114,7 +113,6 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
                             {
                                 id: data.user.id,
                                 name,
-                                gemini_api_key: apiKey
                             }
                         ]);
 
@@ -131,7 +129,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
                         id: data.user.id,
                         email: data.user.email,
                         name: name,
-                        geminiApiKey: apiKey
+                        isAdmin: data.user.app_metadata?.role === 'admin' || data.user.app_metadata?.is_admin === true,
                     };
                     onLogin(userData);
                 }
@@ -246,23 +244,6 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
                                 />
                             </div>
                         </div>
-
-                        {!isLogin && (
-                            <div className="space-y-2">
-                                <label className="text-[13px] leading-5 font-medium text-[#787774] uppercase tracking-wider ml-1">API Key (선택)</label>
-                                <div className="relative">
-                                    <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9b9a97]" />
-                                    <input
-                                        type="password"
-                                        placeholder="AIza..."
-                                        value={apiKey}
-                                        onChange={e => setApiKey(e.target.value)}
-                                        className="w-full pl-11 pr-4 py-2.5 bg-[#f7f7f5] border border-transparent rounded-xl focus:border-[var(--color-primary)] transition-colors outline-none text-sm font-mono placeholder:font-sans sm:py-3"
-                                    />
-                                </div>
-                                <p className="text-[13px] leading-5 text-[#9b9a97] ml-1">설정에서 나중에 등록할 수 있습니다.</p>
-                            </div>
-                        )}
 
                         {error && (
                             <p className="text-[13px] leading-5 text-[#eb5757] font-medium ml-1 animate-in shake-1 duration-300">

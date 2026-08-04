@@ -1,12 +1,54 @@
 import { loadTossPayments } from '@tosspayments/tosspayments-sdk';
 import { supabase } from '../utils/supabase';
 
-export const TEMPORARY_PRO_PLAN = {
-  id: 'dayflow_pro_monthly',
-  name: 'Dayflow Pro',
-  amount: 9_900,
-  aiQuota: 300,
-} as const;
+export type BillingPlanId = 'dayflow_free' | 'dayflow_plus_monthly' | 'dayflow_pro_monthly';
+export type PaidBillingPlanId = Exclude<BillingPlanId, 'dayflow_free'>;
+
+export type BillingPlan = {
+  id: BillingPlanId;
+  name: string;
+  amount: number;
+  aiQuota: number;
+  currency: 'KRW';
+  billingCycle: 'none' | 'monthly';
+  isPaid: boolean;
+};
+
+export const BILLING_PLANS = [
+  {
+    id: 'dayflow_free',
+    name: 'Free',
+    amount: 0,
+    aiQuota: 10,
+    currency: 'KRW',
+    billingCycle: 'none',
+    isPaid: false,
+  },
+  {
+    id: 'dayflow_plus_monthly',
+    name: 'Dayflow Plus',
+    amount: 4_900,
+    aiQuota: 100,
+    currency: 'KRW',
+    billingCycle: 'monthly',
+    isPaid: true,
+  },
+  {
+    id: 'dayflow_pro_monthly',
+    name: 'Dayflow Pro',
+    amount: 9_900,
+    aiQuota: 300,
+    currency: 'KRW',
+    billingCycle: 'monthly',
+    isPaid: true,
+  },
+] as const satisfies readonly BillingPlan[];
+
+export const getBillingPlan = (planId: string | null | undefined): BillingPlan | null =>
+  BILLING_PLANS.find((plan) => plan.id === planId) || null;
+
+export const isPaidBillingPlanId = (planId: string | null | undefined): planId is PaidBillingPlanId =>
+  planId === 'dayflow_plus_monthly' || planId === 'dayflow_pro_monthly';
 
 export type BillingSubscription = {
   plan_id: string;
@@ -19,7 +61,6 @@ export type BillingSubscription = {
   canceled_at: string | null;
 };
 
-type BillingPlan = typeof TEMPORARY_PRO_PLAN & { currency: string; billingCycle: string };
 type BillingResponse = {
   clientKey?: string;
   customerKey?: string;
@@ -72,8 +113,8 @@ export const getSubscriptionStatus = async (): Promise<BillingSubscription | nul
   return response.subscription || null;
 };
 
-export const requestBillingCardRegistration = async (): Promise<void> => {
-  const prepared = await invokeBilling({ action: 'prepare', planId: TEMPORARY_PRO_PLAN.id });
+export const requestBillingCardRegistration = async (planId: PaidBillingPlanId): Promise<void> => {
+  const prepared = await invokeBilling({ action: 'prepare', planId });
   if (!prepared.clientKey || !prepared.customerKey) {
     throw new BillingError('BILLING_PREPARE_INVALID', '결제 준비 정보가 올바르지 않습니다.');
   }
@@ -82,6 +123,7 @@ export const requestBillingCardRegistration = async (): Promise<void> => {
   returnUrl.searchParams.set('view', 'support');
   returnUrl.searchParams.set('tab', 'pricing');
   returnUrl.searchParams.set('billing', 'success');
+  returnUrl.searchParams.set('billingPlan', planId);
   const failUrl = new URL(returnUrl);
   failUrl.searchParams.set('billing', 'fail');
 
@@ -96,12 +138,16 @@ export const requestBillingCardRegistration = async (): Promise<void> => {
   });
 };
 
-export const confirmBillingCardRegistration = async (authKey: string, customerKey: string): Promise<BillingSubscription> => {
+export const confirmBillingCardRegistration = async (
+  authKey: string,
+  customerKey: string,
+  planId: PaidBillingPlanId,
+): Promise<BillingSubscription> => {
   const response = await invokeBilling({
     action: 'confirm',
     authKey,
     customerKey,
-    planId: TEMPORARY_PRO_PLAN.id,
+    planId,
   });
   if (!response.subscription) throw new BillingError('SUBSCRIPTION_EMPTY', '구독 시작 결과를 확인하지 못했습니다.');
   return response.subscription;

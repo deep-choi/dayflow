@@ -1,14 +1,31 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 
 const TOSS_API_BASE = 'https://api.tosspayments.com';
-const PLAN = {
-  id: 'dayflow_pro_monthly',
-  name: 'Dayflow Pro 월간 구독',
-  amount: 9_900,
-  currency: 'KRW',
-  aiQuota: 300,
-  billingCycle: 'monthly',
+const PAID_PLANS = {
+  dayflow_plus_monthly: {
+    id: 'dayflow_plus_monthly',
+    name: 'Dayflow Plus 월간 구독',
+    amount: 4_900,
+    currency: 'KRW',
+    aiQuota: 100,
+    billingCycle: 'monthly',
+  },
+  dayflow_pro_monthly: {
+    id: 'dayflow_pro_monthly',
+    name: 'Dayflow Pro 월간 구독',
+    amount: 9_900,
+    currency: 'KRW',
+    aiQuota: 300,
+    billingCycle: 'monthly',
+  },
 } as const;
+
+type PaidPlanId = keyof typeof PAID_PLANS;
+
+const getPaidPlan = (value: unknown) =>
+  typeof value === 'string' && Object.prototype.hasOwnProperty.call(PAID_PLANS, value)
+    ? PAID_PLANS[value as PaidPlanId]
+    : null;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -83,6 +100,11 @@ Deno.serve(async (request) => {
   const userId = userData.user.id;
 
   if (action === 'prepare') {
+    const plan = getPaidPlan(body.planId);
+    if (!plan) {
+      return json(400, { code: 'INVALID_PLAN', message: '선택한 요금제를 확인하지 못했습니다.' });
+    }
+
     const { data: existing, error: lookupError } = await admin
       .from('billing_customers')
       .select('customer_key')
@@ -110,7 +132,7 @@ Deno.serve(async (request) => {
       customerKey,
       customerEmail: userData.user.email || null,
       customerName: userData.user.user_metadata?.name || userData.user.user_metadata?.full_name || null,
-      plan: PLAN,
+      plan,
     });
   }
 
@@ -124,30 +146,31 @@ Deno.serve(async (request) => {
       console.error('Subscription lookup failed:', error.message);
       return json(500, { code: 'SUBSCRIPTION_LOOKUP_FAILED', message: '구독 상태를 확인하지 못했습니다.' });
     }
-    return json(200, { subscription: data || null, plan: PLAN });
+    return json(200, { subscription: data || null, plans: Object.values(PAID_PLANS) });
   }
 
   if (action === 'confirm') {
     const authKey = typeof body.authKey === 'string' ? body.authKey : '';
     const customerKey = typeof body.customerKey === 'string' ? body.customerKey : '';
-    const planId = typeof body.planId === 'string' ? body.planId : '';
-    if (!authKey || !customerKey || planId !== PLAN.id) {
+    const plan = getPaidPlan(body.planId);
+    if (!authKey || !customerKey || !plan) {
       return json(400, { code: 'INVALID_BILLING_AUTH', message: '카드 등록 결과가 올바르지 않습니다.' });
     }
 
     // 리다이렉트 재시도나 새로고침으로 첫 결제가 중복 승인되지 않도록 서버에서 막습니다.
     const { data: activeSubscription, error: activeLookupError } = await admin
       .from('billing_subscriptions')
-      .select('status')
+      .select('status,current_period_end')
       .eq('user_id', userId)
-      .eq('status', 'active')
+      .in('status', ['active', 'canceled'])
+      .gt('current_period_end', new Date().toISOString())
       .maybeSingle();
     if (activeLookupError) {
       console.error('Active subscription lookup failed:', activeLookupError.message);
       return json(500, { code: 'SUBSCRIPTION_LOOKUP_FAILED', message: '기존 구독 상태를 확인하지 못했습니다.' });
     }
     if (activeSubscription) {
-      return json(409, { code: 'SUBSCRIPTION_ALREADY_ACTIVE', message: '이미 이용 중인 Dayflow Pro 구독이 있습니다.' });
+      return json(409, { code: 'SUBSCRIPTION_ALREADY_ACTIVE', message: '아직 이용기간이 남아 있는 유료 요금제가 있습니다.' });
     }
 
     const { data: customer, error: customerError } = await admin
@@ -194,9 +217,9 @@ Deno.serve(async (request) => {
       },
       body: JSON.stringify({
         customerKey,
-        amount: PLAN.amount,
+        amount: plan.amount,
         orderId,
-        orderName: PLAN.name,
+        orderName: plan.name,
         customerEmail: userData.user.email || undefined,
         customerName: userData.user.user_metadata?.name || userData.user.user_metadata?.full_name || undefined,
       }),
@@ -206,8 +229,8 @@ Deno.serve(async (request) => {
       await admin.from('billing_payments').insert({
         user_id: userId,
         toss_order_id: orderId,
-        plan_id: PLAN.id,
-        amount: PLAN.amount,
+        plan_id: plan.id,
+        amount: plan.amount,
         status: 'FAILED',
         failure_code: paymentError.code,
         failure_message: paymentError.message,
@@ -226,7 +249,7 @@ Deno.serve(async (request) => {
       .from('billing_subscriptions')
       .upsert({
         user_id: userId,
-        plan_id: PLAN.id,
+        plan_id: plan.id,
         status: 'active',
         billing_key: billing.billingKey,
         card_company: cardCompany,
@@ -250,8 +273,8 @@ Deno.serve(async (request) => {
       subscription_id: subscription.id,
       toss_order_id: orderId,
       payment_key: payment.paymentKey || null,
-      plan_id: PLAN.id,
-      amount: PLAN.amount,
+      plan_id: plan.id,
+      amount: plan.amount,
       status: payment.status || 'DONE',
       approved_at: periodStart.toISOString(),
     });
@@ -259,7 +282,7 @@ Deno.serve(async (request) => {
 
     return json(200, {
       subscription: {
-        plan_id: PLAN.id,
+        plan_id: plan.id,
         status: 'active',
         card_company: cardCompany,
         card_number_masked: cardNumberMasked,

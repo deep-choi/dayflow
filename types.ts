@@ -170,6 +170,7 @@ export interface AppSettings {
   autoAiReactions: boolean;
   chatActionConfirm: boolean;
   theme: ThemeMode;
+  preferredDayflowModel?: string;
   geminiApiKey?: string; // @deprecated use apiConnections
   apiConnections: ApiConnection[];
   activeConnectionId?: string;
@@ -186,7 +187,7 @@ export interface User {
   email: string;
   name: string;
   avatar?: string;
-  geminiApiKey?: string;
+  isAdmin?: boolean;
 }
 
 export interface ApiUsageStats {
@@ -285,7 +286,7 @@ export interface PersonaMemory {
   updatedAt: string;
 }
 
-export type ViewState = 'dashboard' | 'calendar' | 'todo' | 'journal' | 'board' | 'chat' | 'support' | 'settings' | 'api-settings' | 'personas';
+export type ViewState = 'dashboard' | 'calendar' | 'todo' | 'journal' | 'board' | 'chat' | 'support' | 'admin' | 'settings' | 'api-settings' | 'personas';
 
 export interface TriggerContext {
   trigger: 'todo_completed' | 'todo_added' | 'event_added' | 'journal_added' | 'scheduled_digest';

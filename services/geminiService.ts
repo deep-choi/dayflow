@@ -1342,6 +1342,7 @@ ${actionInstruction}
         temperature: request.config?.temperature,
         maxOutputTokens: request.config?.maxOutputTokens,
         trialTurnId: options.trialTurnId,
+        model: modelName as Parameters<typeof generateTrialGeminiContent>[0]['model'],
       });
     };
     const response = await generateGeminiChatContent({

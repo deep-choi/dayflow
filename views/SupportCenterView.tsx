@@ -1,11 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  BILLING_PLANS,
   BillingError,
+  type BillingPlanId,
   type BillingSubscription,
-  TEMPORARY_PRO_PLAN,
+  type PaidBillingPlanId,
   cancelSubscription,
   confirmBillingCardRegistration,
+  getBillingPlan,
   getSubscriptionStatus,
+  isPaidBillingPlanId,
   requestBillingCardRegistration,
 } from '../services/billingService';
 
@@ -53,7 +57,7 @@ const PAGE_META: Record<SupportTabId, { eyebrow: string; title: string; descript
   pricing: {
     eyebrow: '결제 안내',
     title: '요금제',
-    description: 'Dayflow Pro의 임시 요금과 웹 정기결제를 확인하세요.',
+    description: '무료와 두 가지 유료 구독 요금제를 비교하고 선택하세요.',
   },
   refund: {
     eyebrow: '결제 안내',
@@ -111,7 +115,7 @@ const MainPanel = ({ onTabChange }: Pick<SupportCenterViewProps, 'onTabChange'>)
   <div className="divide-y divide-[#e7e7e5]">
     {[
       ['support', '고객지원 · FAQ', '계정, 데이터, 결제와 AI 이용에 관한 자주 묻는 질문을 확인합니다.'],
-      ['pricing', '요금제 안내', 'Dayflow Pro 출시 준비 현황과 요금 공개 원칙을 확인합니다.'],
+      ['pricing', '요금제 안내', '무료·Plus·Pro 요금과 AI 제공량을 비교합니다.'],
       ['refund', '구독 해지와 환불', '자동결제 해지와 환불 처리 기준을 확인합니다.'],
       ['privacy', '개인정보 보호', 'Dayflow가 사용자 데이터를 처리하는 원칙을 확인합니다.'],
     ].map(([id, title, description]) => (
@@ -133,11 +137,11 @@ const FAQS = [
   { category: '서비스 이용', question: '저장한 일정이나 할 일이 보이지 않아요.', answer: '같은 계정으로 로그인했는지 확인한 뒤 동기화가 끝날 때까지 잠시 기다려 주세요. 계속 보이지 않는다면 데이터를 새로 만들지 말고 고객지원에 먼저 문의해 주세요.' },
   { category: '계정', question: '로그인이 되지 않아요.', answer: '가입할 때 사용한 로그인 방식과 이메일을 확인해 주세요. 비밀번호 로그인이라면 비밀번호 재설정을 진행하고, Google 로그인이라면 동일한 Google 계정을 선택해 주세요.' },
   { category: '계정', question: '회원탈퇴를 하면 데이터는 어떻게 되나요?', answer: '탈퇴가 완료되면 법령상 보관이 필요한 정보를 제외한 계정 데이터는 정해진 절차에 따라 삭제됩니다. 삭제된 데이터는 복구할 수 없도록 안내한 뒤 최종 확인을 받습니다.' },
-  { category: '결제 및 환불', question: 'Dayflow Pro는 언제 결제할 수 있나요?', answer: '현재 토스페이먼츠를 이용한 웹 정기결제를 준비하고 있습니다. 가격, 제공량과 출시일이 확정되면 요금제 페이지에서 결제 전에 안내합니다.' },
+  { category: '결제 및 환불', question: '어떤 요금제를 선택할 수 있나요?', answer: '현재 Free, 월 4,900원의 Dayflow Plus, 월 9,900원의 Dayflow Pro를 준비하고 있습니다. 가격과 AI 제공량은 정식 출시 전 변경될 수 있습니다.' },
   { category: '결제 및 환불', question: '구독은 언제든 해지할 수 있나요?', answer: '구독이 출시되면 내 계정에서 언제든 해지할 수 있도록 준비합니다. 해지 후에는 현재 이용기간 종료일까지 사용할 수 있고 다음 결제일부터 자동 청구가 중단됩니다.' },
   { category: '결제 및 환불', question: '결제 취소나 환불은 어떻게 요청하나요?', answer: '중복결제, 결제 오류, 결제 직후 미사용 여부와 서비스 장애 내역을 확인한 뒤 최종 환불정책과 관련 법령에 따라 처리합니다.' },
   { category: 'AI 이용', question: 'AI 답변이 부정확하거나 이상해요.', answer: 'AI 답변은 부정확할 수 있습니다. 중요한 정보는 반드시 다시 확인해 주세요. 같은 문제가 반복되면 사용한 모델과 질문 내용, 발생 시간을 고객지원에 전달해 주세요.' },
-  { category: 'AI 이용', question: '개인 API나 로컬 모델을 연결할 수 있나요?', answer: 'Dayflow는 지원되는 AI 제공업체의 개인 API와 로컬 모델 연결 기능을 제공합니다. 연결 정보는 설정의 AI 항목에서 관리할 수 있습니다.' },
+  { category: 'AI 이용', question: 'AI 이용량은 어떻게 정해지나요?', answer: '무료 이용자는 가입 체험량을, 유료 구독자는 선택한 요금제의 월 제공량을 사용합니다. 정확한 차감 단위와 초기화 시점은 정식 출시 전에 안내합니다.' },
 ] as const;
 
 const FAQ_CATEGORIES = ['전체', '서비스 이용', '계정', '결제 및 환불', 'AI 이용'] as const;
@@ -188,16 +192,36 @@ const formatDate = (value: string | null): string => {
   return new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(value));
 };
 
+const PLAN_FEATURES: Record<BillingPlanId, string[]> = {
+  dayflow_free: [
+    '일정, 할 일, 메모 관리',
+    '가입 후 AI 대화 10회 체험',
+    '카드 등록 없이 시작',
+  ],
+  dayflow_plus_monthly: [
+    'Free의 모든 기능 포함',
+    '매월 AI 대화 100회',
+    '웹에서 구독 상태와 결제일 관리',
+  ],
+  dayflow_pro_monthly: [
+    'Plus의 모든 기능 포함',
+    '매월 AI 대화 300회',
+    'AI를 자주 사용하는 사용자를 위한 제공량',
+  ],
+};
+
 const PricingPanel = ({ isAuthenticated, onLogin }: Pick<SupportCenterViewProps, 'isAuthenticated' | 'onLogin'>) => {
   const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
   const [isLoading, setIsLoading] = useState(isAuthenticated);
+  const [pendingPlanId, setPendingPlanId] = useState<PaidBillingPlanId | null>(null);
   const [notice, setNotice] = useState<{ tone: 'success' | 'error' | 'info'; message: string } | null>(null);
   const confirmationStarted = useRef(false);
 
   const clearBillingQuery = () => {
     const url = new URL(window.location.href);
-    ['billing', 'authKey', 'customerKey', 'code', 'message'].forEach((key) => url.searchParams.delete(key));
-    window.history.replaceState({}, document.title, `${url.pathname}?${url.searchParams.toString()}${url.hash}`);
+    ['billing', 'billingPlan', 'authKey', 'customerKey', 'code', 'message'].forEach((key) => url.searchParams.delete(key));
+    const query = url.searchParams.toString();
+    window.history.replaceState({}, document.title, `${url.pathname}${query ? `?${query}` : ''}${url.hash}`);
   };
 
   useEffect(() => {
@@ -208,16 +232,26 @@ const PricingPanel = ({ isAuthenticated, onLogin }: Pick<SupportCenterViewProps,
 
     const params = new URLSearchParams(window.location.search);
     const billingResult = params.get('billing');
+    const billingPlanId = params.get('billingPlan');
     const authKey = params.get('authKey');
     const customerKey = params.get('customerKey');
 
-    if (billingResult === 'success' && authKey && customerKey && !confirmationStarted.current) {
+    if (billingResult === 'success' && (!authKey || !customerKey || !isPaidBillingPlanId(billingPlanId))) {
+      setNotice({ tone: 'error', message: '결제 결과에서 선택한 요금제를 확인하지 못했습니다. 다시 시도해 주세요.' });
+      clearBillingQuery();
+      setIsLoading(false);
+      return;
+    }
+
+    if (billingResult === 'success' && authKey && customerKey && isPaidBillingPlanId(billingPlanId) && !confirmationStarted.current) {
       confirmationStarted.current = true;
       setIsLoading(true);
-      confirmBillingCardRegistration(authKey, customerKey)
+      setPendingPlanId(billingPlanId);
+      confirmBillingCardRegistration(authKey, customerKey, billingPlanId)
         .then((result) => {
           setSubscription(result);
-          setNotice({ tone: 'success', message: '카드 등록과 첫 결제가 완료되었습니다. Dayflow Pro 구독이 시작됐어요.' });
+          const planName = getBillingPlan(result.plan_id)?.name || '유료';
+          setNotice({ tone: 'success', message: `카드 등록과 첫 결제가 완료되었습니다. ${planName} 구독이 시작됐어요.` });
         })
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : '구독 시작을 완료하지 못했습니다.';
@@ -225,6 +259,7 @@ const PricingPanel = ({ isAuthenticated, onLogin }: Pick<SupportCenterViewProps,
         })
         .finally(() => {
           clearBillingQuery();
+          setPendingPlanId(null);
           setIsLoading(false);
         });
       return;
@@ -249,29 +284,31 @@ const PricingPanel = ({ isAuthenticated, onLogin }: Pick<SupportCenterViewProps,
       .finally(() => setIsLoading(false));
   }, [isAuthenticated]);
 
-  const startSubscription = async () => {
+  const startSubscription = async (planId: PaidBillingPlanId) => {
     if (!isAuthenticated) {
       onLogin();
       return;
     }
     setIsLoading(true);
+    setPendingPlanId(planId);
     setNotice(null);
     try {
-      await requestBillingCardRegistration();
+      await requestBillingCardRegistration(planId);
     } catch (error) {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : '결제창을 열지 못했습니다.' });
+      setPendingPlanId(null);
       setIsLoading(false);
     }
   };
 
   const cancelCurrentSubscription = async () => {
-    if (!window.confirm('다음 자동결제를 중단할까요? 현재 이용기간까지는 Pro를 계속 사용할 수 있습니다.')) return;
+    if (!window.confirm('다음 자동결제를 중단할까요? 현재 이용기간까지는 유료 기능을 계속 사용할 수 있습니다.')) return;
     setIsLoading(true);
     setNotice(null);
     try {
       await cancelSubscription();
       setSubscription((current) => current ? { ...current, status: 'canceled', next_billing_at: null, canceled_at: new Date().toISOString() } : current);
-      setNotice({ tone: 'success', message: '구독을 해지했습니다. 현재 결제한 이용기간까지 Pro를 사용할 수 있습니다.' });
+      setNotice({ tone: 'success', message: '구독을 해지했습니다. 현재 결제한 이용기간까지 유료 기능을 사용할 수 있습니다.' });
     } catch (error) {
       setNotice({ tone: 'error', message: error instanceof Error ? error.message : '구독을 해지하지 못했습니다.' });
     } finally {
@@ -280,6 +317,11 @@ const PricingPanel = ({ isAuthenticated, onLogin }: Pick<SupportCenterViewProps,
   };
 
   const isActive = subscription?.status === 'active';
+  const hasPaidAccess = Boolean(
+    subscription
+      && (subscription.status === 'active' || subscription.status === 'canceled')
+      && new Date(subscription.current_period_end).getTime() > Date.now(),
+  );
 
   return (
     <div>
@@ -296,46 +338,65 @@ const PricingPanel = ({ isAuthenticated, onLogin }: Pick<SupportCenterViewProps,
         </div>
       )}
 
-      <DocumentSection title="요금제 비교" description="아래 가격과 AI 제공량은 결제 연결을 검증하기 위한 임시 기준이며 정식 출시 전에 변경될 수 있습니다.">
-        <div className="grid border-y border-[#dcdcd9] md:grid-cols-2 md:divide-x md:divide-[#dcdcd9]">
-          <div className="py-7 md:pr-9">
-            <p className="text-[18px] font-semibold text-[#171717]">Free</p>
-            <p className="mt-4 text-[30px] font-semibold tracking-[-0.04em] text-[#171717]">무료</p>
-            <ul className="mt-6 space-y-2.5 text-[16px] leading-7 text-[#62625f]">
-              <li>일정, 할 일, 메모 관리</li>
-              <li>가입 후 무료 AI 체험</li>
-              <li>개인 API와 로컬 모델 연결</li>
-            </ul>
-          </div>
-          <div className="border-t border-[#dcdcd9] py-7 md:border-t-0 md:pl-9">
-            <div className="flex items-center justify-between gap-4">
-              <p className="text-[18px] font-semibold text-[#171717]">{TEMPORARY_PRO_PLAN.name}</p>
-              <span className="text-[14px] font-medium text-[var(--color-primary)]">임시 요금</span>
-            </div>
-            <p className="mt-4 text-[30px] font-semibold tracking-[-0.04em] text-[#171717]">
-              월 {TEMPORARY_PRO_PLAN.amount.toLocaleString('ko-KR')}원
-            </p>
-            <p className="mt-1 text-[15px] text-[#777773]">부가가치세 포함 · 매월 자동결제</p>
-            <ul className="mt-6 space-y-2.5 text-[16px] leading-7 text-[#62625f]">
-              <li>매월 AI 대화 {TEMPORARY_PRO_PLAN.aiQuota.toLocaleString('ko-KR')}회</li>
-              <li>Free의 모든 기능 포함</li>
-              <li>웹에서 구독 상태와 다음 결제 예정일 관리</li>
-            </ul>
-            <button
-              type="button"
-              onClick={startSubscription}
-              disabled={isLoading || isActive}
-              className="mt-7 w-full bg-[var(--color-primary)] px-5 py-3.5 text-[16px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {isLoading ? '확인 중...' : isActive ? '이용 중' : isAuthenticated ? '카드 등록하고 시작하기' : '로그인하고 시작하기'}
-            </button>
-          </div>
+      <DocumentSection title="요금제 비교" description="가격과 AI 제공량은 결제 연결을 검증하기 위한 임시 기준이며 정식 출시 전에 변경될 수 있습니다.">
+        <div className="grid border-y border-[#dcdcd9] lg:grid-cols-3 lg:divide-x lg:divide-[#dcdcd9]">
+          {BILLING_PLANS.map((plan, index) => {
+            const isCurrentPlan = hasPaidAccess && subscription?.plan_id === plan.id;
+            const isAnotherPaidPlanActive = hasPaidAccess && !isCurrentPlan;
+            const isPending = pendingPlanId === plan.id;
+
+            return (
+              <div key={plan.id} className={`py-7 ${index > 0 ? 'border-t border-[#dcdcd9] lg:border-t-0' : ''} ${index === 0 ? 'lg:pr-7' : index === BILLING_PLANS.length - 1 ? 'lg:pl-7' : 'lg:px-7'}`}>
+                <div className="flex items-center justify-between gap-4">
+                  <p className="text-[18px] font-semibold text-[#171717]">{plan.name}</p>
+                  {plan.isPaid && <span className="text-[14px] font-medium text-[var(--color-primary)]">임시 요금</span>}
+                </div>
+                <p className="mt-4 text-[30px] font-semibold tracking-[-0.04em] text-[#171717]">
+                  {plan.amount === 0 ? '무료' : `월 ${plan.amount.toLocaleString('ko-KR')}원`}
+                </p>
+                <p className="mt-1 text-[15px] text-[#777773]">
+                  {plan.isPaid ? '부가가치세 포함 · 매월 자동결제' : '결제수단 등록 없음'}
+                </p>
+                <ul className="mt-6 min-h-[108px] space-y-2.5 text-[16px] leading-7 text-[#62625f]">
+                  {PLAN_FEATURES[plan.id].map((feature) => <li key={feature}>{feature}</li>)}
+                </ul>
+                {plan.isPaid ? (
+                  <button
+                    type="button"
+                    onClick={() => startSubscription(plan.id)}
+                    disabled={isLoading || hasPaidAccess}
+                    className="mt-7 w-full bg-[var(--color-primary)] px-5 py-3.5 text-[16px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {isPending
+                      ? '확인 중...'
+                      : isCurrentPlan
+                        ? isActive ? '이용 중' : '이용기간 종료 후 재구독'
+                        : isAnotherPaidPlanActive
+                          ? '요금제 변경 준비 중'
+                          : isAuthenticated
+                            ? '카드 등록하고 시작하기'
+                            : '로그인하고 시작하기'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onLogin}
+                    disabled={isAuthenticated}
+                    className="mt-7 w-full border border-[#dcdcd9] px-5 py-3.5 text-[16px] font-semibold text-[#4f4f4b] transition-colors hover:bg-[#f7f7f5] disabled:cursor-default disabled:opacity-60"
+                  >
+                    {isAuthenticated ? (hasPaidAccess ? '유료 이용기간 적용 중' : '현재 기본 요금제') : '무료로 시작하기'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </DocumentSection>
 
       {subscription && (
         <DocumentSection title="내 구독" description="등록된 카드 전체 번호는 Dayflow에 저장하지 않으며 토스페이먼츠가 발급한 결제키로 자동결제합니다.">
           <TextRows items={[
+            ['이용 요금제', getBillingPlan(subscription.plan_id)?.name || subscription.plan_id],
             ['구독 상태', subscription.status === 'active' ? '이용 중' : subscription.status === 'canceled' ? '해지됨' : '결제 확인 필요'],
             ['이용기간', `${formatDate(subscription.current_period_start)} ~ ${formatDate(subscription.current_period_end)}`],
             ['다음 결제일', subscription.status === 'active' ? formatDate(subscription.next_billing_at) : '자동결제 중단'],
@@ -349,11 +410,11 @@ const PricingPanel = ({ isAuthenticated, onLogin }: Pick<SupportCenterViewProps,
         </DocumentSection>
       )}
 
-      <DocumentSection title="결제 진행 방식" description="국내 신용·체크카드를 등록하면 첫 달 요금이 바로 결제됩니다. 정식 운영 전 매월 결제 실행 스케줄을 연결합니다.">
+      <DocumentSection title="결제 진행 방식" description="Plus 또는 Pro를 선택해 국내 신용·체크카드를 등록하면 선택한 요금제의 첫 달 요금이 바로 결제됩니다. 정식 운영 전 매월 결제 실행 스케줄을 연결합니다.">
         <TextRows items={[
           ['1. 요금제 확인', '월 결제금액, AI 제공량, 자동결제 주기와 환불 기준을 확인합니다.'],
           ['2. 카드 등록', '토스페이먼츠 결제창에서 본인 카드를 등록합니다. Dayflow는 전체 카드번호를 직접 저장하지 않습니다.'],
-          ['3. 첫 결제', '카드 등록이 끝나면 서버에서 월 9,900원을 확인하고 첫 결제를 승인합니다.'],
+          ['3. 첫 결제', '카드 등록이 끝나면 서버에서 선택한 요금제가 월 4,900원 또는 월 9,900원인지 검증한 뒤 첫 결제를 승인합니다.'],
           ['4. 구독 관리', '이 페이지에서 이용기간과 다음 결제 예정일을 확인하고 이후 자동결제를 해지할 수 있습니다.'],
         ]} />
       </DocumentSection>
@@ -419,7 +480,7 @@ const PrivacyPanel = () => (
       <TextRows items={[
         ['Supabase', '회원 인증과 사용자 데이터 저장·동기화를 위해 이용합니다.'],
         ['Firebase', '웹 애플리케이션 제공과 배포를 위해 이용합니다.'],
-        ['AI 제공업체', 'AI 응답을 만들기 위해 사용자가 선택한 모델 제공업체로 질문과 필요한 대화 문맥이 전달될 수 있습니다.'],
+        ['AI 제공업체', '구독형 AI 응답을 만들기 위해 Dayflow가 운영하는 모델 제공업체로 질문과 필요한 대화 문맥이 전달될 수 있습니다.'],
         ['토스페이먼츠', '유료 서비스 출시 후 결제 승인, 취소, 정기결제와 결제 상태 확인을 위해 이용할 예정입니다.'],
       ]} />
     </DocumentSection>
@@ -460,7 +521,7 @@ const RefundPanel = () => (
         ['3. 처리 결과 안내', '환불 가능 여부와 처리 금액을 안내한 뒤 원래 결제수단으로 취소를 요청합니다.'],
         ['4. 환급 완료', '실제 환급 시점은 카드사와 결제수단에 따라 달라질 수 있으며 결제 취소 결과에서 확인할 수 있습니다.'],
       ]} />
-      <p className="mt-6 text-[15px] leading-7 text-[#858581]">유료 결제는 아직 시작되지 않았습니다. 상품 가격과 제공 방식이 확정되면 청약철회 가능 기간, 이용량에 따른 공제 기준과 처리기간을 최종 환불정책에 명시합니다.</p>
+      <p className="mt-6 text-[15px] leading-7 text-[#858581]">현재 결제는 테스트 단계이며 실제 운영 결제는 시작되지 않았습니다. 상품 가격과 제공 방식이 확정되면 청약철회 가능 기간, 이용량에 따른 공제 기준과 처리기간을 최종 환불정책에 명시합니다.</p>
     </DocumentSection>
   </div>
 );
@@ -470,7 +531,7 @@ const AiPolicyPanel = () => (
     <DocumentSection title="AI가 제공하는 기능" description="Dayflow의 AI는 대화를 바탕으로 일정을 정리하고 할 일, 메모와 생각을 구조화하는 보조 도구입니다.">
       <BulletList items={[
         '사용자의 질문에 답하고 일정, 할 일과 메모를 정리하도록 도울 수 있습니다.',
-        '연결한 모델과 설정에 따라 답변의 품질, 속도와 사용할 수 있는 기능이 달라질 수 있습니다.',
+        '가입한 요금제와 Dayflow가 운영하는 AI 모델에 따라 답변 속도, 월 제공량과 사용할 수 있는 기능이 달라질 수 있습니다.',
         'AI가 데이터 변경을 제안하거나 실행하는 경우 사용자가 결과를 확인하고 수정할 수 있어야 합니다.',
       ]} />
     </DocumentSection>
@@ -482,11 +543,11 @@ const AiPolicyPanel = () => (
         '모델 제공업체의 장애, 사용량 제한 또는 정책 변경에 따라 답변 생성이 일시적으로 중단될 수 있습니다.',
       ]} />
     </DocumentSection>
-    <DocumentSection title="대화 데이터와 모델 연결">
+    <DocumentSection title="대화 데이터와 AI 제공 방식">
       <TextRows items={[
-        ['Dayflow 제공 모델', '응답 생성에 필요한 질문과 대화 문맥이 Dayflow가 연결한 AI 제공업체로 전달될 수 있습니다.'],
-        ['개인 API', '사용자가 직접 등록한 API를 이용할 때에는 해당 제공업체의 이용약관, 데이터 처리와 비용 정책이 적용됩니다.'],
-        ['로컬 모델', '로컬 모델을 선택하면 모델 실행은 사용자의 환경에서 이루어질 수 있지만 Dayflow의 계정 동기화 데이터는 별도 저장 설정의 영향을 받습니다.'],
+        ['Dayflow 제공 모델', '응답 생성에 필요한 질문과 대화 문맥이 Dayflow가 계약하거나 연결한 AI 제공업체로 전달될 수 있습니다.'],
+        ['요금제별 제공량', '무료 체험과 유료 구독의 AI 제공량은 요금제에 따라 다르며 사용량은 서버에서 확인합니다.'],
+        ['외부 제공업체', '사용 모델이나 처리 업체가 변경되면 데이터 처리 범위와 적용 시점을 서비스 정책에서 안내합니다.'],
         ['민감정보', '주민등록번호, 금융정보, 건강정보, 비밀번호와 타인의 개인정보처럼 불필요한 민감정보를 대화에 입력하지 않아야 합니다.'],
       ]} />
     </DocumentSection>
@@ -566,7 +627,7 @@ const SupportCenterView: React.FC<SupportCenterViewProps> = ({ activeTab, onTabC
             </select>
           </label>
 
-          <div className="mb-10 border-b border-[#dcdcd9] pb-8">
+          <div className="mb-10 pb-8">
             <p className="text-[15px] font-medium text-[var(--color-primary)]">{meta.eyebrow}</p>
             <h1 className="mt-3 text-[32px] font-semibold tracking-[-0.045em] text-[#171717] sm:text-[40px]">{meta.title}</h1>
             <p className="mt-3 max-w-3xl text-[17px] leading-8 text-[#62625f]">{meta.description}</p>

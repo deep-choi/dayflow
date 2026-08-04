@@ -3,7 +3,6 @@ const path = require('path');
 
 const files = [
     'App.tsx',
-    'views/ApiSettingsView.tsx',
     'views/AuthView.tsx',
     'views/BoardView.tsx',
     'views/CalendarView.tsx',

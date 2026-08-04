@@ -7,7 +7,6 @@ import {
     TodoList,
     AppSettings,
     AIAgent,
-    ApiConnection,
     ChatMessage,
     ChatSession,
     ChatGeneratedAction,
@@ -16,28 +15,14 @@ import {
 } from '../types';
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
 import { Sparkles, Plus, Check } from '../components/Icons';
-import { ArrowUp, Edit3, Save, X, FlaskConical } from 'lucide-react';
-import {
-    DEFAULT_GEMINI_MODEL,
-    DEFAULT_OLLAMA_BASE_URL,
-    getActiveAIConfig,
-    getAgentAIConfig,
-    getDefaultModelForProvider,
-    getModelOptionsForProvider,
-    hasUsableAIConnection,
-    isChatSupportedProvider,
-    normalizeProviderModelName,
-} from '../utils/aiConfig';
+import { ArrowUp, ChevronDown, Edit3, Save, X } from 'lucide-react';
+import { hasUsableAIConnection } from '../utils/aiConfig';
 import { ApiUsageStats } from '../types';
-import { callGeminiAPI } from '../utils/gemini';
-import { testXaiConnection } from '../services/xaiService';
-import { testOpenAIConnection } from '../services/openaiService';
-import { testAnthropicConnection } from '../services/anthropicService';
-import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
-import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
 import {
+    DAYFLOW_MODELS,
     DAYFLOW_TRIAL_API_KEY,
-    DAYFLOW_TRIAL_MODEL,
+    DayflowModelId,
+    getDayflowModel,
     isTrialExhaustedError,
 } from '../services/trialChatService';
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
@@ -96,36 +81,6 @@ const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
     [/Gemini\/xAI만\s*선택 가능/g, '지원되는 모델만 선택 가능'],
     [/Gemini API Key/g, 'API Key'],
 ];
-type PersonaEditorTab = 'profile' | 'api';
-type ApiSelection = '__default__' | '__new__' | string;
-
-const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama', 'custom'];
-
-const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xAI';
-    if (provider === 'openai') return 'OpenAI';
-    if (provider === 'anthropic') return 'Anthropic';
-    if (provider === 'gemini') return 'Gemini';
-    if (provider === 'ollama') return 'Ollama';
-    return '기타 로컬 서버';
-};
-
-const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xai-...';
-    if (provider === 'openai') return 'sk-...';
-    if (provider === 'anthropic') return 'sk-ant-...';
-    if (provider === 'gemini') return 'AIza...';
-    if (provider === 'custom') return '선택 사항';
-    return 'API Key';
-};
-
-const createEmptyConnectionDraft = (): Partial<ApiConnection> => ({
-    provider: 'gemini',
-    modelName: DEFAULT_GEMINI_MODEL,
-    apiKey: '',
-    isActive: true,
-});
-
 const RESPONSE_LENGTH_OPTIONS = [
     { value: 'short', label: '짧게' },
     { value: 'medium', label: '보통' },
@@ -144,7 +99,7 @@ const isInitialGreetingMessage = (message?: ChatMessage): boolean => {
 
 type UsageContext = {
     agentId?: string;
-    provider?: AppSettings['apiConnections'][number]['provider'];
+    provider?: 'gemini';
     modelName?: string;
     mediaType?: 'text';
 };
@@ -482,16 +437,10 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [showToolbar, setShowToolbar] = useState(false);
     const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
     const [agentDraft, setAgentDraft] = useState<AIAgent | null>(null);
-    const [agentEditorTab, setAgentEditorTab] = useState<PersonaEditorTab>('profile');
     const [isSavingAgent, setIsSavingAgent] = useState(false);
     const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
-    const [agentApiSelection, setAgentApiSelection] = useState<ApiSelection>('__default__');
-    const [agentApiDraft, setAgentApiDraft] = useState<Partial<ApiConnection>>(createEmptyConnectionDraft);
-    const [isAgentApiDirty, setIsAgentApiDirty] = useState(false);
-    const [isTestingAgentApi, setIsTestingAgentApi] = useState(false);
-    const [agentLocalModels, setAgentLocalModels] = useState<string[]>([]);
-    const [isLoadingAgentLocalModels, setIsLoadingAgentLocalModels] = useState(false);
     const [executingActionMessageId, setExecutingActionMessageId] = useState<string | null>(null);
+    const selectedDayflowModel = getDayflowModel(settings.preferredDayflowModel);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const pendingSessionHydrationRef = useRef(false);
     const hydratingSessionIdRef = useRef<string | null>(null);
@@ -515,37 +464,6 @@ const ChatView: React.FC<ChatViewProps> = ({
         ? dedupedSelectedAgentPool.slice(0, MAX_GROUP_AGENTS)
         : (availableAgents.length > 0 ? [availableAgents[0]] : []);
     const primaryAgent = activeAgents[0] || agent || availableAgents[0];
-    const supportedChatConnections = (settings.apiConnections || []).filter(
-        (connection) => isChatSupportedProvider(connection.provider)
-    );
-    const activeConnection = supportedChatConnections.find(connection => connection.id === settings.activeConnectionId)
-        || supportedChatConnections[0];
-    const agentApiModelOptions = agentApiDraft.provider
-        ? getModelOptionsForProvider(agentApiDraft.provider)
-        : [];
-
-    useEffect(() => {
-        if (!editingAgentId) return;
-        const provider = agentApiDraft.provider;
-        if (provider !== 'ollama' && provider !== 'custom') {
-            setAgentLocalModels([]);
-            return;
-        }
-
-        let cancelled = false;
-        const restoreLocalModels = async () => {
-            try {
-                const models = provider === 'ollama'
-                    ? await listOllamaModels(agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL)
-                    : await listLocalServerModels(agentApiDraft.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, agentApiDraft.apiKey);
-                if (!cancelled) setAgentLocalModels(models);
-            } catch {
-                if (!cancelled) setAgentLocalModels([]);
-            }
-        };
-        void restoreLocalModels();
-        return () => { cancelled = true; };
-    }, [editingAgentId, agentApiDraft.provider, agentApiDraft.baseUrl]);
 
     const updateApiUsage = (stats?: Partial<ApiUsageStats>, context?: UsageContext) => {
         if (!stats || !onUpdateSettings) return;
@@ -594,16 +512,9 @@ const ChatView: React.FC<ChatViewProps> = ({
             onRequestAuth?.();
             return;
         }
-        const selectedConnection = supportedChatConnections.find(connection => connection.id === target.connectionId);
-        const initialConnection = selectedConnection || activeConnection;
         setIsAvatarCropOpen(false);
-        setAgentEditorTab('profile');
         setEditingAgentId(target.id);
-        setAgentDraft({ ...target });
-        setAgentApiSelection(selectedConnection ? selectedConnection.id : '__default__');
-        setAgentApiDraft(initialConnection ? { ...initialConnection } : createEmptyConnectionDraft());
-        setAgentLocalModels([]);
-        setIsAgentApiDirty(false);
+        setAgentDraft({ ...target, connectionId: undefined });
     };
 
     const closeAgentEditor = (force = false) => {
@@ -611,91 +522,6 @@ const ChatView: React.FC<ChatViewProps> = ({
         setIsAvatarCropOpen(false);
         setEditingAgentId(null);
         setAgentDraft(null);
-        setIsAgentApiDirty(false);
-    };
-
-    const updateAgentApiDraft = (updates: Partial<ApiConnection>) => {
-        setAgentApiDraft(prev => ({ ...prev, ...updates }));
-        setIsAgentApiDirty(true);
-    };
-
-    const handleAgentApiSelectionChange = (selection: ApiSelection) => {
-        setAgentApiSelection(selection);
-        setAgentLocalModels([]);
-        if (selection === '__new__') {
-            setAgentApiDraft(createEmptyConnectionDraft());
-            setIsAgentApiDirty(true);
-            return;
-        }
-        const connection = selection === '__default__'
-            ? activeConnection
-            : supportedChatConnections.find(candidate => candidate.id === selection);
-        setAgentApiDraft(connection ? { ...connection } : createEmptyConnectionDraft());
-        setIsAgentApiDirty(false);
-    };
-
-    const validateAgentApiDraft = (): string | null => {
-        const provider = agentApiDraft.provider || 'gemini';
-        if (!(agentApiDraft.modelName || '').trim()) return '사용할 모델을 선택하거나 입력해 주세요.';
-        if (provider === 'ollama' || provider === 'custom') {
-            if (!(agentApiDraft.baseUrl || '').trim()) return '로컬 서버 주소를 입력해 주세요.';
-            return null;
-        }
-        if (!(agentApiDraft.apiKey || '').trim()) return 'API Key를 입력해 주세요.';
-        return null;
-    };
-
-    const loadAgentLocalModels = async () => {
-        const provider = agentApiDraft.provider;
-        if (provider !== 'ollama' && provider !== 'custom') return;
-        setIsLoadingAgentLocalModels(true);
-        try {
-            const models = provider === 'ollama'
-                ? await listOllamaModels(agentApiDraft.baseUrl || DEFAULT_OLLAMA_BASE_URL)
-                : await listLocalServerModels(agentApiDraft.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, agentApiDraft.apiKey);
-            setAgentLocalModels(models);
-            if (models.length > 0) {
-                updateAgentApiDraft({ modelName: models.includes(agentApiDraft.modelName || '') ? agentApiDraft.modelName : models[0] });
-            } else {
-                alert('서버에서 불러올 수 있는 모델이 없습니다. 모델 이름을 직접 입력해 주세요.');
-            }
-        } catch (error: any) {
-            alert(`로컬 모델을 불러오지 못했습니다: ${error?.message || '알 수 없는 오류'}`);
-        } finally {
-            setIsLoadingAgentLocalModels(false);
-        }
-    };
-
-    const testAgentApiDraft = async () => {
-        const validationError = validateAgentApiDraft();
-        if (validationError) {
-            alert(validationError);
-            return;
-        }
-        const provider = agentApiDraft.provider || 'gemini';
-        const modelName = normalizeProviderModelName(provider, agentApiDraft.modelName || '');
-        const apiKey = (agentApiDraft.apiKey || '').trim();
-        setIsTestingAgentApi(true);
-        try {
-            if (provider === 'ollama') {
-                await testOllamaConnection(agentApiDraft.baseUrl, modelName);
-            } else if (provider === 'custom') {
-                await testLocalServerConnection(agentApiDraft.baseUrl, apiKey, modelName);
-            } else if (provider === 'xai') {
-                await testXaiConnection(apiKey, modelName);
-            } else if (provider === 'openai') {
-                await testOpenAIConnection(apiKey, modelName);
-            } else if (provider === 'anthropic') {
-                await testAnthropicConnection(apiKey, modelName);
-            } else {
-                await callGeminiAPI(apiKey, '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.', undefined, modelName);
-            }
-            alert(`연결 성공: ${modelName}`);
-        } catch (error: any) {
-            alert(`연결 실패: ${error?.message || '알 수 없는 오류'}`);
-        } finally {
-            setIsTestingAgentApi(false);
-        }
     };
 
     const handleAgentImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -723,62 +549,8 @@ const ChatView: React.FC<ChatViewProps> = ({
     const handleSaveAgent = async () => {
         if (!editingAgentId || !agentDraft || !onUpdateAgent) return;
 
-        let nextConnectionId = agentApiSelection === '__default__' ? undefined : agentDraft.connectionId;
-        let connectionToPersist: ApiConnection | null = null;
-        if (isAgentApiDirty || agentApiSelection === '__new__') {
-            const validationError = validateAgentApiDraft();
-            if (validationError) {
-                setAgentEditorTab('api');
-                alert(validationError);
-                return;
-            }
-            if (!onUpdateSettings) {
-                alert('API 연결을 저장할 수 없습니다. 설정에서 다시 시도해 주세요.');
-                return;
-            }
-            const provider = agentApiDraft.provider || 'gemini';
-            const connectionId = agentApiSelection === '__new__'
-                ? crypto.randomUUID()
-                : (agentApiDraft.id || crypto.randomUUID());
-            connectionToPersist = {
-                id: connectionId,
-                provider,
-                modelName: normalizeProviderModelName(provider, agentApiDraft.modelName || ''),
-                apiKey: provider === 'ollama' ? '' : (agentApiDraft.apiKey || '').trim(),
-                baseUrl: provider === 'ollama' || provider === 'custom'
-                    ? (agentApiDraft.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim()
-                    : undefined,
-                isActive: true,
-            };
-            nextConnectionId = agentApiSelection === '__default__' ? undefined : connectionId;
-        } else if (agentApiSelection !== '__default__') {
-            nextConnectionId = agentApiSelection;
-        }
-
         setIsSavingAgent(true);
         try {
-            if (connectionToPersist && onUpdateSettings) {
-                const savedConnection = connectionToPersist;
-                onUpdateSettings(prev => {
-                    const currentConnections = prev.apiConnections || [];
-                    const exists = currentConnections.some(connection => connection.id === savedConnection.id);
-                    const nextConnections = exists
-                        ? currentConnections.map(connection => connection.id === savedConnection.id ? savedConnection : connection)
-                        : [...currentConnections, savedConnection];
-                    const hasCurrentDefault = nextConnections.some(connection => connection.id === prev.activeConnectionId);
-                    const activeConnectionId = agentApiSelection === '__default__' || !hasCurrentDefault
-                        ? savedConnection.id
-                        : prev.activeConnectionId;
-                    const activeGemini = nextConnections.find(connection => connection.id === activeConnectionId && connection.provider === 'gemini')
-                        || nextConnections.find(connection => connection.provider === 'gemini');
-                    return {
-                        ...prev,
-                        apiConnections: nextConnections.map(connection => ({ ...connection, isActive: true })),
-                        activeConnectionId,
-                        geminiApiKey: activeGemini?.apiKey || '',
-                    };
-                });
-            }
             await Promise.resolve(onUpdateAgent(editingAgentId, {
                 name: agentDraft.name,
                 role: agentDraft.role,
@@ -786,7 +558,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                 personality: agentDraft.personality,
                 avatar: (agentDraft.avatar || '').trim() || undefined,
                 avatarFrame: agentDraft.avatar ? agentDraft.avatarFrame : undefined,
-                connectionId: nextConnectionId,
+                connectionId: undefined,
                 responseLength: agentDraft.responseLength || 'medium',
             }));
             closeAgentEditor(true);
@@ -1082,31 +854,19 @@ const ChatView: React.FC<ChatViewProps> = ({
     };
 
     const resolveAgentConfig = (targetAgent?: AIAgent) => {
-        return getAgentAIConfig(settings, targetAgent?.connectionId) || {
+        void targetAgent;
+        return {
             provider: 'gemini' as const,
             apiKey: DAYFLOW_TRIAL_API_KEY,
-            modelName: DAYFLOW_TRIAL_MODEL,
+            modelName: selectedDayflowModel.id,
+            baseUrl: undefined,
+            connectionId: undefined,
         };
     };
 
     const getAgentConnectionWarning = (targetAgent?: AIAgent): string => {
-        if (!targetAgent) return '사용 가능한 AI 연결을 찾지 못했어요. 설정에서 API 연결을 확인해 주세요.';
-        if (!targetAgent.connectionId && !getActiveAIConfig(settings)) return '사용 가능한 기본 API 연결이 없어요. 설정이나 페르소나 편집에서 API를 연결해 주세요.';
-
-        const conn = (settings.apiConnections || []).find(c => c.id === targetAgent.connectionId);
-        if (!conn) {
-            return `${targetAgent.name}에 지정된 API 연결을 찾지 못했어요. 페르소나 설정에서 다시 연결해 주세요.`;
-        }
-        if ((conn.provider === 'ollama' || conn.provider === 'custom') && !conn.baseUrl?.trim()) {
-            return `${targetAgent.name}의 로컬 서버 주소가 비어 있어 응답할 수 없어요.`;
-        }
-        if (conn.provider !== 'ollama' && conn.provider !== 'custom' && !conn.apiKey?.trim()) {
-            return `${targetAgent.name}의 API Key가 비어 있어 응답할 수 없어요.`;
-        }
-        if (!isChatSupportedProvider(conn.provider)) {
-            return `${targetAgent.name}에 연결된 모델은 현재 채팅에서 지원되지 않아요. 페르소나 설정에서 채팅용 모델을 지정해 주세요.`;
-        }
-        return `${targetAgent.name}의 AI 연결을 사용할 수 없어요. 연결 상태를 확인해 주세요.`;
+        const agentName = targetAgent?.name || 'Dayflow';
+        return `${agentName}의 AI 연결을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.`;
     };
 
     const withConfigMeta = (
@@ -1458,7 +1218,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                     id: crypto.randomUUID(),
                     role: 'assistant',
                     content: isTrialExhaustedError(error)
-                        ? '무료 체험 10회를 모두 사용했어요. 계속 대화하려면 설정이나 페르소나 편집에서 개인 API를 연결해 주세요.'
+                        ? (error instanceof Error ? error.message : '현재 요금제의 AI 제공량을 모두 사용했어요.')
                         : '죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?',
                     timestamp: new Date().toISOString(),
                     agentId: primaryAgent?.id,
@@ -1472,7 +1232,6 @@ const ChatView: React.FC<ChatViewProps> = ({
                 content: getAgentConnectionWarning(primaryAgent),
                 timestamp: new Date().toISOString(),
                 agentId: primaryAgent?.id,
-                quickReplies: ['페르소나 설정 열기', 'API 연결 확인하기'],
             };
             setMessages((prev) => [...prev, assistantMessage]);
         }
@@ -1483,6 +1242,13 @@ const ChatView: React.FC<ChatViewProps> = ({
 
     const handleQuickReply = (reply: string) => {
         handleSend(reply);
+    };
+
+    const handleDayflowModelChange = (modelId: DayflowModelId) => {
+        onUpdateSettings?.((previous) => ({
+            ...previous,
+            preferredDayflowModel: getDayflowModel(modelId).id,
+        }));
     };
 
     const renderActionCard = (msg: ChatMessage): React.ReactNode => {
@@ -1794,6 +1560,21 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 <Plus size={20} />
                             </span>
                         </button>
+                        <div className="relative ml-0.5 shrink-0">
+                            <select
+                                value={selectedDayflowModel.id}
+                                onChange={(event) => handleDayflowModelChange(event.target.value as DayflowModelId)}
+                                className="h-8 w-[104px] appearance-none rounded-[9999px] bg-[#f5f5f3] pl-3 pr-7 text-[12px] font-medium text-[#62625f] outline-none transition-colors hover:bg-[#eeeeeb] focus:bg-[#eeeeeb] sm:w-[118px]"
+                                aria-label="AI 모델 선택"
+                                title={`현재 모델: ${selectedDayflowModel.label}`}
+                                disabled={isProcessing}
+                            >
+                                {DAYFLOW_MODELS.map((model) => (
+                                    <option key={model.id} value={model.id}>{model.shortLabel}</option>
+                                ))}
+                            </select>
+                            <ChevronDown size={13} aria-hidden="true" className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8f8f8a]" />
+                        </div>
                         <input
                             type="text"
                             value={inputValue}
@@ -1868,26 +1649,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             </div>
 
                             <div className="p-5 space-y-4">
-                                <div className="grid grid-cols-2 gap-1 rounded-xl border border-[#e9e9e8] bg-[#f7f7f5] p-1">
-                                    {([
-                                        ['profile', '프로필'],
-                                        ['api', 'API'],
-                                    ] as Array<[PersonaEditorTab, string]>).map(([tab, label]) => (
-                                        <button
-                                            key={tab}
-                                            type="button"
-                                            onClick={() => setAgentEditorTab(tab)}
-                                            className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${agentEditorTab === tab
-                                                ? 'bg-white text-[#37352f]'
-                                                : 'text-[#787774] hover:text-[#37352f]'}`}
-                                        >
-                                            {label}
-                                        </button>
-                                    ))}
-                                </div>
-
-                                {agentEditorTab === 'profile' && (
-                                    <div className="space-y-4">
+                                <div className="space-y-4">
                                         <div className="grid grid-cols-2 gap-4">
                                             <label className="block">
                                                 <span className="text-xs font-normal text-[#787774] ml-1">이름</span>
@@ -1941,144 +1703,8 @@ const ChatView: React.FC<ChatViewProps> = ({
                                             />
                                             <span className="mt-1 block text-xs text-[#9b9a97]">이제 첫 줄부터 전부 성격/지침으로 저장됩니다.</span>
                                         </label>
-                                    </div>
-                                )}
+                                </div>
 
-                                {agentEditorTab === 'api' && (
-                                    <div className="space-y-5">
-                                        <label className="block">
-                                            <span className="text-xs font-normal text-[#787774] ml-1">사용 방식</span>
-                                            <select
-                                                value={agentApiSelection}
-                                                onChange={(e) => handleAgentApiSelectionChange(e.target.value)}
-                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
-                                            >
-                                                <option value="__default__">
-                                                    {activeConnection
-                                                        ? `기본 API 연결 사용 · ${getProviderDisplayName(activeConnection.provider)} · ${activeConnection.modelName}`
-                                                        : '새 기본 API 연결 만들기'}
-                                                </option>
-                                                {supportedChatConnections.map((connection) => (
-                                                    <option key={connection.id} value={connection.id}>
-                                                        이 페르소나만 사용 · {getProviderDisplayName(connection.provider)} · {connection.modelName}
-                                                    </option>
-                                                ))}
-                                                <option value="__new__">이 페르소나만 새 연결 추가</option>
-                                            </select>
-                                        </label>
-
-                                        <div className="rounded-xl border border-[#e9e9e8] bg-[#fbfbfa] p-4 space-y-4">
-                                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                                <label className="block">
-                                                    <span className="text-xs font-normal text-[#787774] ml-1">API 공급자</span>
-                                                    <select
-                                                        value={agentApiDraft.provider || 'gemini'}
-                                                        onChange={(e) => {
-                                                            const provider = e.target.value as ApiConnection['provider'];
-                                                            setAgentLocalModels([]);
-                                                            updateAgentApiDraft({
-                                                                provider,
-                                                                modelName: getDefaultModelForProvider(provider),
-                                                                apiKey: '',
-                                                                baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
-                                                            });
-                                                        }}
-                                                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
-                                                    >
-                                                        {CHAT_PROVIDERS.map(provider => (
-                                                            <option key={provider} value={provider}>{getProviderDisplayName(provider)}</option>
-                                                        ))}
-                                                    </select>
-                                                </label>
-
-                                                <label className="block">
-                                                    <span className="text-xs font-normal text-[#787774] ml-1">모델</span>
-                                                    {(agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom') && agentLocalModels.length > 0 ? (
-                                                        <select
-                                                            title={agentApiDraft.modelName || ''}
-                                                            value={agentApiDraft.modelName || ''}
-                                                            onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
-                                                            className="mt-1 w-full px-3 pr-10 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)] truncate"
-                                                        >
-                                                            {agentLocalModels.map(model => <option key={model} value={model}>{model}</option>)}
-                                                        </select>
-                                                    ) : agentApiModelOptions.length > 0 ? (
-                                                        <select
-                                                            value={agentApiDraft.modelName || getDefaultModelForProvider(agentApiDraft.provider || 'gemini')}
-                                                            onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
-                                                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
-                                                        >
-                                                            {agentApiModelOptions.map(model => (
-                                                                <option key={model.id} value={model.id}>{model.label}</option>
-                                                            ))}
-                                                        </select>
-                                                    ) : (
-                                                        <input
-                                                            value={agentApiDraft.modelName || ''}
-                                                            onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
-                                                            placeholder={agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom' ? '모델 목록을 불러오거나 직접 입력' : '모델 이름'}
-                                                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
-                                                        />
-                                                    )}
-                                                </label>
-                                            </div>
-
-                                            {(agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom') && (
-                                                <label className="block">
-                                                    <span className="text-xs font-normal text-[#787774] ml-1">{agentApiDraft.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</span>
-                                                    <input
-                                                        value={agentApiDraft.baseUrl || (agentApiDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
-                                                        onChange={(e) => updateAgentApiDraft({ baseUrl: e.target.value })}
-                                                        placeholder={agentApiDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
-                                                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
-                                                    />
-                                                </label>
-                                            )}
-
-                                            {(agentApiDraft.provider === 'ollama' || agentApiDraft.provider === 'custom') && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void loadAgentLocalModels()}
-                                                    disabled={isLoadingAgentLocalModels}
-                                                    className="w-full rounded-lg border border-[#dcdcd9] bg-white px-3 py-2 text-sm text-[#37352f] hover:bg-[#f3f3f3] disabled:opacity-60"
-                                                >
-                                                    {isLoadingAgentLocalModels ? '로컬 모델 불러오는 중...' : '설치된 모델 불러오기'}
-                                                </button>
-                                            )}
-
-                                            {agentApiDraft.provider !== 'ollama' && (
-                                                <label className="block">
-                                                    <span className="text-xs font-normal text-[#787774] ml-1">API Key{agentApiDraft.provider === 'custom' ? ' (선택 사항)' : ''}</span>
-                                                    <input
-                                                        type="password"
-                                                        value={agentApiDraft.apiKey || ''}
-                                                        onChange={(e) => updateAgentApiDraft({ apiKey: e.target.value })}
-                                                        placeholder={getApiKeyPlaceholder(agentApiDraft.provider)}
-                                                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
-                                                    />
-                                                </label>
-                                            )}
-
-                                            <div className="flex items-center justify-between gap-3 border-t border-[#e9e9e8] pt-3">
-                                                <p className="text-[12px] leading-5 text-[#9b9a97]">
-                                                    {agentApiSelection === '__default__'
-                                                        ? '이 연결은 모든 페르소나의 기본값으로 사용됩니다.'
-                                                        : '이 연결은 현재 페르소나에만 지정됩니다.'}
-                                                </p>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void testAgentApiDraft()}
-                                                    disabled={isTestingAgentApi}
-                                                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#dcdcd9] bg-white px-3 py-2 text-sm text-[#37352f] transition-colors hover:bg-[#f3f3f3] disabled:cursor-not-allowed disabled:opacity-60"
-                                                >
-                                                    <FlaskConical size={14} />
-                                                    {isTestingAgentApi ? '연결 중...' : '연결 테스트'}
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                    </div>
-                                )}
                             </div>
                         </div>
 
