@@ -4052,7 +4052,7 @@ const App: React.FC = () => {
         );
       case 'admin':
         return isAdmin
-          ? <AdminView />
+          ? <AdminView adminName={currentUser?.name} adminEmail={currentUser?.email} onExit={() => setCurrentView('chat')} />
           : <AdminLoginView currentEmail={currentUser?.email} onBack={() => setCurrentView('chat')} />;
       case 'chat':
       default: {
@@ -4308,7 +4308,7 @@ const App: React.FC = () => {
     <div className="flex h-[100dvh] bg-[#fbfbfa] font-sans selection:bg-black/10 relative overflow-x-hidden">
       {/* Full Page Loading Overlay Removed in v2.6 for "Instant" feel */}
       {/* Sidebar Navigation */}
-      {currentView !== 'support' && !isAdminLoginView && (
+      {currentView !== 'support' && currentView !== 'admin' && !isAdminLoginView && (
       <aside className={`hidden lg:flex ${isSidebarCollapsed ? 'lg:w-[76px] xl:w-[76px]' : 'lg:w-[280px] xl:w-[300px]'} bg-white border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0`}>
         <div>
           {/* Logo Section */}
@@ -4748,7 +4748,7 @@ const App: React.FC = () => {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-white pb-0">
         {/* Top Mobile Bar (Visible only on small screens) */}
-        {currentView !== 'support' && !isAdminLoginView && (
+        {currentView !== 'support' && currentView !== 'admin' && !isAdminLoginView && (
         <header className="lg:hidden h-14 bg-white border-b border-[#e9e9e8] flex items-center justify-between px-4 font-medium text-sm z-40 relative">
           <div className="flex items-center gap-2 min-w-0">
             <button

@@ -12,6 +12,14 @@ import {
   isPaidBillingPlanId,
   requestBillingCardRegistration,
 } from '../services/billingService';
+import {
+  createSupportTicket,
+  getMySupportTickets,
+  replyToSupportTicket,
+  type SupportCategory,
+  type SupportMessage,
+  type SupportTicket,
+} from '../services/supportService';
 
 export type SupportTabId = 'main' | 'pricing' | 'terms' | 'privacy' | 'refund' | 'support' | 'ai';
 
@@ -146,9 +154,66 @@ const FAQS = [
 
 const FAQ_CATEGORIES = ['전체', '서비스 이용', '계정', '결제 및 환불', 'AI 이용'] as const;
 
-const CustomerSupportPanel = () => {
+const CustomerSupportPanel = ({ isAuthenticated, onLogin }: { isAuthenticated: boolean; onLogin: () => void }) => {
   const [category, setCategory] = useState<(typeof FAQ_CATEGORIES)[number]>('전체');
+  const [ticketCategory, setTicketCategory] = useState<SupportCategory>('service');
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [myTickets, setMyTickets] = useState<SupportTicket[]>([]);
+  const [ticketMessages, setTicketMessages] = useState<SupportMessage[]>([]);
+  const [ticketReplies, setTicketReplies] = useState<Record<string, string>>({});
   const visibleFaqs = category === '전체' ? FAQS : FAQS.filter((faq) => faq.category === category);
+
+  const loadTickets = async () => {
+    if (!isAuthenticated) { setMyTickets([]); setTicketMessages([]); return; }
+    try {
+      const result = await getMySupportTickets();
+      setMyTickets(result.tickets);
+      setTicketMessages(result.messages);
+    } catch {
+      // 문의 작성 폼과 FAQ는 조회 실패와 무관하게 계속 사용할 수 있습니다.
+    }
+  };
+
+  useEffect(() => { void loadTickets(); }, [isAuthenticated]);
+
+  const submitTicket = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!isAuthenticated) { onLogin(); return; }
+    if (subject.trim().length < 2 || message.trim().length < 5) return;
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      await createSupportTicket({ category: ticketCategory, subject: subject.trim(), message: message.trim() });
+      setSubject('');
+      setMessage('');
+      setSubmitted(true);
+      await loadTickets();
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '문의를 접수하지 못했습니다.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const sendTicketReply = async (ticketId: string) => {
+    const reply = (ticketReplies[ticketId] || '').trim();
+    if (!reply) return;
+    setIsSubmitting(true);
+    setSubmitError('');
+    try {
+      await replyToSupportTicket(ticketId, reply);
+      setTicketReplies((current) => ({ ...current, [ticketId]: '' }));
+      await loadTickets();
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '답변을 저장하지 못했습니다.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div>
@@ -178,10 +243,42 @@ const CustomerSupportPanel = () => {
           </details>
         ))}
       </div>
+      {isAuthenticated && myTickets.length > 0 && (
+        <div className="mt-10 pt-7">
+          <h2 className="text-[17px] font-semibold text-[#171717]">내 문의</h2>
+          <div className="mt-4 divide-y divide-[#e7e7e5] border-y border-[#e7e7e5]">
+            {myTickets.map((ticket) => (
+              <details key={ticket.id} className="group py-5">
+                <summary className="cursor-pointer list-none pr-8 text-[16px] font-semibold text-[#242422] marker:content-none">
+                  <div className="flex flex-wrap items-center justify-between gap-3"><span>{ticket.subject}</span><span className="text-[13px] font-normal text-[#777773]">{ticket.status === 'open' ? '접수' : ticket.status === 'in_progress' ? '처리 중' : ticket.status === 'resolved' ? '답변 완료' : '종료'}</span></div>
+                </summary>
+                <div className="mt-4 space-y-4">
+                  {ticketMessages.filter((item) => item.ticket_id === ticket.id).map((item) => (
+                    <div key={item.id} className={`max-w-2xl px-4 py-3 text-[15px] leading-7 ${item.sender_role === 'admin' ? 'bg-[#eff6ff]' : 'bg-[#f7f7f5]'}`}><div className="mb-1 text-[13px] font-medium text-[#777773]">{item.sender_role === 'admin' ? 'Dayflow 고객지원' : '내 문의'}</div><p className="whitespace-pre-wrap">{item.message}</p></div>
+                  ))}
+                  {ticket.status !== 'closed' && (
+                    <div className="max-w-2xl pt-2"><textarea value={ticketReplies[ticket.id] || ''} onChange={(event) => setTicketReplies((current) => ({ ...current, [ticket.id]: event.target.value }))} maxLength={5000} placeholder="추가 내용을 남겨주세요." className="min-h-24 w-full resize-y border border-[#dcdcd9] p-3 text-[15px] leading-7" /><button type="button" onClick={() => void sendTicketReply(ticket.id)} disabled={isSubmitting || !(ticketReplies[ticket.id] || '').trim()} className="mt-2 bg-[#171717] px-4 py-2.5 text-[14px] text-white disabled:opacity-45">추가 답변 보내기</button></div>
+                  )}
+                </div>
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="mt-10 pt-7">
         <h2 className="text-[17px] font-semibold text-[#171717]">도움이 더 필요하신가요?</h2>
-        <p className="mt-2 text-[16px] leading-7 text-[#62625f]">사업자 정보와 공식 지원 이메일 확정 후 문의 접수를 시작합니다.</p>
-        <p className="mt-3 text-[15px] font-medium text-[var(--color-primary)]">결제 출시 전 공개 예정</p>
+        <p className="mt-2 text-[16px] leading-7 text-[#62625f]">계정, 결제 또는 AI 이용 문제를 남기면 관리자 페이지에서 확인하고 답변할 수 있습니다.</p>
+        {submitted ? (
+          <div className="mt-6 border-y border-[#dcdcd9] py-6"><p className="text-[16px] font-medium text-[#171717]">문의가 접수되었습니다.</p><p className="mt-2 text-[15px] leading-7 text-[#62625f]">위의 내 문의에서 처리 상태와 관리자 답변을 확인할 수 있습니다.</p><button type="button" onClick={() => setSubmitted(false)} className="mt-4 text-[15px] font-medium text-[var(--color-primary)]">새 문의 작성</button></div>
+        ) : (
+          <form onSubmit={submitTicket} className="mt-6 max-w-2xl space-y-4">
+            <label className="block"><span className="text-[15px] text-[#4f4f4b]">문의 분류</span><select value={ticketCategory} onChange={(event) => setTicketCategory(event.target.value as SupportCategory)} className="mt-2 h-11 w-full border border-[#dcdcd9] bg-white px-3 text-[15px]"><option value="service">서비스 이용</option><option value="account">계정</option><option value="billing">결제 및 환불</option><option value="ai">AI 이용</option><option value="other">기타</option></select></label>
+            <label className="block"><span className="text-[15px] text-[#4f4f4b]">제목</span><input value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={120} placeholder="문의 내용을 간단히 적어주세요." className="mt-2 h-11 w-full border border-[#dcdcd9] px-3 text-[15px]" /></label>
+            <label className="block"><span className="text-[15px] text-[#4f4f4b]">내용</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={5000} placeholder="문제가 발생한 화면, 시간과 상황을 적어주세요. 비밀번호나 전체 카드번호는 입력하지 마세요." className="mt-2 min-h-36 w-full resize-y border border-[#dcdcd9] p-3 text-[15px] leading-7" /></label>
+            {submitError && <p className="text-[14px] text-[#b34040]">{submitError}</p>}
+            <button type="submit" disabled={isSubmitting || (isAuthenticated && (subject.trim().length < 2 || message.trim().length < 5))} className="bg-[var(--color-primary)] px-5 py-3 text-[15px] font-medium text-white disabled:opacity-45">{isSubmitting ? '접수 중...' : isAuthenticated ? '문의 접수' : '로그인하고 문의하기'}</button>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -573,7 +670,7 @@ const SupportCenterView: React.FC<SupportCenterViewProps> = ({ activeTab, onTabC
       case 'terms': return <TermsPanel />;
       case 'privacy': return <PrivacyPanel />;
       case 'refund': return <RefundPanel />;
-      case 'support': return <CustomerSupportPanel />;
+      case 'support': return <CustomerSupportPanel isAuthenticated={isAuthenticated} onLogin={onLogin} />;
       case 'ai': return <AiPolicyPanel />;
       case 'main':
       default: return <MainPanel onTabChange={onTabChange} />;

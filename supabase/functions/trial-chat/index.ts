@@ -93,19 +93,52 @@ Deno.serve(async (request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  const requestStartedAt = Date.now();
+  const recordUsageEvent = async (
+    status: 'succeeded' | 'failed',
+    usage: { promptTokenCount?: unknown; candidatesTokenCount?: unknown; totalTokenCount?: unknown } = {},
+    errorCode?: string,
+  ) => {
+    const toCount = (value: unknown): number => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+    };
+    const { error } = await admin.from('ai_usage_events').upsert({
+      user_id: userData.user.id,
+      request_id: requestId,
+      plan_id: usagePlanId,
+      provider: 'google',
+      model: requestedModel,
+      status,
+      input_tokens: toCount(usage.promptTokenCount),
+      output_tokens: toCount(usage.candidatesTokenCount),
+      total_tokens: toCount(usage.totalTokenCount),
+      duration_ms: Math.max(0, Date.now() - requestStartedAt),
+      error_code: errorCode || null,
+    }, { onConflict: 'request_id' });
+    if (error) console.error('AI usage event storage failed:', error.message);
+  };
 
   const nowIso = new Date().toISOString();
-  const { data: subscription, error: subscriptionError } = await admin
+  const { data: storedSubscription, error: subscriptionError } = await admin
     .from('billing_subscriptions')
-    .select('plan_id,current_period_start,current_period_end')
+    .select('plan_id,status,current_period_start,current_period_end,grace_period_end')
     .eq('user_id', userData.user.id)
-    .in('status', ['active', 'canceled'])
-    .gt('current_period_end', nowIso)
     .maybeSingle();
   if (subscriptionError) {
     console.error('Subscription lookup failed:', subscriptionError.message);
     return json(500, { code: 'AI_ACCESS_CHECK_FAILED', message: 'AI 이용 권한을 확인하지 못했습니다.' });
   }
+
+  const nowTime = new Date(nowIso).getTime();
+  const hasPaidEntitlement = storedSubscription
+    && (
+      ((storedSubscription.status === 'active' || storedSubscription.status === 'canceled')
+        && new Date(storedSubscription.current_period_end).getTime() > nowTime)
+      || (storedSubscription.status === 'past_due'
+        && new Date(storedSubscription.grace_period_end || '').getTime() > nowTime)
+    );
+  const subscription = hasPaidEntitlement ? storedSubscription : null;
 
   const subscriptionLimit = subscription ? PLAN_LIMITS[subscription.plan_id] : undefined;
   let usesSubscription = false;
@@ -194,6 +227,7 @@ Deno.serve(async (request) => {
   } catch (error) {
     console.error('Dayflow Gemini network request failed:', error);
     await releaseClaim();
+    await recordUsageEvent('failed', {}, 'AI_PROVIDER_NETWORK_ERROR');
     return json(502, {
       code: 'AI_PROVIDER_ERROR',
       message: 'AI 응답을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.',
@@ -205,6 +239,7 @@ Deno.serve(async (request) => {
     const upstreamMessage = readText((responseBody as { error?: { message?: unknown } })?.error?.message);
     console.error('Dayflow Gemini request failed:', geminiResponse.status, upstreamMessage);
     await releaseClaim();
+    await recordUsageEvent('failed', {}, `AI_PROVIDER_${geminiResponse.status}`);
     return json(502, {
       code: 'AI_PROVIDER_ERROR',
       message: 'AI 응답을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.',
@@ -217,16 +252,22 @@ Deno.serve(async (request) => {
 
   if (!text.trim()) {
     await releaseClaim();
+    await recordUsageEvent('failed', {}, 'AI_EMPTY_RESPONSE');
     return json(502, {
       code: 'AI_EMPTY_RESPONSE',
       message: 'AI 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.',
     });
   }
 
+  const usageMetadata = (responseBody as {
+    usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown; totalTokenCount?: unknown };
+  }).usageMetadata || {};
+  await recordUsageEvent('succeeded', usageMetadata);
+
   return json(200, {
     text,
     candidates: (responseBody as { candidates?: unknown }).candidates,
-    usageMetadata: (responseBody as { usageMetadata?: unknown }).usageMetadata,
+    usageMetadata,
     remaining: Number(claim.remaining_count ?? 0),
     model: requestedModel,
     planId: usagePlanId,
