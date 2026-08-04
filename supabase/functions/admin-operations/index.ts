@@ -179,33 +179,52 @@ Deno.serve(async (request) => {
     if (action === 'refund_payment') {
       if (!tossSecretKey) return json(503, { code: 'BILLING_NOT_CONFIGURED', message: '결제 서버 키가 설정되지 않았습니다.' });
       const requestedAmount = Math.floor(Number(body.amount));
-      const { data: payment, error } = await admin
-        .from('billing_payments')
-        .select('id,user_id,payment_key,amount,status')
-        .eq('id', targetId)
-        .maybeSingle();
-      if (error || !payment || !payment.payment_key) return json(404, { code: 'PAYMENT_NOT_FOUND', message: '환불 가능한 결제를 찾지 못했습니다.' });
-      const { data: priorRefunds, error: refundLookupError } = await admin
-        .from('billing_refunds')
-        .select('amount,status')
-        .eq('payment_id', payment.id);
-      if (refundLookupError) throw refundLookupError;
-      const refunded = (priorRefunds || []).filter((item) => item.status === 'DONE').reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const refundable = Math.max(0, Number(payment.amount || 0) - refunded);
-      const amount = Number.isFinite(requestedAmount) && requestedAmount > 0 ? requestedAmount : refundable;
-      if (amount <= 0 || amount > refundable) return json(400, { code: 'INVALID_REFUND_AMOUNT', message: '환불 가능 금액을 확인해 주세요.' });
-
-      const response = await fetch(`${TOSS_API_BASE}/v1/payments/${encodeURIComponent(payment.payment_key)}/cancel`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${btoa(`${tossSecretKey}:`)}`,
-          'Content-Type': 'application/json',
-          'Idempotency-Key': crypto.randomUUID(),
-        },
-        body: JSON.stringify({ cancelReason: reason, ...(amount < Number(payment.amount) ? { cancelAmount: amount } : {}) }),
+      const operationId = typeof body.operationId === 'string' ? body.operationId : '';
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)) {
+        return json(400, { code: 'INVALID_OPERATION_ID', message: '환불 작업 식별자가 올바르지 않습니다.' });
+      }
+      if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+        return json(400, { code: 'INVALID_REFUND_AMOUNT', message: '환불 가능 금액을 확인해 주세요.' });
+      }
+      const { data: claimRows, error: claimError } = await admin.rpc('claim_billing_refund', {
+        p_payment_id: targetId,
+        p_admin_user_id: authData.user.id,
+        p_operation_key: operationId,
+        p_amount: requestedAmount,
+        p_reason: reason,
       });
+      if (claimError) throw claimError;
+      const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
+      const claimStatus = String(claim?.claim_status || '');
+      if (claimStatus === 'PAYMENT_NOT_FOUND') return json(404, { code: 'PAYMENT_NOT_FOUND', message: '환불 가능한 결제를 찾지 못했습니다.' });
+      if (claimStatus === 'INVALID_AMOUNT') return json(400, { code: 'INVALID_REFUND_AMOUNT', message: '환불 가능 금액을 확인해 주세요.' });
+      if (claimStatus === 'IN_PROGRESS') return json(409, { code: 'REFUND_IN_PROGRESS', message: '같은 환불 요청을 처리 중입니다.' });
+      if (claimStatus === 'FAILED') return json(409, { code: 'REFUND_ALREADY_FAILED', message: '이 환불 요청은 실패했습니다. 창을 닫고 새 환불 요청을 시작해 주세요.' });
+      if (claimStatus === 'COMPLETED') return json(200, { ok: true, amount: requestedAmount, status: 'COMPLETED' });
+      if (claimStatus !== 'CLAIMED' || !claim?.refund_id || !claim?.payment_key || !claim?.idempotency_key) {
+        throw new Error('환불 처리 상태를 확인하지 못했습니다.');
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(`${TOSS_API_BASE}/v1/payments/${encodeURIComponent(claim.payment_key)}/cancel`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${btoa(`${tossSecretKey}:`)}`,
+            'Content-Type': 'application/json',
+            'Idempotency-Key': String(claim.idempotency_key),
+          },
+          body: JSON.stringify({ cancelReason: reason, ...(requestedAmount < Number(claim.payment_amount) ? { cancelAmount: requestedAmount } : {}) }),
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch {
+        return json(502, { code: 'TOSS_NETWORK_ERROR', message: '환불 결과를 확인 중입니다. 잠시 후 같은 작업에서 다시 시도해 주세요.' });
+      }
       if (!response.ok) {
         const tossError = await readTossError(response);
+        await admin.from('billing_refunds').update({
+          status: 'FAILED', failure_code: tossError.code, failure_message: tossError.message, updated_at: new Date().toISOString(),
+        }).eq('id', claim.refund_id).eq('status', 'processing');
         return json(response.status, tossError);
       }
       const canceledPayment = await response.json() as {
@@ -213,21 +232,13 @@ Deno.serve(async (request) => {
         cancels?: Array<{ transactionKey?: string; cancelAmount?: number }>;
       };
       const latestCancel = canceledPayment.cancels?.[canceledPayment.cancels.length - 1];
-      const { error: insertError } = await admin.from('billing_refunds').insert({
-        payment_id: payment.id,
-        user_id: payment.user_id,
-        admin_user_id: authData.user.id,
-        amount,
-        reason,
-        status: 'DONE',
-        toss_transaction_key: latestCancel?.transactionKey || null,
+      const { data: completionRows, error: completionError } = await admin.rpc('complete_billing_refund', {
+        p_refund_id: claim.refund_id,
+        p_toss_transaction_key: latestCancel?.transactionKey || null,
       });
-      if (insertError) throw insertError;
-      const nextStatus = amount === refundable ? 'CANCELED' : 'PARTIAL_CANCELED';
-      const { error: paymentUpdateError } = await admin.from('billing_payments').update({ status: nextStatus }).eq('id', payment.id);
-      if (paymentUpdateError) throw paymentUpdateError;
-      await writeAudit('payment.refunded', 'payment', payment.id, { userId: payment.user_id, amount, status: nextStatus });
-      return json(200, { ok: true, amount, status: nextStatus });
+      if (completionError) throw completionError;
+      const completion = Array.isArray(completionRows) ? completionRows[0] : completionRows;
+      return json(200, { ok: true, amount: requestedAmount, status: completion?.payment_status || canceledPayment.status || 'DONE' });
     }
 
     return json(400, { code: 'UNKNOWN_ACTION', message: '지원하지 않는 관리자 작업입니다.' });

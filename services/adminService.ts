@@ -206,6 +206,8 @@ export type AdminDashboardData = {
   system: {
     billingEvents: AdminBillingEvent[];
     configuration: {
+      billingEnabled: boolean;
+      billingMode: 'test' | 'live' | 'invalid';
       tossKeyMode: 'test' | 'live' | 'missing' | 'mismatch' | 'unknown';
       billingCronSecretConfigured: boolean;
       tossWebhookTokenConfigured: boolean;
@@ -221,6 +223,7 @@ type AdminOperationPayload = {
   reason?: string;
   note?: string;
   amount?: number;
+  operationId?: string;
   message?: string;
   status?: 'open' | 'in_progress' | 'resolved' | 'closed';
 };

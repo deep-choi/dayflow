@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
+import { readBillingReadiness } from '../_shared/billing-config.ts';
 
 const TOSS_API_BASE = 'https://api.tosspayments.com';
 const MAX_ATTEMPTS = 3;
@@ -14,12 +15,6 @@ const json = (status: number, payload: Record<string, unknown>) =>
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
   });
-
-const addOneMonth = (date: Date): Date => {
-  const next = new Date(date);
-  next.setUTCMonth(next.getUTCMonth() + 1);
-  return next;
-};
 
 const readTossError = async (response: Response): Promise<{ code: string; message: string }> => {
   try {
@@ -43,11 +38,15 @@ Deno.serve(async (request) => {
   const tossSecretKey = Deno.env.get('TOSS_SECRET_KEY');
   const cronSecret = Deno.env.get('BILLING_CRON_SECRET');
   const suppliedSecret = request.headers.get('x-dayflow-cron-secret') || '';
-  if (!supabaseUrl || !serviceRoleKey || !tossSecretKey || !cronSecret) {
+  if (!supabaseUrl || !serviceRoleKey || !cronSecret) {
     return json(503, { code: 'RENEWAL_NOT_CONFIGURED', message: '정기결제 실행 환경이 설정되지 않았습니다.' });
   }
   if (!suppliedSecret || suppliedSecret !== cronSecret) {
     return json(401, { code: 'INVALID_CRON_SECRET', message: '정기결제 실행 권한이 없습니다.' });
+  }
+  const billingReadiness = readBillingReadiness({ requireSecretKey: true });
+  if (!billingReadiness.ready || !tossSecretKey) {
+    return json(503, { code: billingReadiness.code, message: billingReadiness.message });
   }
 
   const admin = createClient(supabaseUrl, serviceRoleKey, {
@@ -79,7 +78,8 @@ Deno.serve(async (request) => {
       continue;
     }
 
-    const { data: attempt, error: claimError } = await admin.from('billing_attempts').insert({
+    let attempt: { id: string } | null = null;
+    const { data: insertedAttempt, error: claimError } = await admin.from('billing_attempts').insert({
       subscription_id: subscription.id,
       user_id: subscription.user_id,
       scheduled_at: scheduledAt,
@@ -88,9 +88,24 @@ Deno.serve(async (request) => {
       toss_order_id: orderId,
       amount: plan.amount,
       status: 'processing',
+      locked_at: new Date().toISOString(),
     }).select('id').maybeSingle();
-    if (claimError || !attempt) {
-      if (claimError?.code !== '23505') console.error('Renewal claim failed:', claimError?.message);
+    attempt = insertedAttempt;
+    if (claimError?.code === '23505') {
+      const staleBefore = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const { data: reclaimedAttempt, error: reclaimError } = await admin.from('billing_attempts')
+        .update({ locked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('idempotency_key', idempotencyKey)
+        .eq('status', 'processing')
+        .lt('locked_at', staleBefore)
+        .select('id')
+        .maybeSingle();
+      if (reclaimError) console.error('Renewal reclaim failed:', reclaimError.message);
+      attempt = reclaimedAttempt;
+    } else if (claimError) {
+      console.error('Renewal claim failed:', claimError.message);
+    }
+    if (!attempt) {
       results.push({ subscriptionId: subscription.id, status: 'skipped', code: claimError?.code || 'ALREADY_CLAIMED' });
       continue;
     }
@@ -101,14 +116,14 @@ Deno.serve(async (request) => {
       .eq('user_id', subscription.user_id)
       .maybeSingle();
     if (customerError || !customer) {
-      await admin.from('billing_attempts').update({
-        status: 'failed', failure_code: 'CUSTOMER_NOT_FOUND', failure_message: '결제 고객 키가 없습니다.', processed_at: new Date().toISOString(),
-      }).eq('id', attempt.id);
-      await admin.from('billing_subscriptions').update({
-        status: 'past_due', retry_count: attemptNumber, next_billing_at: null,
-        grace_period_end: subscription.grace_period_end || new Date(now.getTime() + GRACE_PERIOD_MS).toISOString(),
-        last_billing_error: 'CUSTOMER_NOT_FOUND', updated_at: new Date().toISOString(),
-      }).eq('id', subscription.id);
+      const { error: failureError } = await admin.rpc('fail_billing_renewal', {
+        p_attempt_id: attempt.id,
+        p_failure_code: 'CUSTOMER_NOT_FOUND',
+        p_failure_message: '결제 고객 키가 없습니다.',
+        p_next_retry_at: null,
+        p_grace_period_end: subscription.grace_period_end || new Date(now.getTime() + GRACE_PERIOD_MS).toISOString(),
+      });
+      if (failureError) console.error('Renewal failure storage failed:', failureError.message);
       results.push({ subscriptionId: subscription.id, status: 'failed', code: 'CUSTOMER_NOT_FOUND' });
       continue;
     }
@@ -128,79 +143,51 @@ Deno.serve(async (request) => {
           orderId,
           orderName: plan.name,
         }),
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (error) {
-      paymentResponse = new Response(JSON.stringify({ code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : '네트워크 오류' }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      console.error('Renewal payment network state is ambiguous:', error);
+      results.push({ subscriptionId: subscription.id, status: 'skipped', code: 'NETWORK_STATE_UNKNOWN' });
+      continue;
     }
 
     if (!paymentResponse.ok) {
       const tossError = await readTossError(paymentResponse);
       const nextRetryAt = attemptNumber < MAX_ATTEMPTS ? new Date(now.getTime() + RETRY_DELAY_MS).toISOString() : null;
       const graceEnd = subscription.grace_period_end || new Date(now.getTime() + GRACE_PERIOD_MS).toISOString();
-      await Promise.all([
-        admin.from('billing_attempts').update({
-          status: 'failed', failure_code: tossError.code, failure_message: tossError.message, processed_at: new Date().toISOString(),
-        }).eq('id', attempt.id),
-        admin.from('billing_payments').upsert({
-          user_id: subscription.user_id,
-          subscription_id: subscription.id,
-          toss_order_id: orderId,
-          plan_id: subscription.plan_id,
-          amount: plan.amount,
-          status: 'FAILED',
-          failure_code: tossError.code,
-          failure_message: tossError.message,
-        }, { onConflict: 'toss_order_id' }),
-        admin.from('billing_subscriptions').update({
-          status: 'past_due', retry_count: attemptNumber, next_billing_at: nextRetryAt,
-          grace_period_end: graceEnd, last_billing_error: `${tossError.code}: ${tossError.message}`,
-          updated_at: new Date().toISOString(),
-        }).eq('id', subscription.id),
-      ]);
+      const { error: failureError } = await admin.rpc('fail_billing_renewal', {
+        p_attempt_id: attempt.id,
+        p_failure_code: tossError.code,
+        p_failure_message: tossError.message,
+        p_next_retry_at: nextRetryAt,
+        p_grace_period_end: graceEnd,
+      });
+      if (failureError) {
+        console.error('Renewal failure storage failed:', failureError.message);
+        results.push({ subscriptionId: subscription.id, status: 'skipped', code: 'FAILURE_STORAGE_FAILED' });
+        continue;
+      }
       results.push({ subscriptionId: subscription.id, status: 'failed', code: tossError.code, nextRetryAt });
       continue;
     }
 
-    const payment = await paymentResponse.json() as { paymentKey?: string; status?: string; approvedAt?: string };
-    const periodStart = payment.approvedAt ? new Date(payment.approvedAt) : new Date();
-    const periodEnd = addOneMonth(periodStart);
-    await Promise.all([
-      admin.from('billing_attempts').update({
-        status: 'succeeded', payment_key: payment.paymentKey || null, processed_at: new Date().toISOString(),
-      }).eq('id', attempt.id),
-      admin.from('billing_payments').upsert({
-        user_id: subscription.user_id,
-        subscription_id: subscription.id,
-        toss_order_id: orderId,
-        payment_key: payment.paymentKey || null,
-        plan_id: subscription.plan_id,
-        amount: plan.amount,
-        status: payment.status || 'DONE',
-        approved_at: periodStart.toISOString(),
-      }, { onConflict: 'toss_order_id' }),
-      admin.from('billing_subscriptions').update({
-        status: 'active',
-        current_period_start: periodStart.toISOString(),
-        current_period_end: periodEnd.toISOString(),
-        next_billing_at: periodEnd.toISOString(),
-        last_payment_key: payment.paymentKey || null,
-        retry_count: 0,
-        grace_period_end: null,
-        last_billing_error: null,
-        updated_at: new Date().toISOString(),
-      }).eq('id', subscription.id),
-      admin.from('admin_audit_logs').insert({
-        admin_user_id: null,
-        action: 'subscription.renewed',
-        target_type: 'subscription',
-        target_id: subscription.id,
-        reason: '자동 정기결제',
-        metadata: { userId: subscription.user_id, amount: plan.amount, orderId },
-      }),
-    ]);
+    const payment = await paymentResponse.json() as { paymentKey?: string; status?: string; approvedAt?: string; orderId?: string; totalAmount?: number };
+    if (!payment.paymentKey || payment.status !== 'DONE' || (payment.orderId && payment.orderId !== orderId) || (payment.totalAmount != null && payment.totalAmount !== plan.amount)) {
+      console.error('Renewal response validation failed:', payment.status, payment.orderId, payment.totalAmount);
+      results.push({ subscriptionId: subscription.id, status: 'skipped', code: 'INVALID_PAYMENT_RESULT' });
+      continue;
+    }
+    const { error: completionError } = await admin.rpc('complete_billing_renewal', {
+      p_attempt_id: attempt.id,
+      p_payment_key: payment.paymentKey,
+      p_payment_status: payment.status,
+      p_approved_at: payment.approvedAt || new Date().toISOString(),
+    });
+    if (completionError) {
+      console.error('Renewal atomic storage failed:', completionError.message);
+      results.push({ subscriptionId: subscription.id, status: 'skipped', code: 'SUCCESS_STORAGE_FAILED' });
+      continue;
+    }
     results.push({ subscriptionId: subscription.id, status: 'succeeded', orderId });
   }
 

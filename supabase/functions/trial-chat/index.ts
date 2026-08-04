@@ -13,6 +13,8 @@ const PLAN_LIMITS: Record<string, number> = {
 };
 const MAX_INPUT_CHARS = 120_000;
 const MAX_OUTPUT_TOKENS = 4_096;
+const MAX_GENERATIONS_PER_TURN = 20;
+const MAX_GENERATIONS_PER_MINUTE = 30;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,6 +36,12 @@ const readText = (value: unknown): string => typeof value === 'string' ? value :
 
 const getPayloadSize = (contents: unknown, systemInstruction: unknown): number =>
   JSON.stringify(contents ?? []).length + JSON.stringify(systemInstruction ?? {}).length;
+
+const sha256 = async (value: string): Promise<string> => {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+};
 
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
@@ -197,6 +205,54 @@ Deno.serve(async (request) => {
     if (error) console.error('AI usage claim release failed:', error.message);
   };
 
+  const payloadHash = await sha256(JSON.stringify({
+    model: requestedModel,
+    contents,
+    systemInstruction,
+    safetySettings,
+    temperature: Number.isFinite(temperature) ? temperature : null,
+    maxOutputTokens: Number.isFinite(requestedMaxOutputTokens) ? requestedMaxOutputTokens : null,
+  }));
+  const { data: generationClaimRows, error: generationClaimError } = await admin.rpc('claim_ai_generation_request', {
+    p_user_id: userData.user.id,
+    p_turn_id: requestId,
+    p_payload_hash: payloadHash,
+    p_max_per_turn: MAX_GENERATIONS_PER_TURN,
+    p_max_per_minute: MAX_GENERATIONS_PER_MINUTE,
+  });
+  if (generationClaimError) {
+    console.error('AI generation claim failed:', generationClaimError.message);
+    await releaseClaim();
+    return json(500, { code: 'AI_GENERATION_CLAIM_FAILED', message: 'AI 요청을 안전하게 처리하지 못했습니다.' });
+  }
+
+  const generationClaim = Array.isArray(generationClaimRows) ? generationClaimRows[0] : generationClaimRows;
+  if (!generationClaim?.allowed) {
+    await releaseClaim();
+    const reason = String(generationClaim?.reason || 'AI_RATE_LIMITED');
+    if (reason === 'DUPLICATE_GENERATION') {
+      return json(409, { code: reason, message: '이미 처리된 AI 생성 요청입니다.' });
+    }
+    return json(429, {
+      code: reason,
+      message: reason === 'TURN_GENERATION_LIMIT'
+        ? '한 번의 대화에서 생성할 수 있는 응답 수를 초과했습니다.'
+        : 'AI 요청이 너무 빠르게 반복되고 있습니다. 잠시 후 다시 시도해 주세요.',
+    });
+  }
+
+  const generationRequestId = String(generationClaim.generation_request_id || '');
+  const finishGeneration = async (status: 'succeeded' | 'failed', errorCode?: string) => {
+    if (!generationRequestId) return;
+    const { error } = await admin.from('ai_generation_requests').update({
+      status,
+      error_code: errorCode || null,
+      updated_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+    }).eq('id', generationRequestId).eq('user_id', userData.user.id);
+    if (error) console.error('AI generation state update failed:', error.message);
+  };
+
   const generationConfig: Record<string, number> = {
     maxOutputTokens: Number.isFinite(requestedMaxOutputTokens)
       ? Math.min(MAX_OUTPUT_TOKENS, Math.max(128, Math.floor(requestedMaxOutputTokens)))
@@ -227,6 +283,7 @@ Deno.serve(async (request) => {
   } catch (error) {
     console.error('Dayflow Gemini network request failed:', error);
     await releaseClaim();
+    await finishGeneration('failed', 'AI_PROVIDER_NETWORK_ERROR');
     await recordUsageEvent('failed', {}, 'AI_PROVIDER_NETWORK_ERROR');
     return json(502, {
       code: 'AI_PROVIDER_ERROR',
@@ -239,6 +296,7 @@ Deno.serve(async (request) => {
     const upstreamMessage = readText((responseBody as { error?: { message?: unknown } })?.error?.message);
     console.error('Dayflow Gemini request failed:', geminiResponse.status, upstreamMessage);
     await releaseClaim();
+    await finishGeneration('failed', `AI_PROVIDER_${geminiResponse.status}`);
     await recordUsageEvent('failed', {}, `AI_PROVIDER_${geminiResponse.status}`);
     return json(502, {
       code: 'AI_PROVIDER_ERROR',
@@ -252,6 +310,7 @@ Deno.serve(async (request) => {
 
   if (!text.trim()) {
     await releaseClaim();
+    await finishGeneration('failed', 'AI_EMPTY_RESPONSE');
     await recordUsageEvent('failed', {}, 'AI_EMPTY_RESPONSE');
     return json(502, {
       code: 'AI_EMPTY_RESPONSE',
@@ -262,6 +321,7 @@ Deno.serve(async (request) => {
   const usageMetadata = (responseBody as {
     usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown; totalTokenCount?: unknown };
   }).usageMetadata || {};
+  await finishGeneration('succeeded');
   await recordUsageEvent('succeeded', usageMetadata);
 
   return json(200, {

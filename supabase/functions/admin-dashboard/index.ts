@@ -50,6 +50,8 @@ Deno.serve(async (request) => {
   const tossSecretKey = Deno.env.get('TOSS_SECRET_KEY') || '';
   const billingCronSecret = Deno.env.get('BILLING_CRON_SECRET') || '';
   const tossWebhookToken = Deno.env.get('TOSS_WEBHOOK_TOKEN') || '';
+  const billingEnabled = Deno.env.get('BILLING_ENABLED') === 'true';
+  const billingMode = Deno.env.get('BILLING_MODE') || '';
   const authorization = request.headers.get('Authorization') || '';
 
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
@@ -320,6 +322,8 @@ Deno.serve(async (request) => {
     system: {
       billingEvents,
       configuration: {
+        billingEnabled,
+        billingMode: billingMode === 'test' || billingMode === 'live' ? billingMode : 'invalid',
         tossKeyMode: readTossKeyMode(tossClientKey, tossSecretKey),
         billingCronSecretConfigured: billingCronSecret.length >= 32,
         tossWebhookTokenConfigured: tossWebhookToken.length >= 32,
