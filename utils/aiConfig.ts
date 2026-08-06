@@ -2,8 +2,8 @@ import { AppSettings, ApiConnection } from '../types';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_XAI_MODEL = 'grok-4.3';
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
-export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.6';
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-0';
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
 export interface ModelOption {
@@ -31,18 +31,22 @@ export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
 ];
 
 export const OPENAI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gpt-5.5', label: 'GPT-5.5', description: '차세대 5.5 플래그십' },
-    { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', description: '최고 사양 심층 프로' },
+    { id: 'gpt-5.6', label: 'GPT-5.6', description: '차세대 5.6 최신 플래그십 (추천)' },
+    { id: 'gpt-5.6-pro', label: 'GPT-5.6 Pro', description: '최고 사양 심층 추론 프로' },
+    { id: 'gpt-5.5', label: 'GPT-5.5', description: '5.5 범용 고성능' },
+    { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', description: '5.5 심층 프로' },
     { id: 'gpt-5.4', label: 'GPT-5.4', description: '5.4 범용 고성능' },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: '5.4 고성능 미니 (추천)' },
+    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: '5.4 고성능 미니' },
     { id: 'gpt-4o', label: 'GPT-4o', description: 'Omni 멀티모달' },
     { id: 'o1', label: 'o1', description: '복잡 논리 추론' },
 ];
 
 export const ANTHROPIC_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'claude-fable-5', label: 'Claude Fable 5', description: '차세대 5세대 에이전트 AI' },
-    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: '최고 분석력 오퍼스' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: '소네트 4.6 플래그십 (추천)' },
+    { id: 'claude-opus-5-0', label: 'Claude Opus 5.0', description: '차세대 5세대 최고 성능 오퍼스 (추천)' },
+    { id: 'claude-5-sonnet', label: 'Claude 5 Sonnet', description: '5세대 차세대 소네트' },
+    { id: 'claude-fable-5', label: 'Claude Fable 5', description: '5세대 에이전트 특화' },
+    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: '고성능 분석 오퍼스' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: '소네트 4.6 플래그십' },
     { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: '하이쿠 초고속' },
     { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', description: '3.5 세대 소네트' },
     { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', description: '3.5 세대 하이쿠' },

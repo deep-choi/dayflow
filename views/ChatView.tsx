@@ -16,7 +16,7 @@ import {
 } from '../types';
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
 import { Sparkles, Plus, Check } from '../components/Icons';
-import { ArrowUp, Edit3, Save, X, FlaskConical, Zap, ChevronDown, ChevronUp, CheckCircle2, Settings } from 'lucide-react';
+import { ArrowUp, Edit3, Save, X, FlaskConical, Zap, ChevronDown, ChevronUp, CheckCircle2, Settings, Users, Cpu } from 'lucide-react';
 import {
     DEFAULT_GEMINI_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
@@ -480,6 +480,9 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [inputValue, setInputValue] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [showToolbar, setShowToolbar] = useState(false);
+    const [activeModalType, setActiveModalType] = useState<'model' | 'persona' | null>(null);
+    const [selectedModalProvider, setSelectedModalProvider] = useState<ApiConnection['provider']>('gemini');
+    const [selectedModalModel, setSelectedModalModel] = useState<string>(DEFAULT_GEMINI_MODEL);
     const [showModelPicker, setShowModelPicker] = useState(false);
     const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
 
@@ -570,6 +573,15 @@ const ChatView: React.FC<ChatViewProps> = ({
     );
     const activeConnection = supportedChatConnections.find(connection => connection.id === settings.activeConnectionId)
         || supportedChatConnections[0];
+
+    useEffect(() => {
+        if (activeModalType === 'model') {
+            const currentProvider = activeConnection?.provider || 'gemini';
+            const currentModel = activeConnection?.modelName || getDefaultModelForProvider(currentProvider);
+            setSelectedModalProvider(currentProvider);
+            setSelectedModalModel(currentModel);
+        }
+    }, [activeModalType, activeConnection]);
     const agentApiModelOptions = agentApiDraft.provider
         ? getModelOptionsForProvider(agentApiDraft.provider)
         : [];
@@ -1745,185 +1757,58 @@ const ChatView: React.FC<ChatViewProps> = ({
             {/* Input Area */}
             <div className="px-2 py-3 bg-white relative z-20">
                 <div className="space-y-3">
+                    {/* Plus Button Action Popup Menu (Identical design to left sidebar UserMenuPopover) */}
                     {showToolbar && (
-                        <div id="chat-persona-selector" className="p-3 sm:p-4 rounded-2xl border border-[#e9e9e8] bg-white space-y-4 relative">
-                            <div className="flex items-center justify-between gap-3 pb-3 border-b border-[#f1f1f0]">
-                                <span className="text-sm font-normal text-[#37352f]">페르소나 선택</span>
+                        <div
+                            id="chat-plus-menu"
+                            className="w-52 sm:w-60 bg-white rounded-2xl border border-[#e9e9e8] shadow-xl shadow-black/10 py-1.5 z-[70] font-sans text-left relative mb-2 animate-in fade-in slide-in-from-bottom-2 duration-150"
+                        >
+                            <div className="px-1 space-y-0.5">
                                 <button
                                     type="button"
-                                    onClick={() => setShowToolbar(false)}
-                                    className="shrink-0 w-8 h-8 -my-1 rounded-full flex items-center justify-center text-[#9b9a97] hover:text-[#37352f] hover:bg-[#f7f7f5] transition-colors"
-                                    aria-label="페르소나 선택 닫기"
-                                    title="닫기"
+                                    onClick={() => {
+                                        setShowToolbar(false);
+                                        setActiveModalType('model');
+                                    }}
+                                    className="w-full px-3 py-2.5 flex items-center gap-3 rounded-xl text-[14px] leading-5 font-medium text-[#37352f] hover:bg-[#f7f7f7] transition-colors text-left cursor-pointer"
                                 >
-                                    <X size={18} strokeWidth={2} />
+                                    <Cpu size={18} className="text-[#37352f] shrink-0" />
+                                    <span>AI 모델 선택</span>
                                 </button>
                             </div>
 
-                            {/* Persona Grid */}
-                            <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-xs font-normal text-[#787774]">참여자</span>
-                                    <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-[#f7f7f5] text-[#9b9a97] border border-[#e9e9e8]">
-                                        최대 {MAX_GROUP_AGENTS}명
-                                    </span>
-                                </div>
-                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                    {availableAgents.map((availableAgent) => {
-                                        const isActive = activeAgents.some((a) => a.id === availableAgent.id);
-                                        const currentIds = activeAgents.map((a) => a.id);
-                                        const canRemoveFromGroup = isActive && currentIds.length > 1;
-                                        const toggleAgent = () => {
-                                            if (isActive) {
-                                                if (!canRemoveFromGroup) return;
-                                                onSelectAgents?.(currentIds.filter((id) => id !== availableAgent.id));
-                                                return;
-                                            }
-                                            if (currentIds.length >= MAX_GROUP_AGENTS) return;
-                                            onSelectAgents?.([...currentIds, availableAgent.id]);
-                                        };
-                                        return (
-                                            <div
-                                                key={availableAgent.id}
-                                                className={`relative rounded-xl border overflow-hidden ${isActive
-                                                    ? 'border-[#d4d4d4] bg-[#f7f7f7]'
-                                                    : 'border-[#e9e9e8] bg-white hover:border-[#d3d1cb] hover:bg-[#fcfcfb]'}`}
-                                            >
-                                                <button
-                                                    type="button"
-                                                    onClick={toggleAgent}
-                                                    className="flex w-full items-center gap-3 p-2.5 pr-11 text-left"
-                                                    aria-pressed={isActive}
-                                                    title={isActive ? (canRemoveFromGroup ? `${availableAgent.name} 참여 해제` : `${availableAgent.name} 선택됨`) : `${availableAgent.name} 참여 추가`}
-                                                >
-                                                    <div className={`w-8 h-8 rounded-full overflow-hidden flex-shrink-0 flex items-center justify-center border ${isActive ? 'border-[#d4d4d4]' : 'border-[#e9e9e8]'}`}>
-                                                        {availableAgent.avatar ? (
-                                                            <img src={availableAgent.avatar} alt="" style={getAvatarImageStyle(availableAgent.avatarFrame)} className="w-full h-full object-cover" />
-                                                        ) : (
-                                                            <div className="w-full h-full bg-[#f3f3f3]" />
-                                                        )}
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className={`text-sm font-normal truncate ${isActive ? 'text-[#171717]' : 'text-[#787774]'}`}>
-                                                            {availableAgent.name}
-                                                        </div>
-                                                    </div>
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={toggleAgent}
-                                                    disabled={isActive && !canRemoveFromGroup}
-                                                    className={`absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full text-sm font-normal flex items-center justify-center ${isActive
-                                                        ? 'bg-[var(--color-primary)] text-white disabled:opacity-100'
-                                                        : 'bg-[#f1f1ef] text-[#787774] hover:bg-[#e9e9e6] hover:text-[var(--color-primary)]'}`}
-                                                    aria-label={isActive ? `${availableAgent.name} 그룹에서 해제` : `${availableAgent.name} 그룹에 추가`}
-                                                    title={isActive ? (canRemoveFromGroup ? '그룹에서 해제' : '현재 단독 선택됨') : '그룹에 추가'}
-                                                >
-                                                    {isActive ? <Check size={16} strokeWidth={2.6} /> : <Plus size={16} strokeWidth={2.2} />}
-                                                </button>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
+                            <div className="my-1 border-b border-[#e9e9e8]" />
 
+                            <div className="px-1 space-y-0.5">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setShowToolbar(false);
+                                        setActiveModalType('persona');
+                                    }}
+                                    className="w-full px-3 py-2.5 flex items-center gap-3 rounded-xl text-[14px] leading-5 font-medium text-[#37352f] hover:bg-[#f7f7f7] transition-colors text-left cursor-pointer"
+                                >
+                                    <Users size={18} className="text-[#37352f] shrink-0" />
+                                    <span>참여 페르소나 설정</span>
+                                </button>
+                            </div>
                         </div>
                     )}
 
-                    {/* Quick Model Selector Bar above input shell */}
-                    <div className="relative mb-2 flex items-center justify-between px-2">
-                        <div className="relative" ref={modelPickerRef}>
-                            <button
-                                type="button"
-                                onClick={() => setShowModelPicker(prev => !prev)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-[#e9e9e8] text-xs font-medium text-[#37352f] hover:bg-[#f7f7f5] hover:border-[#d3d3d0] transition-all cursor-pointer shadow-2xs"
-                                title="대화 모델 변경"
-                            >
-                                <Zap size={13} className="text-amber-500 fill-amber-500" />
-                                <span>
-                                    {activeConnection
-                                        ? `${activeConnection.provider.toUpperCase()} · ${activeConnection.modelName}`
-                                        : '기본 AI (Gemini Flash)'}
-                                </span>
-                                <ChevronDown size={13} className={`text-[#9b9a97] transition-transform ${showModelPicker ? 'rotate-180' : ''}`} />
-                            </button>
-
-                            {/* Model Picker Popover Panel */}
-                            {showModelPicker && (
-                                <div className="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-white border border-[#e9e9e8] shadow-2xl rounded-2xl p-2 z-[99] animate-in fade-in slide-in-from-bottom-2 duration-150">
-                                    <div className="px-3 py-2 border-b border-[#efefef] flex items-center justify-between mb-1">
-                                        <span className="text-xs font-semibold text-[#171717] flex items-center gap-1">
-                                            <Zap size={13} className="text-amber-500" /> AI 대화 모델 즉시 전환
-                                        </span>
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowModelPicker(false)}
-                                            className="text-[#9b9a97] hover:text-[#37352f] p-1 rounded-md hover:bg-[#f2f2f0]"
-                                        >
-                                            <X size={14} />
-                                        </button>
-                                    </div>
-
-                                    <div className="max-h-64 overflow-y-auto space-y-3 p-1">
-                                        {(['gemini', 'openai', 'anthropic', 'xai', 'ollama', 'custom'] as ApiConnection['provider'][]).map(provider => {
-                                            const providerConn = (settings.apiConnections || []).find(c => c.provider === provider);
-                                            const hasKey = provider === 'ollama' || provider === 'custom' ? true : Boolean(providerConn?.apiKey?.trim());
-                                            const options = getModelOptionsForProvider(provider);
-                                            const providerName = provider === 'gemini' ? 'Google Gemini' : provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Claude' : provider === 'xai' ? 'xAI (Grok)' : provider.toUpperCase();
-
-                                            return (
-                                                <div key={provider} className="space-y-1">
-                                                    <div className="px-2 py-0.5 text-[11px] font-semibold text-[#9b9a97] uppercase flex items-center justify-between">
-                                                        <span>{providerName}</span>
-                                                        {!hasKey && <span className="text-[10px] text-amber-600 font-normal">API Key 필요</span>}
-                                                    </div>
-
-                                                    <div className="space-y-0.5">
-                                                        {(options.length > 0 ? options : [{ id: providerConn?.modelName || 'default', label: providerConn?.modelName || 'Default' }]).map(opt => {
-                                                            const modelId = typeof opt === 'string' ? opt : opt.id;
-                                                            const modelLabel = typeof opt === 'string' ? opt : opt.label;
-                                                            const isCurrent = activeConnection?.provider === provider && activeConnection?.modelName === modelId;
-
-                                                            return (
-                                                                <button
-                                                                    key={modelId}
-                                                                    type="button"
-                                                                    onClick={() => handleSelectQuickModel(provider, modelId)}
-                                                                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
-                                                                        isCurrent
-                                                                            ? 'bg-emerald-50 text-emerald-800 font-semibold border border-emerald-200'
-                                                                            : 'hover:bg-[#f7f7f5] text-[#37352f]'
-                                                                    }`}
-                                                                >
-                                                                    <span className="truncate">{modelLabel}</span>
-                                                                    {isCurrent && <CheckCircle2 size={13} className="text-emerald-600 shrink-0 ml-1" />}
-                                                                </button>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-[9999px] border border-[#e9e9e8] bg-white shadow-none focus-within:border-[#d4d4d4] transition-all">
+                    <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-[9999px] border border-[#e9e9e8] bg-white shadow-none focus-within:border-[#d4d4d4] transition-all px-2 gap-1.5">
                         <button
                             type="button"
                             onClick={() => setShowToolbar(prev => !prev)}
-                            className="shrink-0 w-12 h-full flex items-center justify-center text-[#787774] hover:text-[#37352f] transition-colors"
-                            aria-label={showToolbar ? "페르소나 선택 닫기" : "페르소나 선택 열기"}
+                            className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-colors ${showToolbar ? 'bg-blue-600 text-white shadow-xs' : 'text-[#787774] hover:text-[#37352f] hover:bg-[#f4f4f2]'}`}
+                            aria-label={showToolbar ? "도구 닫기" : "도구 열기"}
                             aria-expanded={showToolbar}
-                            aria-controls="chat-persona-selector"
-                            title={showToolbar ? "닫기" : "페르소나 선택"}
+                            title={showToolbar ? "닫기" : "페르소나 / 모델 선택"}
                         >
-                            <span className={`flex items-center justify-center transition-transform duration-200 ease-out motion-reduce:transition-none ${showToolbar ? 'rotate-45' : 'rotate-0'}`}>
+                            <span className={`flex items-center justify-center transition-transform duration-200 ease-out ${showToolbar ? 'rotate-45' : 'rotate-0'}`}>
                                 <Plus size={20} />
                             </span>
                         </button>
+
                         <input
                             type="text"
                             value={inputValue}
@@ -1933,11 +1818,12 @@ const ChatView: React.FC<ChatViewProps> = ({
                             className="chat-input-field flex-1 min-w-0 h-full px-2 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
                             disabled={isProcessing}
                         />
+
                         <button
                             type="button"
                             onClick={() => handleSend()}
                             disabled={!inputValue.trim() || isProcessing}
-                            className="chat-send-button mr-2 shrink-0 w-9 h-9 rounded-[9999px] flex items-center justify-center transition-all disabled:cursor-not-allowed"
+                            className="chat-send-button shrink-0 w-9 h-9 rounded-[9999px] flex items-center justify-center transition-all disabled:cursor-not-allowed"
                             aria-label="메시지 전송"
                             title="메시지 전송"
                         >
@@ -1946,9 +1832,166 @@ const ChatView: React.FC<ChatViewProps> = ({
                     </div>
                 </div>
             </div>
+
+            {/* Dedicated AI Model Selection Modal (Step 2: Dropdown format) */}
+            {activeModalType === 'model' && (
+                <div className="fixed inset-0 z-[95] bg-black/45 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+                    <div className="w-full max-w-md h-auto bg-white rounded-2xl border border-[#e9e9e8] shadow-2xl flex flex-col overflow-hidden">
+                        <div className="px-5 py-4 border-b border-[#efefef] flex items-center justify-between shrink-0 bg-white">
+                            <h3 className="text-base font-medium text-[#37352f]">AI 모델 선택</h3>
+                            <button
+                                type="button"
+                                onClick={() => setActiveModalType(null)}
+                                className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774] transition-colors"
+                                aria-label="닫기"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="p-5 space-y-4">
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-medium text-[#787774] uppercase ml-1">API 공급자</label>
+                                <select
+                                    value={selectedModalProvider}
+                                    onChange={(e) => {
+                                        const p = e.target.value as ApiConnection['provider'];
+                                        setSelectedModalProvider(p);
+                                        const options = getModelOptionsForProvider(p);
+                                        const firstOpt = options.length > 0 ? (typeof options[0] === 'string' ? options[0] : options[0].id) : getDefaultModelForProvider(p);
+                                        setSelectedModalModel(firstOpt);
+                                    }}
+                                    className="w-full px-3.5 py-2.5 rounded-xl border border-[#dcdcd9] bg-white text-sm font-medium text-[#37352f] outline-none focus:border-[#d4d4d4] transition-all"
+                                >
+                                    {CHAT_PROVIDERS.map(p => (
+                                        <option key={p} value={p}>{getProviderDisplayName(p)}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-medium text-[#787774] uppercase ml-1">대화 모델</label>
+                                <select
+                                    value={selectedModalModel}
+                                    onChange={(e) => setSelectedModalModel(e.target.value)}
+                                    className="w-full px-3.5 py-2.5 rounded-xl border border-[#dcdcd9] bg-white text-sm font-medium text-[#37352f] outline-none focus:border-[#d4d4d4] transition-all"
+                                >
+                                    {getModelOptionsForProvider(selectedModalProvider).map(opt => {
+                                        const id = typeof opt === 'string' ? opt : opt.id;
+                                        const label = typeof opt === 'string' ? opt : opt.label;
+                                        return <option key={id} value={id}>{label}</option>;
+                                    })}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="px-5 py-3.5 border-t border-[#efefef] flex justify-end gap-2 shrink-0 bg-white">
+                            <button
+                                type="button"
+                                onClick={() => setActiveModalType(null)}
+                                className="px-4 py-2 rounded-xl border border-[#dcdcd9] text-sm font-medium text-[#5f5f5f] hover:bg-[#f7f7f5] transition-colors"
+                            >
+                                취소
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    handleSelectQuickModel(selectedModalProvider, selectedModalModel);
+                                    setActiveModalType(null);
+                                }}
+                                className="px-5 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-all active:scale-95 shadow-md"
+                            >
+                                적용하기
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Dedicated Persona Selection Modal (Step 2: Compact List format) */}
+            {activeModalType === 'persona' && (
+                <div className="fixed inset-0 z-[95] bg-black/45 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+                    <div className="w-full max-w-md h-auto bg-white rounded-2xl border border-[#e9e9e8] shadow-2xl flex flex-col overflow-hidden">
+                        <div className="px-5 py-4 border-b border-[#efefef] flex items-center justify-between shrink-0 bg-white">
+                            <div>
+                                <h3 className="text-base font-medium text-[#37352f]">참여 페르소나 설정</h3>
+                                <p className="text-sm text-[#8a8a8a] mt-0.5">최대 {MAX_GROUP_AGENTS}명까지 선택할 수 있습니다.</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setActiveModalType(null)}
+                                className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774] transition-colors"
+                                aria-label="닫기"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="p-4 overflow-y-auto max-h-[60vh] space-y-1.5">
+                            {availableAgents.map((availableAgent) => {
+                                const isActive = activeAgents.some((a) => a.id === availableAgent.id);
+                                const currentIds = activeAgents.map((a) => a.id);
+                                const canRemoveFromGroup = isActive && currentIds.length > 1;
+                                const toggleAgent = () => {
+                                    if (isActive) {
+                                        if (!canRemoveFromGroup) return;
+                                        onSelectAgents?.(currentIds.filter((id) => id !== availableAgent.id));
+                                        return;
+                                    }
+                                    if (currentIds.length >= MAX_GROUP_AGENTS) return;
+                                    onSelectAgents?.([...currentIds, availableAgent.id]);
+                                };
+                                return (
+                                    <div
+                                        key={availableAgent.id}
+                                        onClick={toggleAgent}
+                                        className={`flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer ${
+                                            isActive ? 'border-[#dcdcd9] bg-blue-50/60' : 'border-[#e9e9e8] bg-white hover:bg-[#fcfcfb]'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-3 min-w-0">
+                                            <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-[#e9e9e8]">
+                                                {availableAgent.avatar ? (
+                                                    <img src={availableAgent.avatar} alt="" style={getAvatarImageStyle(availableAgent.avatarFrame)} className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <div className="w-full h-full bg-[#f3f3f3]" />
+                                                )}
+                                            </div>
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-medium text-[#37352f] truncate">{availableAgent.name}</div>
+                                                <div className="text-sm text-[#8a8a8a] truncate">{availableAgent.role}</div>
+                                            </div>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            disabled={isActive && !canRemoveFromGroup}
+                                            className={`w-6 h-6 rounded-full text-sm font-medium flex items-center justify-center shrink-0 ${
+                                                isActive ? 'bg-blue-600 text-white' : 'bg-[#f1f1ef] text-[#787774]'
+                                            }`}
+                                        >
+                                            {isActive ? <Check size={14} strokeWidth={2.6} /> : <Plus size={14} strokeWidth={2.2} />}
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="px-5 py-3.5 border-t border-[#efefef] flex justify-end shrink-0 bg-white">
+                            <button
+                                type="button"
+                                onClick={() => setActiveModalType(null)}
+                                className="px-5 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-all active:scale-95 shadow-md"
+                            >
+                                확인
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {editingAgentId && agentDraft && (
                 <div className="fixed inset-0 z-[90] bg-black/45 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-                    <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-2xl h-auto max-h-[92dvh] sm:max-h-[88vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
+                    <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-lg h-auto max-h-[92dvh] sm:max-h-[88vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
                         <div className="px-5 py-4 border-b border-[#efefef] flex items-center justify-between shrink-0 bg-white">
                             <div>
                                 <h4 className="text-[#37352f] font-medium">페르소나 편집</h4>
@@ -2075,29 +2118,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 )}
 
                                 {agentEditorTab === 'api' && (
-                                    <div className="space-y-5">
-                                        <label className="block">
-                                            <span className="text-xs font-normal text-[#787774] ml-1">사용 방식</span>
-                                            <select
-                                                value={agentApiSelection}
-                                                onChange={(e) => handleAgentApiSelectionChange(e.target.value)}
-                                                className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
-                                            >
-                                                <option value="__default__">
-                                                    {activeConnection
-                                                        ? `기본 API 연결 사용 · ${getProviderDisplayName(activeConnection.provider)} · ${activeConnection.modelName}`
-                                                        : '새 기본 API 연결 만들기'}
-                                                </option>
-                                                {supportedChatConnections.map((connection) => (
-                                                    <option key={connection.id} value={connection.id}>
-                                                        이 페르소나만 사용 · {getProviderDisplayName(connection.provider)} · {connection.modelName}
-                                                    </option>
-                                                ))}
-                                                <option value="__new__">이 페르소나만 새 연결 추가</option>
-                                            </select>
-                                        </label>
-
-                                        <div className="rounded-xl border border-[#e9e9e8] bg-[#fbfbfa] p-4 space-y-4">
+                                    <div className="space-y-4">
                                             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                                 <label className="block">
                                                     <span className="text-xs font-normal text-[#787774] ml-1">API 공급자</span>
@@ -2128,7 +2149,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                                             title={agentApiDraft.modelName || ''}
                                                             value={agentApiDraft.modelName || ''}
                                                             onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
-                                                            className="mt-1 w-full px-3 pr-10 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)] truncate"
+                                                            className="mt-1 w-full px-3 pr-10 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[#d4d4d4] truncate"
                                                         >
                                                             {agentLocalModels.map(model => <option key={model} value={model}>{model}</option>)}
                                                         </select>
@@ -2136,7 +2157,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                                         <select
                                                             value={agentApiDraft.modelName || getDefaultModelForProvider(agentApiDraft.provider || 'gemini')}
                                                             onChange={(e) => updateAgentApiDraft({ modelName: e.target.value })}
-                                                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                                                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[#d4d4d4]"
                                                         >
                                                             {agentApiModelOptions.map(model => (
                                                                 <option key={model.id} value={model.id}>{model.label}</option>
@@ -2206,9 +2227,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                                 </button>
                                             </div>
                                         </div>
-
-                                    </div>
-                                )}
+                                    )}
                             </div>
                         </div>
 

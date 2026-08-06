@@ -215,8 +215,8 @@ const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto min-h-0 p-4 sm:p-5">
-          <div className="flex justify-center">
+        <div className="flex-1 overflow-y-auto min-h-0 p-4 sm:p-5 flex flex-col gap-6">
+          <div className="flex justify-center shrink-0">
             <div
               role="application"
               aria-label="페르소나 이미지 위치 조정"
@@ -226,9 +226,15 @@ const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
               onPointerCancel={handlePointerEnd}
               onWheel={handleWheel}
               className="relative mx-auto aspect-square w-full max-w-[390px] overflow-hidden rounded-full bg-[#111] cursor-grab active:cursor-grabbing"
-              style={{ touchAction: 'none', maxWidth: 'min(390px, calc(100dvh - 190px), calc(100vw - 56px))' }}
+              style={{ touchAction: 'none', maxWidth: 'min(390px, calc(100dvh - 240px), calc(100vw - 56px))' }}
             >
-              {cropImage}
+              <img
+                src={avatar}
+                alt={name || '페르소나 이미지'}
+                draggable={false}
+                style={getAvatarImageStyle(currentFrame)}
+                className="absolute inset-0 h-full w-full select-none object-cover transition-transform duration-0 pointer-events-none"
+              />
               <div className="pointer-events-none absolute inset-0 rounded-full bg-black/10" />
               <div className="pointer-events-none absolute inset-0 rounded-full border-2 border-white/95">
                 <div className="absolute left-1/3 top-0 h-full w-px bg-white/65" />
@@ -245,6 +251,19 @@ const AvatarCropperModal: React.FC<AvatarCropperModalProps> = ({
                 <span data-crop-resize-handle className="pointer-events-auto absolute left-[15%] top-[15%] h-4 w-4 rounded-full bg-[rgba(245,245,245,0.95)] cursor-nwse-resize" />
               </div>
             </div>
+          </div>
+          <div className="flex items-center gap-3 w-full max-w-[390px] mx-auto px-2">
+            <span className="text-xs font-medium text-[#787774]">축소</span>
+            <input 
+              type="range" 
+              min="1" 
+              max="3" 
+              step="0.01" 
+              value={currentFrame.zoom}
+              onChange={(e) => applyFrame({ ...frameRef.current, zoom: parseFloat(e.target.value) })}
+              className="flex-1 h-1.5 bg-[#e9e9e8] rounded-full appearance-none outline-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-[#dcdcd9] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-[#dcdcd9] [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:shadow-sm [&::-moz-range-thumb]:cursor-pointer"
+            />
+            <span className="text-xs font-medium text-[#787774]">확대</span>
           </div>
         </div>
 

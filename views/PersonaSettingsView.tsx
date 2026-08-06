@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AIAgent, ApiConnection, AppSettings, PersonaMemory } from '../types';
-import { Plus, Trash2, Save, RotateCcw, Edit3, X, FlaskConical } from 'lucide-react';
+import { Plus, Trash2, Save, RotateCcw, Edit3, X, FlaskConical, Cpu, Database } from 'lucide-react';
 import { DEFAULT_AGENTS } from '../data/defaultAgents';
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
@@ -355,13 +355,14 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
     openEditor(newAgent);
   };
 
-  const removeAgent = (id: string) => {
+  const removeAgent = (id: string): boolean => {
     if (agents.length <= 1) {
       alert('최소 한 개의 페르소나는 유지해야 합니다.');
-      return;
+      return false;
     }
-    if (!window.confirm('이 페르소나를 삭제할까요?')) return;
+    if (!window.confirm('이 페르소나를 삭제할까요?')) return false;
     onUpdateAgents(agents.filter((agent) => agent.id !== id));
+    return true;
   };
 
   const resetAgents = () => {
@@ -404,92 +405,70 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-12">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-normal text-[#37352f]">페르소나 설정</h2>
-          <p className="text-sm text-[#787774] mt-1">이름, 말투, 프로필, 연결 모델을 한 번에 정리하세요.</p>
-        </div>
-        <div className="flex gap-2 self-start sm:self-auto shrink-0">
-          <button
-            onClick={addCustomAgent}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] text-sm hover:bg-[#eeeeee] transition-colors whitespace-nowrap"
-          >
-            <Plus size={14} /> 추가
-          </button>
-          <button
-            onClick={resetAgents}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#d9d9d7] text-[#37352f] text-sm hover:bg-[#f7f7f5] transition-colors whitespace-nowrap"
-          >
-            <RotateCcw size={14} /> 기본값
-          </button>
-        </div>
+      <div className="pb-5 border-b border-[#f0f0ee]">
+        <h2 className="text-xl font-medium text-[#37352f] tracking-tight">페르소나 설정</h2>
+        <p className="text-sm text-[#787774] mt-1">이름, 말투, 프로필, 연결 모델을 손쉽게 변경하세요.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="divide-y divide-[#f0f0ee]">
         {agents.map((agent) => {
           const connection = settings.apiConnections?.find((conn) => conn.id === agent.connectionId);
-          const agentMemories = personaMemories
-            .filter((memory) => memory.agentId === agent.id)
-            .sort(sortMemoriesByRecent);
 
           return (
-            <div key={agent.id} className="bg-white border border-[#e9e9e8] rounded-xl p-4 space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="w-11 h-11 rounded-full overflow-hidden flex items-center justify-center text-lg text-white shrink-0"
-                    style={{ backgroundColor: agent.color || '#37352f' }}
-                  >
-                    {agent.avatar ? (
-                      <img src={agent.avatar} alt={agent.name} style={getAvatarImageStyle(agent.avatarFrame)} className="w-full h-full object-cover" />
-                    ) : (
-                      <span>{agent.emoji || '🤖'}</span>
+            <div key={agent.id} className="py-4.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 group">
+              <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                <div
+                  className="w-10 h-10 sm:w-11 sm:h-11 rounded-full overflow-hidden flex items-center justify-center shrink-0 shadow-2xs border border-black/5"
+                  style={{ backgroundColor: agent.color || '#37352f' }}
+                >
+                  {agent.avatar ? (
+                    <img src={agent.avatar} alt={agent.name} style={getAvatarImageStyle(agent.avatarFrame)} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-white text-base">{agent.emoji || '🤖'}</span>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-medium text-[#37352f] leading-snug">{agent.name}</h3>
+                    <span className="px-2 py-0.5 rounded-md bg-[#f4f4f2] text-[#5f5f5f] text-sm font-medium">
+                      {agent.role}
+                    </span>
+                    {connection && (
+                      <span className="text-sm text-[#8a8a8a] font-medium">
+                        · {connection.provider.toUpperCase()} ({connection.modelName})
+                      </span>
                     )}
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-sm text-[#37352f] truncate">{agent.name}</div>
-                    <div className="text-xs text-[#9b9a97] truncate">{agent.role}</div>
-                  </div>
-                </div>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => openEditor(agent)}
-                    className="p-1.5 rounded-md hover:bg-[#f2f2f0] text-[#787774]"
-                    title="편집"
-                  >
-                    <Edit3 size={14} />
-                  </button>
-                  <button
-                    onClick={() => removeAgent(agent.id)}
-                    className="p-1.5 rounded-md hover:bg-[#fff0f0] text-[#cf3f3f]"
-                    title="삭제"
-                  >
-                    <Trash2 size={14} />
-                  </button>
                 </div>
               </div>
 
-              <p className="text-xs text-[#787774] line-clamp-2">{agent.personality}</p>
-              <div className="text-xs text-[#9b9a97] space-y-1">
-                {connection && <div>연결: {connection.provider.toUpperCase()} · {connection.modelName}</div>}
+              <div className="flex items-center justify-end gap-2 shrink-0 pt-1 sm:pt-0">
+                <button
+                  onClick={() => openEditor(agent)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-[#37352f] bg-[#f4f4f2] hover:bg-[#eaeaea] transition-all"
+                >
+                  <Edit3 size={13} /> 편집
+                </button>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setMemoryPanelAgentId(agent.id)}
-                className="w-full flex items-center justify-between gap-3 rounded-xl border border-[#efefef] bg-[#fbfbfa] px-3 py-2.5 text-left hover:bg-[#f7f7f5] transition-colors"
-              >
-                <span className="min-w-0">
-                  <span className="block text-xs font-medium text-[#37352f]">메모리</span>
-                  <span className="block text-[11px] text-[#9b9a97] truncate">필요할 때만 열어서 관리</span>
-                </span>
-                <span className="shrink-0 rounded-full bg-[#f1f1f0] px-2.5 py-1 text-[11px] font-medium text-[#787774]">
-                  {agentMemories.length}개 · 관리
-                </span>
-              </button>
             </div>
           );
         })}
+      </div>
+
+      {/* Bottom Action Bar */}
+      <div className="pt-5 border-t border-[#f0f0ee] flex items-center justify-end gap-2.5">
+        <button
+          onClick={resetAgents}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-[#5f5f5f] bg-[#f4f4f2] hover:bg-[#eaeaea] hover:text-[#37352f] transition-all"
+        >
+          <RotateCcw size={15} /> 기본값으로 복원
+        </button>
+        <button
+          onClick={addCustomAgent}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.98] transition-all shadow-xs"
+        >
+          <Plus size={16} /> 새 페르소나 추가
+        </button>
       </div>
 
       {memoryPanelAgent && (
@@ -589,7 +568,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
 
       {editingId && draft && (
         <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-hidden">
-          <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-2xl h-auto max-h-[92dvh] sm:max-h-[90vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
+          <div className="w-full max-w-[calc(100vw-24px)] sm:max-w-lg h-auto max-h-[92dvh] sm:max-h-[90vh] bg-white rounded-2xl border border-[#e9e9e8] flex flex-col overflow-hidden">
             <div className="px-5 py-4 border-b border-[#efefef] flex items-center justify-between shrink-0 bg-white">
               <div>
                 <h4 className="text-[#37352f] font-medium">{editingTarget ? '페르소나 편집' : '새 페르소나'}</h4>
@@ -715,29 +694,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                 )}
 
                 {editorTab === 'api' && (
-                  <div className="space-y-5">
-                    <label className="block">
-                      <span className="text-xs font-medium text-[#787774] ml-1 uppercase">사용 방식</span>
-                      <select
-                        value={apiSelection}
-                        onChange={(e) => handleApiSelectionChange(e.target.value)}
-                        className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm focus:border-[#d4d4d4] focus:ring-1 focus:ring-[#d4d4d4] transition-all outline-none bg-white"
-                      >
-                        <option value="__default__">
-                          {activeConnection
-                            ? `기본 API 연결 사용 · ${getProviderDisplayName(activeConnection.provider)} · ${activeConnection.modelName}`
-                            : '새 기본 API 연결 만들기'}
-                        </option>
-                        {supportedChatConnections.map(conn => (
-                          <option key={conn.id} value={conn.id}>
-                            이 페르소나만 사용 · {getProviderDisplayName(conn.provider)} · {conn.modelName}
-                          </option>
-                        ))}
-                        <option value="__new__">이 페르소나만 새 연결 추가</option>
-                      </select>
-                    </label>
-
-                    <div className="rounded-xl border border-[#e9e9e8] bg-[#fbfbfa] p-4 space-y-4">
+                  <div className="space-y-4">
                       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <label className="block">
                           <span className="text-xs font-medium text-[#787774] ml-1 uppercase">API 공급자</span>
@@ -753,7 +710,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                                 baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
                               });
                             }}
-                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[#d4d4d4]"
                           >
                             {CHAT_PROVIDERS.map(provider => (
                               <option key={provider} value={provider}>{getProviderDisplayName(provider)}</option>
@@ -768,7 +725,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                               title={apiConnectionDraft.modelName || ''}
                               value={apiConnectionDraft.modelName || ''}
                               onChange={(e) => updateApiDraft({ modelName: e.target.value })}
-                              className="mt-1 w-full px-3 pr-10 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)] truncate"
+                              className="mt-1 w-full px-3 pr-10 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[#d4d4d4] truncate"
                             >
                               {localModels.map(model => <option key={model} value={model}>{model}</option>)}
                             </select>
@@ -776,7 +733,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                             <select
                               value={apiConnectionDraft.modelName || getDefaultModelForProvider(apiConnectionDraft.provider || 'gemini')}
                               onChange={(e) => updateApiDraft({ modelName: e.target.value })}
-                              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[#d4d4d4]"
                             >
                               {apiModelOptions.map(model => (
                                 <option key={model.id} value={model.id}>{model.label}</option>
@@ -787,7 +744,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                               value={apiConnectionDraft.modelName || ''}
                               onChange={(e) => updateApiDraft({ modelName: e.target.value })}
                               placeholder={apiConnectionDraft.provider === 'ollama' || apiConnectionDraft.provider === 'custom' ? '모델 목록을 불러오거나 직접 입력' : '모델 이름'}
-                              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"
+                              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[#d4d4d4]"
                             />
                           )}
                         </label>
@@ -800,7 +757,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                             value={apiConnectionDraft.baseUrl || (apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
                             onChange={(e) => updateApiDraft({ baseUrl: e.target.value })}
                             placeholder={apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
-                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[#d4d4d4]"
                           />
                         </label>
                       )}
@@ -824,7 +781,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                             value={apiConnectionDraft.apiKey || ''}
                             onChange={(e) => updateApiDraft({ apiKey: e.target.value })}
                             placeholder={getApiKeyPlaceholder(apiConnectionDraft.provider)}
-                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[var(--color-primary)]"
+                            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[#d4d4d4]"
                           />
                         </label>
                       )}
@@ -846,19 +803,30 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                         </button>
                       </div>
                     </div>
-
-                  </div>
-                )}
+                  )}
               </div>
             </div>
 
             <div className="px-5 py-4 border-t border-[#efefef] flex justify-end gap-2 shrink-0 bg-white">
-              <button
-                onClick={closeEditor}
-                className="px-4 py-2 rounded-lg border border-[#dcdcd9] text-sm text-[#37352f] hover:bg-[#f7f7f5] transition-colors"
-              >
-                취소
-              </button>
+              {editingTarget ? (
+                <button
+                  onClick={() => {
+                    if (removeAgent(editingTarget.id)) {
+                      closeEditor();
+                    }
+                  }}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors inline-flex items-center gap-1.5"
+                >
+                  <Trash2 size={15} /> 삭제
+                </button>
+              ) : (
+                <button
+                  onClick={closeEditor}
+                  className="px-4 py-2 rounded-lg border border-[#dcdcd9] text-sm text-[#37352f] hover:bg-[#f7f7f5] transition-colors"
+                >
+                  취소
+                </button>
+              )}
               <button
                 onClick={() => void saveAgent()}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#f7f7f7] border border-[#e9e9e8] text-sm text-[#171717] hover:bg-[#eeeeee] transition-all active:scale-95"

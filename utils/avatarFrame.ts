@@ -59,7 +59,6 @@ export const getAvatarImageStyle = (frame?: Partial<AvatarFrame> | null): CSSPro
 
   return {
     display: 'block',
-    objectPosition: `${normalized.x}% ${normalized.y}%`,
     transform: `translate(${offsetX}%, ${offsetY}%) scale(${normalized.zoom})`,
     transformOrigin: 'center center',
   };

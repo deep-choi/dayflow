@@ -15,6 +15,10 @@ import { normalizePersistedImageSource } from './utils/imageAsset';
 import { getAvatarImageStyle, sanitizeAvatarFrame } from './utils/avatarFrame';
 import { getDarkAdaptiveColor } from './utils/colorPalette';
 
+import { UserMenuPopover } from './components/UserMenuPopover';
+import { HelpModal } from './components/HelpModal';
+import type { SettingsTab } from './views/SettingsView';
+
 const CalendarView = React.lazy(() => import('./views/CalendarView'));
 const TodoView = React.lazy(() => import('./views/TodoView'));
 const JournalView = React.lazy(() => import('./views/JournalView'));
@@ -1136,7 +1140,19 @@ const App: React.FC = () => {
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
   });
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('account');
+  const [isHideSettingsTabs, setIsHideSettingsTabs] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const sidebarProfileButtonRef = useRef<HTMLButtonElement>(null);
+
+  const openSettingsModal = useCallback((tab: SettingsTab = 'account', hideTabs: boolean = false) => {
+    setSettingsTab(tab);
+    setIsHideSettingsTabs(hideTabs);
+    setIsSettingsModalOpen(true);
+    setIsUserMenuOpen(false);
+  }, []);
 
   useEffect(() => {
     console.log(`[App] v2.5 booting id=${bootId}...`);
@@ -3922,6 +3938,8 @@ const App: React.FC = () => {
 
   const renderSettingsView = () => (
     <SettingsView
+      initialTab={settingsTab}
+      hideTabs={isHideSettingsTabs}
       agents={resolvedAiAgents}
       onUpdateAgents={updateAgents}
       settings={settings}
@@ -4155,7 +4173,7 @@ const App: React.FC = () => {
               <button
                 type="button"
                 onClick={handleNewChat}
-                className="sidebar-brand-logo rounded-lg text-left font-medium tracking-[-0.02em] text-[#171717] transition-colors hover:text-[var(--color-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                className="sidebar-brand-logo rounded-lg text-left font-medium tracking-[-0.02em] text-[#37352f] transition-colors hover:text-[var(--color-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
                 aria-label="홈 화면으로 이동"
                 title="홈 화면으로 이동"
               >
@@ -4165,7 +4183,7 @@ const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsSidebarCollapsed(prev => !prev)}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors hover:bg-[#f7f7f7] hover:text-[#37352f]"
               aria-label={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
               title={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
             >
@@ -4182,12 +4200,12 @@ const App: React.FC = () => {
                   w-full flex items-center ${isSidebarCollapsed ? 'justify-center px-0 py-3' : 'px-3 py-2.5'} rounded-lg transition-colors group
                   ${currentView === item.id
                     ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'
-                    : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}
+                    : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#37352f]'}
                 `}
                 aria-label={item.label}
                 title={isSidebarCollapsed ? item.label : undefined}
               >
-                <item.icon size={18} className={currentView === item.id ? 'text-[var(--color-primary)]' : 'text-[#8a8a8a] group-hover:text-[#171717]'} strokeWidth={currentView === item.id ? 2.5 : 2} />
+                <item.icon size={18} className={currentView === item.id ? 'text-[var(--color-primary)]' : 'text-[#8a8a8a] group-hover:text-[#37352f]'} strokeWidth={currentView === item.id ? 2.5 : 2} />
                 {!isSidebarCollapsed && (
                   <span className={`ml-3 text-[15px] leading-5 ${currentView === item.id ? 'font-medium text-[var(--color-primary)]' : 'font-normal'}`}>
                     {item.label}
@@ -4528,44 +4546,60 @@ const App: React.FC = () => {
 
         </div>
 
-        {/* Bottom Section: Pro & Auth */}
-        <div className={isSidebarCollapsed ? 'p-3' : 'p-4 space-y-3'}>
+        {/* Bottom Section: User Profile */}
+        <div className={`relative shrink-0 ${isSidebarCollapsed ? 'p-3' : 'p-4'}`}>
           {currentUser ? (
-            <button
-              type="button"
-              onClick={() => setIsSettingsModalOpen(true)}
-              className={`${isSidebarCollapsed ? 'mx-auto flex h-11 w-11 items-center justify-center rounded-xl p-0' : 'w-full rounded-[14px] p-3 text-left'} bg-white transition-colors hover:bg-[#f7f7f7]`}
-              title="설정"
-              aria-label="설정 열기"
-            >
-              <div className={`flex items-center min-w-0 ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
-                <div className="w-9 h-9 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[14px] leading-5 font-medium text-[#171717] flex-shrink-0 overflow-hidden">
-                  {currentUser?.avatar ? (
-                    <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
-                  ) : (
-                    currentUser?.name?.[0] || 'J'
+            <>
+              <button
+                ref={sidebarProfileButtonRef}
+                type="button"
+                onClick={() => setIsUserMenuOpen((prev) => !prev)}
+                className={`${isSidebarCollapsed ? 'mx-auto flex h-11 w-11 items-center justify-center rounded-xl p-0' : 'w-full rounded-[14px] p-3 text-left'} bg-white transition-colors hover:bg-[#f7f7f7] ${isUserMenuOpen ? 'bg-[#f7f7f7]' : ''}`}
+                title="프로필 및 설정 메뉴"
+                aria-label="프로필 및 설정 메뉴 열기"
+              >
+                <div className={`flex items-center min-w-0 ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
+                  <div className="w-9 h-9 rounded-full bg-[#00a67d] text-white flex items-center justify-center text-[14px] leading-5 font-medium flex-shrink-0 overflow-hidden shadow-xs">
+                    {currentUser?.avatar ? (
+                      <img src={currentUser.avatar} alt={currentUser.name} style={getAvatarImageStyle(currentUser.avatarFrame)} className="h-full w-full object-cover" />
+                    ) : (
+                      currentUser?.name?.[0]?.toUpperCase() || 'U'
+                    )}
+                  </div>
+                  {!isSidebarCollapsed && (
+                    <>
+                      <div className="min-w-0 flex-1 text-left">
+                        <div className="text-[14px] leading-5 font-medium text-[#37352f] truncate">{currentUser?.name || 'JNMED'}</div>
+                        <div className="text-[12px] leading-4 font-normal text-[#8a8a8a] truncate mt-0.5">
+                          {currentUser?.email || 'jnmed5672@gmail.com'}
+                        </div>
+                      </div>
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
+                        <MoreVertical size={16} />
+                      </span>
+                    </>
                   )}
                 </div>
-                {!isSidebarCollapsed && (
-                  <>
-                    <div className="min-w-0 flex-1 text-left">
-                      <div className="text-[14px] leading-5 font-medium text-[#171717] truncate">{currentUser?.name || 'JNMED'}</div>
-                      <div className="text-[13px] leading-5 font-normal text-[#8a8a8a] truncate mt-0.5">내 계정</div>
-                    </div>
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
-                      <SettingsIcon size={16} />
-                    </span>
-                  </>
-                )}
-              </div>
-            </button>
+              </button>
+
+              <UserMenuPopover
+                isOpen={isUserMenuOpen}
+                onClose={() => setIsUserMenuOpen(false)}
+                currentUser={currentUser}
+                triggerRef={sidebarProfileButtonRef}
+                isSidebarCollapsed={isSidebarCollapsed}
+                onOpenTab={(tab, hideTabs = true) => openSettingsModal(tab, hideTabs)}
+                onOpenFullSettings={() => openSettingsModal('persona', false)}
+                onLogout={handleLogout}
+              />
+            </>
           ) : (
             <div className={isSidebarCollapsed ? 'flex justify-center' : 'px-1'}>
               <button
                 onClick={() => {
                   openAuthModal('login');
                 }}
-                className={`${isSidebarCollapsed ? 'h-11 w-11 px-0' : 'w-full gap-2 px-3 py-2'} flex items-center justify-center border border-[#e9e9e8] bg-[#f7f7f7] text-[#171717] text-[14px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all`}
+                className={`${isSidebarCollapsed ? 'h-11 w-11 px-0' : 'w-full gap-2 px-3 py-2'} flex items-center justify-center border border-[#e9e9e8] bg-[#f7f7f7] text-[#37352f] text-[14px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all`}
                 aria-label="로그인 / 가입하기"
                 title="로그인 / 가입하기"
               >
@@ -4596,7 +4630,7 @@ const App: React.FC = () => {
             {currentUser ? (
               <div className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] overflow-hidden">
                 {currentUser?.avatar ? (
-                  <img src={currentUser.avatar} alt={currentUser.name} className="w-full h-full object-cover" />
+                  <img src={currentUser.avatar} alt={currentUser.name} style={getAvatarImageStyle(currentUser.avatarFrame)} className="w-full h-full object-cover" />
                 ) : (
                   currentUser?.name?.[0] || 'U'
                 )}
@@ -4674,18 +4708,18 @@ const App: React.FC = () => {
           onMouseDown={() => setIsSettingsModalOpen(false)}
         >
           <div
-            className="relative flex max-h-[calc(100dvh-48px)] w-full max-w-[1120px] flex-col overflow-hidden rounded-2xl bg-white"
+            className={`relative flex max-h-[calc(100dvh-24px)] sm:max-h-[calc(100dvh-48px)] w-full ${isHideSettingsTabs ? 'max-w-[560px]' : 'max-w-[960px] h-[90dvh] sm:h-[85vh]'} flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-[#e9e9e8]`}
             onMouseDown={(event) => event.stopPropagation()}
           >
             <button
               type="button"
               onClick={() => setIsSettingsModalOpen(false)}
-              className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-lg bg-white text-[#787774] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
+              className="absolute right-3.5 top-3.5 sm:right-5 sm:top-5 z-30 flex h-8 w-8 items-center justify-center rounded-full bg-[#e8e8e6] sm:bg-[#f4f4f2] text-[#171717] sm:text-[#787774] transition-colors hover:bg-[#eaeaea] hover:text-[#171717] shadow-2xs"
               aria-label="설정 닫기"
             >
-              <X size={17} />
+              <X size={16} />
             </button>
-            <div className="overflow-y-auto px-4 pt-3 custom-scrollbar sm:px-6">
+            <div className={`overflow-y-auto custom-scrollbar flex-1 ${isHideSettingsTabs ? 'px-4 pt-3 sm:px-6' : ''}`}>
               <React.Suspense fallback={<ViewLoadingFallback />}>
                 {renderSettingsView()}
               </React.Suspense>
@@ -4807,7 +4841,7 @@ const App: React.FC = () => {
                   >
                     <div className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] flex-shrink-0 overflow-hidden">
                       {currentUser?.avatar ? (
-                        <img src={currentUser.avatar} alt={currentUser.name} className="h-full w-full object-cover" />
+                        <img src={currentUser.avatar} alt={currentUser.name} style={getAvatarImageStyle(currentUser.avatarFrame)} className="h-full w-full object-cover" />
                       ) : (
                         currentUser?.name?.[0] || 'U'
                       )}
@@ -4872,6 +4906,7 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+      <HelpModal isOpen={isHelpModalOpen} onClose={() => setIsHelpModalOpen(false)} />
     </div>
   );
 };

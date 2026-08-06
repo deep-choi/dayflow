@@ -10,14 +10,14 @@
   --color-primary-hover: #1d4ed8;
   --color-primary-light: #eff6ff;
   --app-bg: #ffffff;
-  --app-text: #171717;
+  --app-text: #37352f;
   --app-surface: #ffffff;
   --app-surface-alt: #fbfbfb;
   --app-surface-subtle: #f7f7f7;
   --app-surface-hover: #eeeeee;
   --app-border: #e7e7e7;
   --app-border-strong: #d4d4d4;
-  --app-text-primary: #171717;
+  --app-text-primary: #37352f;
   --app-text-secondary: #5f5f5f;
   --app-text-muted: #8a8a8a;
   --app-text-faint: #b5b5b5;
@@ -106,12 +106,12 @@ select {
 }
 
 :where(button, [role="button"], a, input, textarea, select):focus-visible {
-  outline: 1px solid var(--color-primary);
+  outline: 1px solid #d4d4d4;
   outline-offset: 2px;
 }
 
 :where(input, textarea, select):focus {
-  border-color: var(--color-primary);
+  border-color: #d4d4d4;
   outline: none;
 }
 
