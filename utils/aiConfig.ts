@@ -1,8 +1,8 @@
 import { AppSettings, ApiConnection } from '../types';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
 export const DEFAULT_XAI_MODEL = 'grok-4.3';
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.6';
+export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-0';
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 export const DEFAULT_QWEN_MODEL = 'qwen3.7-max';
@@ -30,17 +30,19 @@ export const XAI_MODEL_OPTIONS: ModelOption[] = [
 ];
 
 export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: '최신 차세대 3.5 고속 플래그십 (추천)' },
-    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', description: '최고 성능 복합 추론 프로' },
-    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', description: '초고속 초경량' },
-    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', description: '3세대 고성능' },
+    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', description: '최신 고성능·고속 모델 (추천)' },
+    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: '에이전트·코딩 작업용 고성능 모델' },
+    { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', description: '가장 빠르고 비용 효율적인 3.5 모델' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', description: '복합 추론 프로 미리보기' },
+    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', description: '경량 고속 모델' },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: '2.5 세대 고급 추론' },
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: '2.5 세대 경량 응답' },
 ];
 
 export const OPENAI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gpt-5.6', label: 'GPT-5.6', description: '차세대 5.6 최신 플래그십 (추천)' },
-    { id: 'gpt-5.6-pro', label: 'GPT-5.6 Pro', description: '최고 사양 심층 추론 프로' },
+    { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: '최신 플래그십·복잡한 작업용 (추천)' },
+    { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: '성능·속도·비용 균형형' },
+    { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: '가장 빠르고 경제적인 고처리량 모델' },
     { id: 'gpt-5.5', label: 'GPT-5.5', description: '5.5 범용 고성능' },
     { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', description: '5.5 심층 프로' },
     { id: 'gpt-5.4', label: 'GPT-5.4', description: '5.4 범용 고성능' },
@@ -123,7 +125,9 @@ export const isHostedOpenAICompatibleProvider = (provider: ApiConnection['provid
     provider === 'deepseek' || provider === 'qwen' || provider === 'kimi' || provider === 'glm';
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
+    'gemini-3.6': 'gemini-3.6-flash',
     'gemini-3.5': 'gemini-3.5-flash',
+    'gemini-3.5-flashlite': 'gemini-3.5-flash-lite',
     'gemini-3.0-pro': 'gemini-3-pro-preview',
     'gemini-3.0-flash': 'gemini-3-flash-preview',
     'gemini-3-pro': 'gemini-3.1-pro-preview',

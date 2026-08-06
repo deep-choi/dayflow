@@ -64,6 +64,13 @@ const getResponseLengthConfig = (responseLength?: AIAgent['responseLength']) =>
   RESPONSE_LENGTH_CONFIG[responseLength || 'medium'];
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const buildGeminiGenerationConfig = <T extends { temperature?: number }>(modelName: string, config: T): T => {
+  // Gemini 3.5 Flash-Lite and 3.6 Flash no longer accept sampling parameters.
+  if (!/^gemini-3\.(5|6)-/i.test(normalizeGeminiModelName(modelName))) return config;
+  const { temperature: _deprecatedTemperature, ...currentConfig } = config;
+  return currentConfig as T;
+};
+
 const stripModelfileExamplesForRuntime = (text: string): string => {
   const lines = (text || "").split("\n");
   const firstMessageIndex = lines.findIndex((line) => /^\s*MESSAGE\s+(?:user|assistant)\s+/i.test(line));
@@ -1230,12 +1237,12 @@ ${actionInstruction}
     const response = await generateGeminiChatContent({
       model: normalizedModelName,
       contents: validContents,
-      config: {
+      config: buildGeminiGenerationConfig(normalizedModelName, {
         systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
         safetySettings: GEMINI_SAFETY_SETTINGS,
         temperature: 0.68,
         maxOutputTokens: responseLengthConfig.maxOutputTokens,
-      },
+      }),
     });
 
     const firstResult = readGeminiResponseText(response);
@@ -1255,12 +1262,12 @@ ${actionInstruction}
             }],
           },
         ],
-        config: {
+        config: buildGeminiGenerationConfig(normalizedModelName, {
           systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
           safetySettings: GEMINI_SAFETY_SETTINGS,
           temperature: 0.55,
           maxOutputTokens: responseLengthConfig.maxOutputTokens,
-        },
+        }),
       });
       const repairText = readGeminiResponseText(repair).text;
       if (repairText) {
@@ -1290,12 +1297,12 @@ ${actionInstruction}
               }],
             },
           ],
-          config: {
+          config: buildGeminiGenerationConfig(normalizedModelName, {
             systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
             safetySettings: GEMINI_SAFETY_SETTINGS,
             temperature: 0.35,
             maxOutputTokens: responseLengthConfig.continuationMaxOutputTokens,
-          },
+          }),
         });
       } catch (error) {
         console.warn("Chat continuation failed:", error);
@@ -1437,7 +1444,7 @@ ${personaBlock}
     const response = await generateGeminiContentWithRetry(ai, {
       model: normalizeGeminiModelName(modelName),
       contents: validContents,
-      config: {
+      config: buildGeminiGenerationConfig(modelName, {
         systemInstruction: { parts: [{ text: systemInstruction }] },
         safetySettings: GEMINI_SAFETY_SETTINGS,
         responseMimeType: "application/json",
@@ -1460,7 +1467,7 @@ ${personaBlock}
           },
           required: ["responses"],
         },
-      },
+      }),
     });
 
     let parsedResponses: Array<{ agentId?: string; reply?: string; action?: ChatActionResult["action"] }> = [];

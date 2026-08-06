@@ -30,6 +30,8 @@ const readOpenAIResponseText = (data: any): string => {
     return (data?.choices?.[0]?.message?.content || '').trim();
 };
 
+const shouldOmitTemperature = (modelName: string): boolean => /^gpt-5\.6-(sol|terra|luna)$/i.test(modelName.trim());
+
 export const callOpenAIChatAPI = async (
     apiKey: string,
     messages: OpenAIChatMessage[],
@@ -41,22 +43,28 @@ export const callOpenAIChatAPI = async (
         throw new Error('API Key가 필요합니다.');
     }
 
+    const body: Record<string, unknown> = {
+        model: modelName,
+        input: messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+        })),
+        max_output_tokens: options?.maxTokens ?? 768,
+        store: false,
+    };
+
+    // GPT-5.6 Sol/Terra/Luna do not accept sampling parameters such as temperature.
+    if (!shouldOmitTemperature(modelName)) {
+        body.temperature = options?.temperature ?? 0.5;
+    }
+
     const response = await fetch(`${OPENAI_BASE_URL}/responses`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({
-            model: modelName,
-            input: messages.map((message) => ({
-                role: message.role,
-                content: message.content,
-            })),
-            max_output_tokens: options?.maxTokens ?? 768,
-            temperature: options?.temperature ?? 0.5,
-            store: false,
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {

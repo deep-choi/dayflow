@@ -482,14 +482,16 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [activeModalType, setActiveModalType] = useState<'model' | 'persona' | null>(null);
     const [selectedModalProvider, setSelectedModalProvider] = useState<ApiConnection['provider']>('gemini');
     const [selectedModalModel, setSelectedModalModel] = useState<string>(DEFAULT_GEMINI_MODEL);
+    const [selectedModalApiKey, setSelectedModalApiKey] = useState('');
     const [showModelPicker, setShowModelPicker] = useState(false);
     const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
 
-    const handleSelectQuickModel = (provider: ApiConnection['provider'], modelName: string) => {
+    const handleSelectQuickModel = (provider: ApiConnection['provider'], modelName: string, apiKey: string) => {
         if (!onUpdateSettings) return;
         onUpdateSettings((prev) => {
             const currentConnections = prev.apiConnections || [];
             const existing = currentConnections.find(c => c.provider === provider);
+            const trimmedApiKey = apiKey.trim();
 
             let updated: ApiConnection[];
             let targetId: string;
@@ -498,15 +500,21 @@ const ChatView: React.FC<ChatViewProps> = ({
                 targetId = existing.id;
                 updated = currentConnections.map(c =>
                     c.id === existing.id
-                        ? { ...c, modelName: normalizeProviderModelName(provider, modelName), isActive: true }
+                        ? {
+                            ...c,
+                            apiKey: trimmedApiKey || c.apiKey,
+                            modelName: normalizeProviderModelName(provider, modelName),
+                            isActive: true,
+                        }
                         : { ...c, isActive: false }
                 );
             } else {
                 const newConn: ApiConnection = {
                     id: crypto.randomUUID(),
                     provider,
-                    apiKey: '',
+                    apiKey: trimmedApiKey,
                     modelName: normalizeProviderModelName(provider, modelName),
+                    baseUrl: getProviderDefaultBaseUrl(provider),
                     isActive: true,
                 };
                 targetId = newConn.id;
@@ -579,8 +587,10 @@ const ChatView: React.FC<ChatViewProps> = ({
             const currentModel = activeConnection?.modelName || getDefaultModelForProvider(currentProvider);
             setSelectedModalProvider(currentProvider);
             setSelectedModalModel(currentModel);
+            setSelectedModalApiKey(activeConnection?.apiKey || '');
         }
     }, [activeModalType, activeConnection]);
+    const modalProviderNeedsApiKey = selectedModalProvider !== 'ollama' && selectedModalProvider !== 'custom';
     const agentApiModelOptions = agentApiDraft.provider
         ? getModelOptionsForProvider(agentApiDraft.provider)
         : [];
@@ -1860,10 +1870,12 @@ const ChatView: React.FC<ChatViewProps> = ({
                                     value={selectedModalProvider}
                                     onChange={(e) => {
                                         const p = e.target.value as ApiConnection['provider'];
+                                        const existingConnection = (settings.apiConnections || []).find(connection => connection.provider === p);
                                         setSelectedModalProvider(p);
                                         const options = getModelOptionsForProvider(p);
                                         const firstOpt = options.length > 0 ? (typeof options[0] === 'string' ? options[0] : options[0].id) : getDefaultModelForProvider(p);
-                                        setSelectedModalModel(firstOpt);
+                                        setSelectedModalModel(existingConnection?.modelName || firstOpt);
+                                        setSelectedModalApiKey(existingConnection?.apiKey || '');
                                     }}
                                     className="w-full px-3.5 py-2.5 rounded-xl border border-[#dcdcd9] bg-white text-sm font-medium text-[#37352f] outline-none focus:border-[#d4d4d4] transition-all"
                                 >
@@ -1887,6 +1899,21 @@ const ChatView: React.FC<ChatViewProps> = ({
                                     })}
                                 </select>
                             </div>
+
+                            {modalProviderNeedsApiKey && (
+                                <div className="space-y-1.5">
+                                    <label className="text-sm font-medium text-[#787774] uppercase ml-1" htmlFor="quick-model-api-key">API Key</label>
+                                    <input
+                                        id="quick-model-api-key"
+                                        type="password"
+                                        value={selectedModalApiKey}
+                                        onChange={(e) => setSelectedModalApiKey(e.target.value)}
+                                        placeholder="API 키를 입력하세요"
+                                        autoComplete="off"
+                                        className="w-full px-3.5 py-2.5 rounded-xl border border-[#dcdcd9] bg-white text-sm font-medium text-[#37352f] outline-none focus:border-[#d4d4d4] transition-all"
+                                    />
+                                </div>
+                            )}
                         </div>
 
                         <div className="px-5 py-3.5 border-t border-[#efefef] flex justify-end gap-2 shrink-0 bg-white">
@@ -1900,10 +1927,11 @@ const ChatView: React.FC<ChatViewProps> = ({
                             <button
                                 type="button"
                                 onClick={() => {
-                                    handleSelectQuickModel(selectedModalProvider, selectedModalModel);
+                                    handleSelectQuickModel(selectedModalProvider, selectedModalModel, selectedModalApiKey);
                                     setActiveModalType(null);
                                 }}
-                                className="px-5 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-all active:scale-95 shadow-md"
+                                disabled={modalProviderNeedsApiKey && !selectedModalApiKey.trim()}
+                                className="px-5 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-all active:scale-95 shadow-md disabled:cursor-not-allowed disabled:opacity-45"
                             >
                                 적용하기
                             </button>
