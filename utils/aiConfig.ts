@@ -13,55 +13,39 @@ export interface ModelOption {
 }
 
 export const XAI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'grok-4.3', label: 'Grok 4.3', description: 'xAI 최신 4.3 모델' },
-    { id: 'grok-build-0.1', label: 'Grok Build 0.1', description: '코드/개발 특화 모델' },
-    { id: 'grok-4.20-multi-agent', label: 'Grok 4.20 Multi-Agent', description: '멀티에이전트 고성능 모델' },
+    { id: 'grok-4.3', label: 'Grok 4.3', description: 'xAI 최신 4.3 플래그십' },
+    { id: 'grok-build-0.1', label: 'Grok Build 0.1', description: '코드/개발 특화' },
+    { id: 'grok-4.20-multi-agent', label: 'Grok 4.20 Multi-Agent', description: '멀티에이전트 고성능' },
     { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning', description: '추론 강화 심층 모델' },
-    { id: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning', description: '고속 응답 모델' },
-    { id: 'grok-4-1-fast-reasoning', label: 'Grok 4.1 Fast Reasoning', description: '빠른 추론 모델' },
-    { id: 'grok-code-fast-1', label: 'Grok Code Fast 1', description: '초고속 코딩 전용' },
+    { id: 'grok-4-1-fast-reasoning', label: 'Grok 4.1 Fast Reasoning', description: '빠른 추론' },
     { id: 'grok-3', label: 'Grok 3', description: 'Grok 3 플래그십' },
-    { id: 'grok-3-mini', label: 'Grok 3 Mini', description: 'Grok 3 경량화' },
-    { id: 'grok-2-1212', label: 'Grok 2 (1212)', description: 'Grok 2 플래그십' },
-    { id: 'grok-beta', label: 'Grok Beta', description: 'General Reasoning' },
 ];
 
 export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: '최신 차세대 3.5 고속 플래그십 (기본 추천)' },
-    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', description: '최고 성능 복합 추론 프로 모델' },
-    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', description: '초고속 초경량 모델' },
-    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', description: '3세대 고성능 모델' },
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: '2.5 세대 고급 추론 모델' },
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: '2.5 세대 가벼운 응답 모델' },
-    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', description: '2.5 세대 라이트 모델' },
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', description: '2.0 초고속 모델' },
-    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', description: '1.5 컨텍스트 대형 모델' },
-    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', description: '1.5 고속 플래시' },
+    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: '최신 차세대 3.5 고속 플래그십 (추천)' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', description: '최고 성능 복합 추론 프로' },
+    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', description: '초고속 초경량' },
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', description: '3세대 고성능' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: '2.5 세대 고급 추론' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: '2.5 세대 경량 응답' },
 ];
 
 export const OPENAI_MODEL_OPTIONS: ModelOption[] = [
     { id: 'gpt-5.5', label: 'GPT-5.5', description: '차세대 5.5 플래그십' },
-    { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', description: '최고 사양 심층 프로 모델' },
-    { id: 'gpt-5.4', label: 'GPT-5.4', description: '5.4 범용 고성능 모델' },
-    { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro', description: '5.4 프로 모델' },
+    { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', description: '최고 사양 심층 프로' },
+    { id: 'gpt-5.4', label: 'GPT-5.4', description: '5.4 범용 고성능' },
     { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: '5.4 고성능 미니 (추천)' },
-    { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano', description: '초경량 고속 모델' },
-    { id: 'gpt-5-mini', label: 'GPT-5 Mini', description: '5세대 미니' },
-    { id: 'gpt-4o', label: 'GPT-4o', description: 'Omni 멀티모달 모델' },
-    { id: 'gpt-4o-mini', label: 'GPT-4o Mini', description: '4o 경량화' },
-    { id: 'o1', label: 'o1', description: '복잡 수리/논리 추론 모델' },
-    { id: 'o1-mini', label: 'o1-mini', description: '빠른 논리 추론' },
+    { id: 'gpt-4o', label: 'GPT-4o', description: 'Omni 멀티모달' },
+    { id: 'o1', label: 'o1', description: '복잡 논리 추론' },
 ];
 
 export const ANTHROPIC_MODEL_OPTIONS: ModelOption[] = [
     { id: 'claude-fable-5', label: 'Claude Fable 5', description: '차세대 5세대 에이전트 AI' },
-    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: '최고 분석력 오퍼스 모델' },
+    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: '최고 분석력 오퍼스' },
     { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: '소네트 4.6 플래그십 (추천)' },
-    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: '하이쿠 초고속 모델' },
-    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7', description: 'Opus 4.7 최신' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: '하이쿠 초고속' },
     { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', description: '3.5 세대 소네트' },
     { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', description: '3.5 세대 하이쿠' },
-    { id: 'claude-3-opus-20240229', label: 'Claude 3 Opus', description: '3세대 오퍼스' },
 ];
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
