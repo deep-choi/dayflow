@@ -1,67 +1,44 @@
 import { AppSettings, ApiConnection } from '../types';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
-export const DEFAULT_XAI_MODEL = 'grok-4.3';
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini';
-export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_XAI_MODEL = 'grok-2-1212';
+export const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-3-5-sonnet-20241022';
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 
 export interface ModelOption {
     id: string;
     label: string;
+    description?: string;
 }
 
 export const XAI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'grok-4.3', label: 'Grok 4.3' },
-    { id: 'grok-build-0.1', label: 'Grok Build 0.1' },
-    { id: 'grok-4.20-multi-agent', label: 'Grok 4.20 Multi-Agent' },
-    { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning (0309)' },
-    { id: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning (0309)' },
-    { id: 'grok-4-1-fast-reasoning', label: 'Grok 4.1 Fast Reasoning' },
-    { id: 'grok-4-1-fast-non-reasoning', label: 'Grok 4.1 Fast Non-Reasoning' },
-    { id: 'grok-code-fast-1', label: 'Grok Code Fast 1' },
-    { id: 'grok-4-fast-reasoning', label: 'Grok 4 Fast Reasoning' },
-    { id: 'grok-4-fast-non-reasoning', label: 'Grok 4 Fast Non-Reasoning' },
-    { id: 'grok-4-0709', label: 'Grok 4 (0709)' },
-    { id: 'grok-3-mini', label: 'Grok 3 Mini' },
-    { id: 'grok-3', label: 'Grok 3' },
+    { id: 'grok-2-1212', label: 'Grok 2 (1212)', description: 'xAI flagship model' },
+    { id: 'grok-2-vision-1212', label: 'Grok 2 Vision', description: 'Multimodal vision model' },
+    { id: 'grok-beta', label: 'Grok Beta', description: 'General reasoning model' },
 ];
 
 export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
-    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview' },
-    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite' },
-    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Fast, lightweight & highly capable (Recommended)' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Advanced reasoning and complex tasks' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', description: 'Ultra fast response model' },
+    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite', description: 'Cost effective lightweight model' },
+    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', description: 'Standard flash model' },
+    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', description: 'High context pro model' },
 ];
 
 export const OPENAI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gpt-5.5', label: 'GPT-5.5' },
-    { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro' },
-    { id: 'gpt-5.4', label: 'GPT-5.4' },
-    { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro' },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
-    { id: 'gpt-5.4-nano', label: 'GPT-5.4 Nano' },
-    { id: 'gpt-5-mini', label: 'GPT-5 Mini' },
-    { id: 'gpt-5-nano', label: 'GPT-5 Nano' },
-    { id: 'gpt-4.1', label: 'GPT-4.1' },
-    { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
-    { id: 'gpt-4.1-nano', label: 'GPT-4.1 Nano' },
+    { id: 'gpt-4o', label: 'GPT-4o', description: 'Omni flagship model for text & vision' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o Mini', description: 'Fast & affordable daily chat model' },
+    { id: 'o1', label: 'o1', description: 'Advanced reasoning model for complex logic' },
+    { id: 'o1-mini', label: 'o1-mini', description: 'Faster reasoning model' },
+    { id: 'gpt-4-turbo', label: 'GPT-4 Turbo', description: 'High capability model' },
 ];
 
 export const ANTHROPIC_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'claude-fable-5', label: 'Claude Fable 5' },
-    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
-    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
-    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-    { id: 'claude-opus-4-5-20251101', label: 'Claude Opus 4.5' },
-    { id: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
+    { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', description: 'State of the art intelligence and coding' },
+    { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', description: 'Fastest Claude model' },
+    { id: 'claude-3-opus-20240229', label: 'Claude 3 Opus', description: 'Deep analysis and writing' },
 ];
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {

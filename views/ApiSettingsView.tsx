@@ -1,468 +1,488 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { AppSettings, ApiConnection } from '../types';
-import { Trash2, Plus, X, CheckCircle2, Circle, FlaskConical } from 'lucide-react';
+import { CheckCircle2, Circle, Key, RefreshCw, Zap, ShieldCheck, Server, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { callGeminiAPI } from '../utils/gemini';
 import { testXaiConnection } from '../services/xaiService';
 import { testOpenAIConnection } from '../services/openaiService';
 import { testAnthropicConnection } from '../services/anthropicService';
 import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
 import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
-import { DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL, getDefaultModelForProvider, getModelOptionsForProvider, hasProviderModelOptions, isChatSupportedProvider, normalizeProviderModelName } from '../utils/aiConfig';
+import {
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_XAI_MODEL,
+    DEFAULT_OLLAMA_BASE_URL,
+    getModelOptionsForProvider,
+    normalizeProviderModelName
+} from '../utils/aiConfig';
 
 interface ApiSettingsViewProps {
     settings: AppSettings;
     onUpdateSettings: (settings: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
 }
 
-const maskApiKey = (key: string): string => {
-    if (!key) return '';
-    if (key.length <= 10) return `${key.slice(0, 3)}...`;
-    return `${key.slice(0, 6)}...${key.slice(-4)}`;
-};
+type ProviderType = ApiConnection['provider'];
 
-const normalizeConnectionModelName = (provider: ApiConnection['provider'], modelName: string): string => {
-    return normalizeProviderModelName(provider, modelName);
-};
+interface ProviderCardInfo {
+    provider: ProviderType;
+    name: string;
+    description: string;
+    badgeColor: string;
+    defaultModel: string;
+    placeholder: string;
+    isLocal?: boolean;
+}
 
-const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xAI';
-    if (provider === 'openai') return 'OpenAI';
-    if (provider === 'anthropic') return 'Anthropic';
-    if (provider === 'gemini') return 'Gemini';
-    if (provider === 'ollama') return 'Ollama';
-    return '기타 로컬 서버';
-};
-
-const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xai-...';
-    if (provider === 'openai') return 'sk-...';
-    if (provider === 'anthropic') return 'sk-ant-...';
-    if (provider === 'gemini') return 'AIza...';
-    return 'API Key';
-};
+const PROVIDER_LIST: ProviderCardInfo[] = [
+    {
+        provider: 'gemini',
+        name: 'Google Gemini',
+        description: 'Google의 차세대 AI 모델 계열 (추천)',
+        badgeColor: 'bg-blue-50 text-blue-700 border-blue-200',
+        defaultModel: DEFAULT_GEMINI_MODEL,
+        placeholder: 'AIzaSy...',
+    },
+    {
+        provider: 'openai',
+        name: 'OpenAI',
+        description: 'GPT-4o, GPT-4o-mini 등 플래그십 AI',
+        badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        defaultModel: DEFAULT_OPENAI_MODEL,
+        placeholder: 'sk-proj-...',
+    },
+    {
+        provider: 'anthropic',
+        name: 'Anthropic Claude',
+        description: 'Claude 3.5 Sonnet 등 뛰어난 글쓰기 및 추론 AI',
+        badgeColor: 'bg-amber-50 text-amber-700 border-amber-200',
+        defaultModel: DEFAULT_ANTHROPIC_MODEL,
+        placeholder: 'sk-ant-api...',
+    },
+    {
+        provider: 'xai',
+        name: 'xAI (Grok)',
+        description: 'xAI의 Grok 2 고성능 모델 계열',
+        badgeColor: 'bg-purple-50 text-purple-700 border-purple-200',
+        defaultModel: DEFAULT_XAI_MODEL,
+        placeholder: 'xai-...',
+    },
+    {
+        provider: 'ollama',
+        name: 'Ollama (로컬 LLM)',
+        description: '내 컴퓨터에서 직접 실행되는 오프라인 오프그리드 AI',
+        badgeColor: 'bg-gray-100 text-gray-800 border-gray-300',
+        defaultModel: 'llama3',
+        placeholder: 'API Key 불필요',
+        isLocal: true,
+    },
+    {
+        provider: 'custom',
+        name: 'Custom Local Server',
+        description: 'LM Studio, vLLM 등 OpenAI 호환 커스텀 서버',
+        badgeColor: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+        defaultModel: 'local-model',
+        placeholder: 'Optional API Key',
+        isLocal: true,
+    },
+];
 
 const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSettings }) => {
-    const [isAdding, setIsAdding] = useState(false);
-    const [testingId, setTestingId] = useState<string | null>(null);
-    const [isLoadingOllamaModels, setIsLoadingOllamaModels] = useState(false);
-    const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-    const [newConnection, setNewConnection] = useState<Partial<ApiConnection>>({
-        provider: 'gemini',
-        isActive: true,
-        modelName: DEFAULT_GEMINI_MODEL,
-        apiKey: '',
-    });
-
     const connections = settings.apiConnections || [];
 
-    const selectedConnection = useMemo(() => {
-        const byId = connections.find(c => c.id === settings.activeConnectionId);
-        if (byId) return byId;
-        return connections.find(c => c.isActive);
-    }, [connections, settings.activeConnectionId]);
+    const [showKeyMap, setShowKeyMap] = useState<Record<string, boolean>>({});
+    const [testStatusMap, setTestStatusMap] = useState<Record<string, { loading: boolean; success?: boolean; message?: string }>>({});
+    const [localModelsMap, setLocalModelsMap] = useState<Record<string, string[]>>({});
+    const [loadingLocalModels, setLoadingLocalModels] = useState<Record<string, boolean>>({});
 
-    const isSelectableProvider = (provider: ApiConnection['provider']) => isChatSupportedProvider(provider);
+    const getExistingConnection = (provider: ProviderType): ApiConnection | undefined => {
+        return connections.find(c => c.provider === provider);
+    };
 
-    const persistConnections = (nextConnections: ApiConnection[], preferredId?: string) => {
-        const normalizedConnections = nextConnections.map(connection => ({
-            ...connection,
-            modelName: normalizeConnectionModelName(connection.provider, connection.modelName),
+    const activeConnection = connections.find(c => c.id === settings.activeConnectionId) || connections.find(c => c.isActive);
+
+    const toggleShowKey = (provider: string) => {
+        setShowKeyMap(prev => ({ ...prev, [provider]: !prev[provider] }));
+    };
+
+    const updateProviderKeyAndModel = (
+        provider: ProviderType,
+        apiKey: string,
+        modelName: string,
+        baseUrl?: string,
+        makeActive: boolean = false
+    ) => {
+        const normalizedModel = normalizeProviderModelName(provider, modelName);
+        const existing = getExistingConnection(provider);
+
+        let nextConnections: ApiConnection[];
+
+        if (existing) {
+            nextConnections = connections.map(conn => {
+                if (conn.provider === provider) {
+                    return {
+                        ...conn,
+                        apiKey: apiKey.trim(),
+                        modelName: normalizedModel,
+                        baseUrl: baseUrl !== undefined ? baseUrl.trim() : conn.baseUrl,
+                    };
+                }
+                return conn;
+            });
+        } else {
+            const newConn: ApiConnection = {
+                id: crypto.randomUUID(),
+                provider,
+                apiKey: apiKey.trim(),
+                modelName: normalizedModel,
+                baseUrl: baseUrl !== undefined ? baseUrl.trim() : (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL),
+                isActive: false,
+            };
+            nextConnections = [...connections, newConn];
+        }
+
+        const targetConn = nextConnections.find(c => c.provider === provider);
+        const targetId = makeActive ? targetConn?.id : settings.activeConnectionId;
+
+        const resolvedId = targetId && nextConnections.some(c => c.id === targetId)
+            ? targetId
+            : activeConnection?.id || nextConnections[0]?.id;
+
+        const updated = nextConnections.map(c => ({
+            ...c,
+            isActive: c.id === resolvedId,
         }));
 
-        onUpdateSettings((prev) => {
-            const resolvedId =
-                preferredId && normalizedConnections.some(c => c.id === preferredId)
-                    ? preferredId
-                    : prev.activeConnectionId && normalizedConnections.some(c => c.id === prev.activeConnectionId)
-                        ? prev.activeConnectionId
-                        : normalizedConnections.find(c => c.isActive)?.id || normalizedConnections[0]?.id;
+        const activeGemini = updated.find(c => c.id === resolvedId && c.provider === 'gemini') || updated.find(c => c.provider === 'gemini');
 
-            const normalized = normalizedConnections.map(c => ({
-                ...c,
-                isActive: c.id === resolvedId,
-            }));
+        onUpdateSettings(prev => ({
+            ...prev,
+            apiConnections: updated,
+            activeConnectionId: resolvedId,
+            geminiApiKey: activeGemini?.apiKey || prev.geminiApiKey,
+        }));
+    };
 
-            const activeGemini =
-                normalized.find(c => c.id === resolvedId && c.provider === 'gemini') ||
-                normalized.find(c => c.provider === 'gemini' && c.isActive);
+    const setActiveProvider = (provider: ProviderType) => {
+        const conn = getExistingConnection(provider);
+        if (conn) {
+            updateProviderKeyAndModel(provider, conn.apiKey, conn.modelName, conn.baseUrl, true);
+        } else {
+            const defaultInfo = PROVIDER_LIST.find(p => p.provider === provider);
+            updateProviderKeyAndModel(
+                provider,
+                '',
+                defaultInfo?.defaultModel || '',
+                provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : undefined,
+                true
+            );
+        }
+    };
 
-            return {
+    const handleTestConnection = async (providerInfo: ProviderCardInfo) => {
+        const conn = getExistingConnection(providerInfo.provider);
+        const apiKey = conn?.apiKey || '';
+        const modelName = conn?.modelName || providerInfo.defaultModel;
+        const baseUrl = conn?.baseUrl || (providerInfo.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL);
+
+        setTestStatusMap(prev => ({ ...prev, [providerInfo.provider]: { loading: true } }));
+
+        const startTime = Date.now();
+        try {
+            if (providerInfo.provider === 'ollama') {
+                await testOllamaConnection(baseUrl, modelName);
+            } else if (providerInfo.provider === 'custom') {
+                await testLocalServerConnection(baseUrl, apiKey, modelName);
+            } else if (providerInfo.provider === 'xai') {
+                await testXaiConnection(apiKey, modelName);
+            } else if (providerInfo.provider === 'openai') {
+                await testOpenAIConnection(apiKey, modelName);
+            } else if (providerInfo.provider === 'anthropic') {
+                await testAnthropicConnection(apiKey, modelName);
+            } else {
+                await callGeminiAPI(apiKey, '연결 테스트입니다. "성공"이라고만 답변해주세요.', undefined, modelName);
+            }
+            const elapsed = Date.now() - startTime;
+            setTestStatusMap(prev => ({
                 ...prev,
-                apiConnections: normalized,
-                activeConnectionId: resolvedId,
-                geminiApiKey: activeGemini?.apiKey || prev.geminiApiKey,
-            };
-        });
+                [providerInfo.provider]: {
+                    loading: false,
+                    success: true,
+                    message: `연결 성공! 응답시간 ${elapsed}ms (${modelName})`,
+                },
+            }));
+        } catch (error: any) {
+            setTestStatusMap(prev => ({
+                ...prev,
+                [providerInfo.provider]: {
+                    loading: false,
+                    success: false,
+                    message: error?.message || 'API 키 또는 네트워크 연결을 확인해주세요.',
+                },
+            }));
+        }
     };
 
-    const updateConnectionModel = (connectionId: string, modelName: string) => {
-        const updated = connections.map(conn => {
-            if (conn.id !== connectionId) return conn;
-            const normalizedModel = normalizeConnectionModelName(conn.provider, modelName);
-            return { ...conn, modelName: normalizedModel };
-        });
-        persistConnections(updated);
-    };
-
-    const loadOllamaModels = async () => {
-        setIsLoadingOllamaModels(true);
+    const handleFetchLocalModels = async (provider: ProviderType, currentBaseUrl?: string, currentApiKey?: string) => {
+        setLoadingLocalModels(prev => ({ ...prev, [provider]: true }));
         try {
-            const models = newConnection.provider === 'custom'
-                ? await listLocalServerModels(newConnection.baseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, newConnection.apiKey)
-                : await listOllamaModels(newConnection.baseUrl || DEFAULT_OLLAMA_BASE_URL);
-            setOllamaModels(models);
+            const models = provider === 'custom'
+                ? await listLocalServerModels(currentBaseUrl || DEFAULT_LOCAL_SERVER_BASE_URL, currentApiKey)
+                : await listOllamaModels(currentBaseUrl || DEFAULT_OLLAMA_BASE_URL);
+
+            setLocalModelsMap(prev => ({ ...prev, [provider]: models }));
+
             if (models.length > 0) {
-                setNewConnection(prev => ({ ...prev, modelName: models.includes(prev.modelName || '') ? prev.modelName : models[0] }));
-            } else {
-                alert('Ollama에 설치된 모델이 없습니다.');
+                const conn = getExistingConnection(provider);
+                const nextModel = models.includes(conn?.modelName || '') ? conn?.modelName! : models[0];
+                updateProviderKeyAndModel(provider, conn?.apiKey || '', nextModel, currentBaseUrl);
             }
-        } catch (error: any) {
-            alert(`Ollama 모델을 불러오지 못했습니다: ${error?.message || '알 수 없는 오류'}`);
+        } catch (err: any) {
+            setTestStatusMap(prev => ({
+                ...prev,
+                [provider]: { loading: false, success: false, message: `로컬 모델을 가져오지 못함: ${err?.message}` },
+            }));
         } finally {
-            setIsLoadingOllamaModels(false);
-        }
-    };
-
-    const addConnection = () => {
-        const provider = (newConnection.provider as ApiConnection['provider']) || 'gemini';
-        const modelName = (newConnection.modelName || '').trim();
-        const apiKey = (newConnection.apiKey || '').trim();
-        const isLocalProvider = provider === 'ollama' || provider === 'custom';
-        const baseUrl = (newConnection.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim();
-
-        if (!modelName || (!isLocalProvider && !apiKey) || (isLocalProvider && !baseUrl)) return;
-
-        const connection: ApiConnection = {
-            id: crypto.randomUUID(),
-            provider,
-            modelName: normalizeConnectionModelName(provider, modelName),
-            apiKey,
-            baseUrl: isLocalProvider ? baseUrl : undefined,
-            isActive: true,
-        };
-
-        persistConnections([...connections, connection], connection.id);
-        setIsAdding(false);
-        setNewConnection({
-            provider: 'gemini',
-            isActive: true,
-            modelName: DEFAULT_GEMINI_MODEL,
-            apiKey: '',
-            baseUrl: undefined,
-        });
-    };
-
-    const deleteConnection = (id: string) => {
-        if (!window.confirm('이 API 연결을 삭제할까요?')) return;
-        const filtered = connections.filter(c => c.id !== id);
-        persistConnections(filtered);
-    };
-
-    const selectModelConnection = (connection: ApiConnection) => {
-        if (!isSelectableProvider(connection.provider)) {
-            alert('현재 앱은 지원되는 채팅용 모델 연결만 AI 기능에 사용합니다.');
-            return;
-        }
-        persistConnections(connections, connection.id);
-    };
-
-    const testConnection = async (connection: ApiConnection) => {
-        if (!isSelectableProvider(connection.provider)) {
-            alert('지원되는 채팅용 모델만 연결할 수 있습니다.');
-            return;
-        }
-
-        setTestingId(connection.id);
-        try {
-            if (connection.provider === 'ollama') {
-                await testOllamaConnection(connection.baseUrl, connection.modelName);
-            } else if (connection.provider === 'custom') {
-                await testLocalServerConnection(connection.baseUrl, connection.apiKey, connection.modelName);
-            } else if (connection.provider === 'xai') {
-                await testXaiConnection(connection.apiKey, connection.modelName);
-            } else if (connection.provider === 'openai') {
-                await testOpenAIConnection(connection.apiKey, connection.modelName);
-            } else if (connection.provider === 'anthropic') {
-                await testAnthropicConnection(connection.apiKey, connection.modelName);
-            } else {
-                await callGeminiAPI(
-                    connection.apiKey,
-                    '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.',
-                    undefined,
-                    connection.modelName
-                );
-            }
-            alert(`연결 성공: ${connection.modelName}`);
-        } catch (error: any) {
-            alert(`연결 실패: ${error?.message || '알 수 없는 오류'}`);
-        } finally {
-            setTestingId(null);
+            setLoadingLocalModels(prev => ({ ...prev, [provider]: false }));
         }
     };
 
     return (
-        <div className="max-w-[1080px] mx-auto text-[#37352f] px-2 font-sans pb-20">
-            <div className="flex items-start mb-8 pt-4">
-                <div>
-                    <h1 className="text-2xl font-medium mb-2 tracking-tight flex items-center gap-3">
-                        API 연결 설정
-                    </h1>
-                    <p className="text-[#9b9a97] text-base font-normal">
-                        사용할 모델을 목록에서 선택하면 채팅/인사이트/AI 코멘트가 해당 모델로 실행됩니다.
-                    </p>
-                </div>
-            </div>
-
-            <div className="bg-white border border-[#e9e9e8] rounded-xl p-5 mb-6">
-                <p className="text-sm text-[#787774]">현재 사용 모델</p>
-                <p className="text-base font-medium mt-1">
-                    {selectedConnection
-                        ? `${selectedConnection.modelName} (${selectedConnection.provider})`
-                        : '선택된 모델 없음'}
+        <div className="max-w-[960px] mx-auto text-[#37352f] px-4 font-sans pb-24">
+            {/* Header Section */}
+            <div className="mb-8 pt-6">
+                <h1 className="text-2xl font-semibold tracking-tight text-[#171717] flex items-center gap-2.5 mb-2">
+                    <ShieldCheck className="text-emerald-600" size={26} /> API 키 & AI 프로바이더 설정
+                </h1>
+                <p className="text-[#787774] text-sm font-normal">
+                    기업별 API 키를 한 번만 등록해두면, 채팅 및 일기 분석 등 앱 전체에서 해당 기업의 모델을 자유롭게 선택하여 이용할 수 있습니다.
                 </p>
             </div>
 
-            <div className="space-y-4 mb-8">
-                <div className="flex items-center justify-between mb-2 px-1">
-                    <h3 className="font-medium text-base">연결된 API ({connections.length})</h3>
-                    <button
-                        onClick={() => setIsAdding(true)}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-lg hover:bg-[#eeeeee] transition-colors text-sm font-medium"
-                    >
-                        <Plus size={14} /> API 연결 추가
-                    </button>
+            {/* Currently Active Banner */}
+            <div className="bg-white border border-[#e9e9e8] shadow-xs rounded-2xl p-5 mb-8 flex items-center justify-between">
+                <div className="flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
+                        <Zap size={20} />
+                    </div>
+                    <div>
+                        <span className="text-xs font-semibold text-[#9b9a97] uppercase tracking-wider">현재 메인 활성 AI 서비스</span>
+                        <p className="text-base font-semibold text-[#171717] mt-0.5">
+                            {activeConnection
+                                ? `${PROVIDER_LIST.find(p => p.provider === activeConnection.provider)?.name || activeConnection.provider} · ${activeConnection.modelName}`
+                                : '선택된 메인 AI 없음 (기본 체험판 적용)'}
+                        </p>
+                    </div>
                 </div>
 
-                {connections.length === 0 && (
-                    <div className="bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl p-8 text-center text-[#9b9a97]">
-                        연결된 API가 없습니다. API Key를 추가하고 모델을 선택해주세요.
-                    </div>
+                {activeConnection && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-medium border border-emerald-200">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        정상 작동 중
+                    </span>
                 )}
+            </div>
 
-                {connections.map(conn => {
-                    const isSelected = conn.id === selectedConnection?.id;
-                    const isSelectable = isSelectableProvider(conn.provider);
-                    const modelOptions = getModelOptionsForProvider(conn.provider);
-                    const hasModelDropdown = modelOptions.length > 0;
+            {/* Company Provider Cards List */}
+            <div className="space-y-5">
+                {PROVIDER_LIST.map(providerInfo => {
+                    const conn = getExistingConnection(providerInfo.provider);
+                    const isActive = activeConnection?.provider === providerInfo.provider;
+                    const hasKey = providerInfo.isLocal ? true : Boolean(conn?.apiKey?.trim());
+                    const currentKey = conn?.apiKey || '';
+                    const currentModel = conn?.modelName || providerInfo.defaultModel;
+                    const currentBaseUrl = conn?.baseUrl || (providerInfo.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL);
+                    const modelOptions = providerInfo.isLocal
+                        ? (localModelsMap[providerInfo.provider] || [currentModel])
+                        : getModelOptionsForProvider(providerInfo.provider);
+
+                    const isShowingKey = showKeyMap[providerInfo.provider] || false;
+                    const testStatus = testStatusMap[providerInfo.provider];
 
                     return (
                         <div
-                            key={conn.id}
-                            className={`bg-white border rounded-xl p-5 flex items-center justify-between transition-all ${isSelected ? 'border-[#d4d4d4]' : 'border-[#e9e9e8]'}`}
+                            key={providerInfo.provider}
+                            className={`bg-white border rounded-2xl p-6 transition-all duration-200 ${
+                                isActive
+                                    ? 'border-emerald-500 shadow-md ring-1 ring-emerald-500/20'
+                                    : 'border-[#e9e9e8] shadow-xs hover:border-[#d3d3d0]'
+                            }`}
                         >
-                            <div className="flex items-center gap-4">
-                                <button
-                                    onClick={() => selectModelConnection(conn)}
-                                    className={`w-5 h-5 rounded-full flex items-center justify-center ${isSelected ? 'text-[#27c93f]' : 'text-[#d3d1cb]'}`}
-                                    title={isSelectable ? '이 모델 사용' : '지원되는 모델만 선택 가능'}
-                                >
-                                    {isSelected ? <CheckCircle2 size={18} /> : <Circle size={18} />}
-                                </button>
-
-                                <div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xs font-medium px-1.5 py-0.5 bg-[#f1f1f0] text-[#787774] rounded">
-                                            {conn.provider}
-                                        </span>
-                                        {hasModelDropdown ? (
-                                            <select
-                                                value={conn.modelName}
-                                                onChange={(e) => updateConnectionModel(conn.id, e.target.value)}
-                                                className="text-sm font-medium border border-[#e9e9e8] rounded-lg px-2 py-1 bg-white"
-                                            >
-                                                {modelOptions.map(model => (
-                                                    <option key={model.id} value={model.id}>
-                                                        {model.label}
-                                                    </option>
-                                                ))}
-                                            </select>
+                            {/* Card Header */}
+                            <div className="flex items-start justify-between mb-4">
+                                <div className="flex items-center gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setActiveProvider(providerInfo.provider)}
+                                        className="text-left flex items-center gap-2 group cursor-pointer"
+                                        title="기본 활성 프로바이더로 지정"
+                                    >
+                                        {isActive ? (
+                                            <CheckCircle2 size={22} className="text-emerald-600 shrink-0" />
                                         ) : (
-                                            <span className="font-medium text-sm">{conn.modelName}</span>
+                                            <Circle size={22} className="text-[#c4c4c0] group-hover:text-[#9b9a97] shrink-0" />
                                         )}
-                                    </div>
-                                    <p className="text-sm text-[#9b9a97] font-mono mt-1">{conn.provider === 'ollama' || conn.provider === 'custom' ? conn.baseUrl : maskApiKey(conn.apiKey)}</p>
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <h3 className="text-base font-semibold text-[#171717]">{providerInfo.name}</h3>
+                                                <span className={`text-[11px] px-2 py-0.5 rounded-md font-medium border ${providerInfo.badgeColor}`}>
+                                                    {providerInfo.provider.toUpperCase()}
+                                                </span>
+                                            </div>
+                                            <p className="text-xs text-[#787774] mt-0.5">{providerInfo.description}</p>
+                                        </div>
+                                    </button>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    {hasKey ? (
+                                        <span className="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg flex items-center gap-1">
+                                            <Key size={12} /> 등록됨
+                                        </span>
+                                    ) : (
+                                        <span className="text-xs font-medium text-[#787774] bg-[#f7f7f5] border border-[#e9e9e8] px-2.5 py-1 rounded-lg">
+                                            미등록
+                                        </span>
+                                    )}
                                 </div>
                             </div>
 
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => selectModelConnection(conn)}
-                                    disabled={!isSelectable}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isSelected
-                                        ? 'bg-[#e5f9e7] text-[#27c93f]'
-                                        : isSelectable
-                                            ? 'bg-[#f1f1f0] text-[#37352f] hover:bg-[#e9e9e8]'
-                                            : 'bg-[#f7f7f5] text-[#b4b3af] cursor-not-allowed'
-                                        }`}
-                                >
-                                    {isSelected ? '사용 중' : isSelectable ? '사용하기' : '준비중'}
-                                </button>
+                            {/* Inputs Section */}
+                            <div className="space-y-4 pt-2">
+                                {/* API Key / BaseURL Row */}
+                                {providerInfo.isLocal ? (
+                                    <div>
+                                        <label className="block text-xs font-medium text-[#787774] mb-1.5 flex items-center gap-1">
+                                            <Server size={13} /> 로컬 서버 주소 (Base URL)
+                                        </label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="text"
+                                                value={currentBaseUrl}
+                                                onChange={e =>
+                                                    updateProviderKeyAndModel(
+                                                        providerInfo.provider,
+                                                        currentKey,
+                                                        currentModel,
+                                                        e.target.value
+                                                    )
+                                                }
+                                                placeholder={DEFAULT_OLLAMA_BASE_URL}
+                                                className="flex-1 px-3.5 py-2 bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-colors"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => handleFetchLocalModels(providerInfo.provider, currentBaseUrl, currentKey)}
+                                                disabled={loadingLocalModels[providerInfo.provider]}
+                                                className="px-3.5 py-2 bg-[#f7f7f5] text-[#37352f] border border-[#e9e9e8] rounded-xl hover:bg-[#ececec] text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                                            >
+                                                <RefreshCw size={13} className={loadingLocalModels[providerInfo.provider] ? 'animate-spin' : ''} />
+                                                모델 목록 가져오기
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <label className="block text-xs font-medium text-[#787774] mb-1.5 flex items-center gap-1">
+                                            <Key size={13} /> API Key
+                                        </label>
+                                        <div className="relative flex items-center">
+                                            <input
+                                                type={isShowingKey ? 'text' : 'password'}
+                                                value={currentKey}
+                                                onChange={e =>
+                                                    updateProviderKeyAndModel(
+                                                        providerInfo.provider,
+                                                        e.target.value,
+                                                        currentModel,
+                                                        currentBaseUrl
+                                                    )
+                                                }
+                                                placeholder={providerInfo.placeholder}
+                                                className="w-full pl-3.5 pr-10 py-2.5 bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl text-sm focus:bg-white focus:border-emerald-500 focus:outline-none transition-colors font-mono"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleShowKey(providerInfo.provider)}
+                                                className="absolute right-3 text-[#9b9a97] hover:text-[#37352f]"
+                                            >
+                                                {isShowingKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
 
-                                <button
-                                    onClick={() => testConnection(conn)}
-                                    disabled={!isSelectable || testingId === conn.id}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${!isSelectable
-                                        ? 'bg-[#f7f7f5] text-[#b4b3af] cursor-not-allowed'
-                                        : 'bg-[#f3f3f3] text-[#171717] hover:bg-[#e9e9e9]'
-                                        }`}
-                                >
-                                    <span className="inline-flex items-center gap-1.5">
-                                        <FlaskConical size={13} />
-                                        {testingId === conn.id ? '연결 중...' : '연결하기'}
-                                    </span>
-                                </button>
+                                {/* Model Selection Dropdown & Test Connection Action */}
+                                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+                                    <div className="flex-1">
+                                        <label className="block text-xs font-medium text-[#787774] mb-1.5">
+                                            사용할 기본 모델
+                                        </label>
+                                        <select
+                                            value={currentModel}
+                                            onChange={e =>
+                                                updateProviderKeyAndModel(
+                                                    providerInfo.provider,
+                                                    currentKey,
+                                                    e.target.value,
+                                                    currentBaseUrl
+                                                )
+                                            }
+                                            className="w-full px-3.5 py-2 bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl text-sm font-medium focus:bg-white focus:border-emerald-500 focus:outline-none transition-colors cursor-pointer"
+                                        >
+                                            {typeof modelOptions[0] === 'string'
+                                                ? (modelOptions as string[]).map(m => (
+                                                      <option key={m} value={m}>
+                                                          {m}
+                                                      </option>
+                                                  ))
+                                                : (modelOptions as Array<{ id: string; label: string; description?: string }>).map(m => (
+                                                      <option key={m.id} value={m.id}>
+                                                          {m.label} {m.description ? `— ${m.description}` : ''}
+                                                      </option>
+                                                  ))}
+                                        </select>
+                                    </div>
 
-                                <button
-                                    onClick={() => deleteConnection(conn.id)}
-                                    className="p-2 text-[#9b9a97] hover:text-[#eb5757] hover:bg-[#fff0f0] rounded-lg transition-colors"
-                                >
-                                    <Trash2 size={16} />
-                                </button>
+                                    <div className="flex items-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleTestConnection(providerInfo)}
+                                            disabled={testStatus?.loading}
+                                            className="w-full sm:w-auto px-4 py-2 bg-[#171717] text-white rounded-xl hover:bg-[#333333] text-xs font-medium flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+                                        >
+                                            {testStatus?.loading ? (
+                                                <>
+                                                    <RefreshCw size={13} className="animate-spin" /> 테스트 중...
+                                                </>
+                                            ) : (
+                                                <>연결 테스트</>
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Test Result Inline Banner (Replaces annoying browser alert) */}
+                                {testStatus && !testStatus.loading && (
+                                    <div
+                                        className={`mt-2 p-3 rounded-xl text-xs font-medium flex items-center gap-2 border ${
+                                            testStatus.success
+                                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                                : 'bg-rose-50 text-rose-800 border-rose-200'
+                                        }`}
+                                    >
+                                        {testStatus.success ? (
+                                            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                                        ) : (
+                                            <AlertCircle size={16} className="text-rose-600 shrink-0" />
+                                        )}
+                                        <span>{testStatus.message}</span>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     );
                 })}
-            </div>
-
-            {isAdding && (
-                <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-                    <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 animate-in zoom-in-95 duration-200">
-                        <div className="flex justify-between items-center mb-2">
-                            <h3 className="text-lg font-medium">새 API 연결 추가</h3>
-                            <button onClick={() => setIsAdding(false)} className="p-1 hover:bg-[#f1f1f0] rounded-full">
-                                <X size={20} className="text-[#9b9a97]" />
-                            </button>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium mb-2">Provider</label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {(['gemini', 'xai', 'openai', 'anthropic', 'ollama', 'custom'] as const).map(provider => {
-                                    return (
-                                        <button
-                                            key={provider}
-                                            onClick={() => {
-                                                setOllamaModels([]);
-                                                setNewConnection({
-                                                    ...newConnection,
-                                                    provider,
-                                                    modelName: getDefaultModelForProvider(provider),
-                                                    apiKey: '',
-                                                    baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
-                                                });
-                                            }}
-                                            className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${newConnection.provider === provider
-                                                ? 'border-[#d4d4d4] bg-[#f3f3f3] text-[#171717]'
-                                                : 'border-[#e9e9e8] bg-white text-[#787774] hover:bg-[#fbfbfa]'
-                                                }`}
-                                        >
-                                            {getProviderDisplayName(provider)}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
-                        {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && (
-                            <div>
-                                <label className="block text-sm font-medium mb-2">{newConnection.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</label>
-                                <input
-                                    type="url"
-                                    placeholder={newConnection.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
-                                    value={newConnection.baseUrl || (newConnection.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
-                                    onChange={e => setNewConnection({ ...newConnection, baseUrl: e.target.value })}
-                                    className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] focus:ring-2 focus:ring-[#d4d4d4]/10 font-mono text-sm"
-                                />
-                            </div>
-                        )}
-
-                        <div>
-                            <label className="block text-sm font-medium mb-2">모델</label>
-                            {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && ollamaModels.length > 0 ? (
-                                <select
-                                    value={newConnection.modelName || ''}
-                                    onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })}
-                                    className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] focus:ring-2 focus:ring-[#d4d4d4]/10"
-                                >
-                                    {ollamaModels.map(model => <option key={model} value={model}>{model}</option>)}
-                                </select>
-                            ) : newConnection.provider && hasProviderModelOptions(newConnection.provider) ? (
-                                <select
-                                    value={newConnection.modelName || getDefaultModelForProvider(newConnection.provider)}
-                                    onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })}
-                                    className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] focus:ring-2 focus:ring-[#d4d4d4]/10"
-                                >
-                                    {getModelOptionsForProvider(newConnection.provider).map(model => (
-                                        <option key={model.id} value={model.id}>
-                                            {model.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            ) : (
-                                <input
-                                    type="text"
-                                    placeholder={newConnection.provider === 'ollama' || newConnection.provider === 'custom' ? '모델 목록 불러오기 또는 직접 입력' : '예: gpt-4o'}
-                                    value={newConnection.modelName || ''}
-                                    onChange={e => setNewConnection({ ...newConnection, modelName: e.target.value })}
-                                    className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] focus:ring-2 focus:ring-[#d4d4d4]/10"
-                                />
-                            )}
-                        </div>
-
-                        {(newConnection.provider === 'ollama' || newConnection.provider === 'custom') && (
-                            <button
-                                type="button"
-                                onClick={() => void loadOllamaModels()}
-                                disabled={isLoadingOllamaModels}
-                                className="w-full py-2.5 border border-[#e9e9e8] rounded-xl text-sm text-[#37352f] hover:bg-[#f7f7f7] transition-colors disabled:opacity-50"
-                            >
-                                {isLoadingOllamaModels ? '로컬 모델 불러오는 중...' : '로컬 모델 목록 불러오기'}
-                            </button>
-                        )}
-
-                        {newConnection.provider !== 'ollama' && (
-                        <div>
-                            <label className="block text-sm font-medium mb-2">API Key{newConnection.provider === 'custom' ? ' (선택 사항)' : ''}</label>
-                            <input
-                                type="password"
-                                placeholder={getApiKeyPlaceholder(newConnection.provider)}
-                                value={newConnection.apiKey || ''}
-                                onChange={e => setNewConnection({ ...newConnection, apiKey: e.target.value })}
-                                className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] focus:ring-2 focus:ring-[#d4d4d4]/10 font-mono text-sm"
-                            />
-                        </div>
-                        )}
-
-                        <button
-                            onClick={addConnection}
-                            disabled={!newConnection.modelName || (!['ollama', 'custom'].includes(newConnection.provider || '') && !newConnection.apiKey)}
-                            className="w-full py-3.5 bg-[#f7f7f7] text-[#171717] border border-[#e9e9e8] rounded-xl hover:bg-[#eeeeee] transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed mt-2"
-                        >
-                            연결 추가하기
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl p-6">
-                    <h3 className="font-medium mb-1 text-[#37352f]">보안 안내</h3>
-                    <p className="text-sm text-[#787774] leading-relaxed">
-                        API Key는 브라우저와 앱 동기화 저장소에 보관될 수 있습니다. 개인용 키 사용을 권장합니다.
-                    </p>
-                </div>
-
-                <div className="bg-white border border-[#e9e9e8] rounded-xl p-6">
-                    <h3 className="font-medium mb-1 text-[#37352f]">사용량 안내</h3>
-                    <div className="flex justify-between items-center mt-2">
-                        <span className="text-sm text-[#787774]">전체 요청 수</span>
-                        <span className="font-medium">{settings.apiUsage?.totalRequests || 0}회</span>
-                    </div>
-                    <div className="flex justify-between items-center mt-1">
-                        <span className="text-sm text-[#787774]">누적 토큰</span>
-                        <span className="font-medium">{(settings.apiUsage?.totalTokens || 0).toLocaleString()}</span>
-                    </div>
-                </div>
             </div>
         </div>
     );

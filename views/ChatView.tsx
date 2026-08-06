@@ -16,7 +16,7 @@ import {
 } from '../types';
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
 import { Sparkles, Plus, Check } from '../components/Icons';
-import { ArrowUp, Edit3, Save, X, FlaskConical } from 'lucide-react';
+import { ArrowUp, Edit3, Save, X, FlaskConical, Zap, ChevronDown, ChevronUp, CheckCircle2, Settings } from 'lucide-react';
 import {
     DEFAULT_GEMINI_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
@@ -480,7 +480,45 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [inputValue, setInputValue] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [showToolbar, setShowToolbar] = useState(false);
+    const [showModelPicker, setShowModelPicker] = useState(false);
     const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+
+    const handleSelectQuickModel = (provider: ApiConnection['provider'], modelName: string) => {
+        if (!onUpdateSettings) return;
+        onUpdateSettings((prev) => {
+            const currentConnections = prev.apiConnections || [];
+            const existing = currentConnections.find(c => c.provider === provider);
+
+            let updated: ApiConnection[];
+            let targetId: string;
+
+            if (existing) {
+                targetId = existing.id;
+                updated = currentConnections.map(c =>
+                    c.id === existing.id
+                        ? { ...c, modelName: normalizeProviderModelName(provider, modelName), isActive: true }
+                        : { ...c, isActive: false }
+                );
+            } else {
+                const newConn: ApiConnection = {
+                    id: crypto.randomUUID(),
+                    provider,
+                    apiKey: '',
+                    modelName: normalizeProviderModelName(provider, modelName),
+                    isActive: true,
+                };
+                targetId = newConn.id;
+                updated = [...currentConnections.map(c => ({ ...c, isActive: false })), newConn];
+            }
+
+            return {
+                ...prev,
+                apiConnections: updated,
+                activeConnectionId: targetId,
+            };
+        });
+        setShowModelPicker(false);
+    };
     const [agentDraft, setAgentDraft] = useState<AIAgent | null>(null);
     const [agentEditorTab, setAgentEditorTab] = useState<PersonaEditorTab>('profile');
     const [isSavingAgent, setIsSavingAgent] = useState(false);
@@ -1779,6 +1817,86 @@ const ChatView: React.FC<ChatViewProps> = ({
 
                         </div>
                     )}
+
+                    {/* Quick Model Selector Bar above input shell */}
+                    <div className="relative mb-2 flex items-center justify-between px-2">
+                        <div className="relative">
+                            <button
+                                type="button"
+                                onClick={() => setShowModelPicker(prev => !prev)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-[#e9e9e8] text-xs font-medium text-[#37352f] hover:bg-[#f7f7f5] hover:border-[#d3d3d0] transition-all cursor-pointer shadow-2xs"
+                                title="대화 모델 변경"
+                            >
+                                <Zap size={13} className="text-amber-500 fill-amber-500" />
+                                <span>
+                                    {activeConnection
+                                        ? `${activeConnection.provider.toUpperCase()} · ${activeConnection.modelName}`
+                                        : '기본 AI (Gemini Flash)'}
+                                </span>
+                                <ChevronDown size={13} className={`text-[#9b9a97] transition-transform ${showModelPicker ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {/* Model Picker Popover Panel */}
+                            {showModelPicker && (
+                                <div className="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-white border border-[#e9e9e8] shadow-xl rounded-2xl p-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                                    <div className="px-3 py-2 border-b border-[#efefef] flex items-center justify-between mb-1">
+                                        <span className="text-xs font-semibold text-[#171717] flex items-center gap-1">
+                                            <Zap size={13} className="text-amber-500" /> AI 대화 모델 즉시 전환
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowModelPicker(false)}
+                                            className="text-[#9b9a97] hover:text-[#37352f] p-1 rounded-md hover:bg-[#f2f2f0]"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+
+                                    <div className="max-h-64 overflow-y-auto space-y-3 p-1">
+                                        {(['gemini', 'openai', 'anthropic', 'xai', 'ollama', 'custom'] as ApiConnection['provider'][]).map(provider => {
+                                            const providerConn = (settings.apiConnections || []).find(c => c.provider === provider);
+                                            const hasKey = provider === 'ollama' || provider === 'custom' ? true : Boolean(providerConn?.apiKey?.trim());
+                                            const options = getModelOptionsForProvider(provider);
+                                            const providerName = provider === 'gemini' ? 'Google Gemini' : provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Claude' : provider === 'xai' ? 'xAI (Grok)' : provider.toUpperCase();
+
+                                            return (
+                                                <div key={provider} className="space-y-1">
+                                                    <div className="px-2 py-0.5 text-[11px] font-semibold text-[#9b9a97] uppercase flex items-center justify-between">
+                                                        <span>{providerName}</span>
+                                                        {!hasKey && <span className="text-[10px] text-amber-600 font-normal">API Key 필요</span>}
+                                                    </div>
+
+                                                    <div className="space-y-0.5">
+                                                        {(options.length > 0 ? options : [{ id: providerConn?.modelName || 'default', label: providerConn?.modelName || 'Default' }]).map(opt => {
+                                                            const modelId = typeof opt === 'string' ? opt : opt.id;
+                                                            const modelLabel = typeof opt === 'string' ? opt : opt.label;
+                                                            const isCurrent = activeConnection?.provider === provider && activeConnection?.modelName === modelId;
+
+                                                            return (
+                                                                <button
+                                                                    key={modelId}
+                                                                    type="button"
+                                                                    onClick={() => handleSelectQuickModel(provider, modelId)}
+                                                                    className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                                                                        isCurrent
+                                                                            ? 'bg-emerald-50 text-emerald-800 font-semibold border border-emerald-200'
+                                                                            : 'hover:bg-[#f7f7f5] text-[#37352f]'
+                                                                    }`}
+                                                                >
+                                                                    <span className="truncate">{modelLabel}</span>
+                                                                    {isCurrent && <CheckCircle2 size={13} className="text-emerald-600 shrink-0 ml-1" />}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
 
                     <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-[9999px] border border-[#e9e9e8] bg-white shadow-none focus-within:border-[#d4d4d4] transition-all">
                         <button
