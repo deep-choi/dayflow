@@ -414,34 +414,57 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
 
                                 {/* Model Selection Dropdown & Test Connection Action */}
                                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
-                                    <div className="flex-1">
-                                        <label className="block text-xs font-medium text-[#787774] mb-1.5">
-                                            사용할 기본 모델
-                                        </label>
-                                        <select
-                                            value={currentModel}
-                                            onChange={e =>
-                                                updateProviderKeyAndModel(
-                                                    providerInfo.provider,
-                                                    currentKey,
-                                                    e.target.value,
-                                                    currentBaseUrl
-                                                )
-                                            }
-                                            className="w-full px-3.5 py-2 bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl text-sm font-medium focus:bg-white focus:border-emerald-500 focus:outline-none transition-colors cursor-pointer"
-                                        >
-                                            {typeof modelOptions[0] === 'string'
-                                                ? (modelOptions as string[]).map(m => (
-                                                      <option key={m} value={m}>
-                                                          {m}
-                                                      </option>
-                                                  ))
-                                                : (modelOptions as Array<{ id: string; label: string; description?: string }>).map(m => (
-                                                      <option key={m.id} value={m.id}>
-                                                          {m.label} {m.description ? `— ${m.description}` : ''}
-                                                      </option>
-                                                  ))}
-                                        </select>
+                                    <div className="flex-1 space-y-1.5">
+                                        <div className="flex items-center justify-between">
+                                            <label className="block text-xs font-medium text-[#787774]">
+                                                사용할 기본 모델
+                                            </label>
+                                            <span className="text-[11px] text-[#9b9a97]">선택 또는 직접 입력</span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <select
+                                                value={(modelOptions as any[]).some(m => (typeof m === 'string' ? m : m.id) === currentModel) ? currentModel : ''}
+                                                onChange={e => {
+                                                    if (e.target.value) {
+                                                        updateProviderKeyAndModel(
+                                                            providerInfo.provider,
+                                                            currentKey,
+                                                            e.target.value,
+                                                            currentBaseUrl
+                                                        );
+                                                    }
+                                                }}
+                                                className="flex-1 px-3 py-2 bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl text-sm font-medium focus:bg-white focus:border-emerald-500 focus:outline-none transition-colors cursor-pointer"
+                                            >
+                                                <option value="" disabled>-- 추천 목록에서 선택 --</option>
+                                                {typeof modelOptions[0] === 'string'
+                                                    ? (modelOptions as string[]).map(m => (
+                                                          <option key={m} value={m}>
+                                                              {m}
+                                                          </option>
+                                                      ))
+                                                    : (modelOptions as Array<{ id: string; label: string; description?: string }>).map(m => (
+                                                          <option key={m.id} value={m.id}>
+                                                              {m.label} {m.description ? `(${m.description})` : ''}
+                                                          </option>
+                                                      ))}
+                                            </select>
+                                            <input
+                                                type="text"
+                                                value={currentModel}
+                                                onChange={e =>
+                                                    updateProviderKeyAndModel(
+                                                        providerInfo.provider,
+                                                        currentKey,
+                                                        e.target.value,
+                                                        currentBaseUrl
+                                                    )
+                                                }
+                                                placeholder="직접 모델ID 입력 (e.g. gemini-3.5-flash)"
+                                                className="flex-1 px-3 py-2 bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl text-xs font-mono focus:bg-white focus:border-emerald-500 focus:outline-none transition-colors"
+                                                title="목록에 없는 신규/미래 모델명 직접 입력 가능"
+                                            />
+                                        </div>
                                     </div>
 
                                     <div className="flex items-end">
