@@ -531,6 +531,18 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [isLoadingAgentLocalModels, setIsLoadingAgentLocalModels] = useState(false);
     const [executingActionMessageId, setExecutingActionMessageId] = useState<string | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
+    const modelPickerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!showModelPicker) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+                setShowModelPicker(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showModelPicker]);
     const pendingSessionHydrationRef = useRef(false);
     const hydratingSessionIdRef = useRef<string | null>(null);
     const previousSessionIdRef = useRef<string | null>(currentSessionId ?? null);
@@ -1731,7 +1743,7 @@ const ChatView: React.FC<ChatViewProps> = ({
             </div>
 
             {/* Input Area */}
-            <div className="px-2 py-3 bg-white overflow-x-hidden">
+            <div className="px-2 py-3 bg-white relative z-20">
                 <div className="space-y-3">
                     {showToolbar && (
                         <div id="chat-persona-selector" className="p-3 sm:p-4 rounded-2xl border border-[#e9e9e8] bg-white space-y-4 relative">
@@ -1820,7 +1832,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
                     {/* Quick Model Selector Bar above input shell */}
                     <div className="relative mb-2 flex items-center justify-between px-2">
-                        <div className="relative">
+                        <div className="relative" ref={modelPickerRef}>
                             <button
                                 type="button"
                                 onClick={() => setShowModelPicker(prev => !prev)}
@@ -1838,7 +1850,7 @@ const ChatView: React.FC<ChatViewProps> = ({
 
                             {/* Model Picker Popover Panel */}
                             {showModelPicker && (
-                                <div className="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-white border border-[#e9e9e8] shadow-xl rounded-2xl p-2 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                                <div className="absolute bottom-full left-0 mb-2 w-72 sm:w-80 bg-white border border-[#e9e9e8] shadow-2xl rounded-2xl p-2 z-[99] animate-in fade-in slide-in-from-bottom-2 duration-150">
                                     <div className="px-3 py-2 border-b border-[#efefef] flex items-center justify-between mb-1">
                                         <span className="text-xs font-semibold text-[#171717] flex items-center gap-1">
                                             <Zap size={13} className="text-amber-500" /> AI 대화 모델 즉시 전환
