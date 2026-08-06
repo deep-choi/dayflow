@@ -123,6 +123,12 @@ select {
   line-height: 1.25rem !important;
 }
 
+/* Mobile slide menu uses an explicit type scale instead of inherited defaults. */
+.mobile-chat-history-title {
+  font-size: 14px !important;
+  line-height: 1.25rem !important;
+}
+
 .font-semibold,
 .font-bold,
 .font-extrabold {

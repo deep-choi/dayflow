@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { AppSettings, CalendarEvent, Todo, TodoList, JournalEntry, JournalCategory, CommunityPost, AIAgent, ActivityItem, CalendarTag } from '../types';
+import { AppSettings, CalendarEvent, Todo, TodoList, JournalEntry, JournalCategory, AIAgent, ActivityItem, CalendarTag } from '../types';
 
 export interface SyncDebugResult {
     success: boolean;
@@ -15,7 +15,6 @@ export const debugManualSync = async (
         todoLists: TodoList[];
         entries: JournalEntry[];
         journalCategories: JournalCategory[];
-        communityPosts: CommunityPost[];
         aiAgents: AIAgent[];
         settings: AppSettings;
         activityLog: ActivityItem[];

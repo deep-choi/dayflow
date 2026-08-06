@@ -3,23 +3,28 @@ import {
   CalendarEvent,
   JournalEntry,
   Todo,
-  AiPost,
   AIAgent,
   ApiConnection,
   ChatGeneratedAction,
   ChatSingleGeneratedAction,
 } from "../types";
-import { DEFAULT_GEMINI_MODEL, normalizeGeminiModelName } from "../utils/aiConfig";
-import { callAnthropicChatAPI, callAnthropicChatJSON } from "./anthropicService";
+import {
+  DEFAULT_GEMINI_MODEL,
+  getProviderDefaultBaseUrl,
+  isHostedOpenAICompatibleProvider,
+  normalizeGeminiModelName,
+} from "../utils/aiConfig";
+import { callAnthropicChatAPI } from "./anthropicService";
 import {
   DAYFLOW_TRIAL_API_KEY,
   generateTrialGeminiContent,
   isTrialExhaustedError,
 } from "./trialChatService";
-import { callOpenAIChatAPI, callOpenAIChatJSON } from "./openaiService";
-import { callXaiChatAPI, callXaiChatJSON } from "./xaiService";
+import { callOpenAIChatAPI } from "./openaiService";
+import { callXaiChatAPI } from "./xaiService";
 import { callOllamaChatAPI } from "./ollamaService";
 import { callLocalServerChatAPI } from "./localServerService";
+import { callOpenAICompatibleChatAPI } from "./openAICompatibleService";
 
 const CHAT_HISTORY_LIMIT = 8;
 const MODEL_MESSAGE_CHAR_LIMIT = 420;
@@ -840,6 +845,11 @@ const callTextProviderChatAPI = async (
   if (provider === "anthropic") {
     return callAnthropicChatAPI(apiKey, messages, undefined, modelName, options);
   }
+  if (isHostedOpenAICompatibleProvider(provider)) {
+    const compatibleBaseUrl = baseUrl || getProviderDefaultBaseUrl(provider);
+    if (!compatibleBaseUrl) throw new Error(`${provider} provider requires an API Base URL.`);
+    return callOpenAICompatibleChatAPI(apiKey, compatibleBaseUrl, messages, modelName, options);
+  }
   throw new Error(`${provider} provider is not supported for chat.`);
 };
 
@@ -931,133 +941,6 @@ const trimIncompleteReplyTail = (reply: string): string => {
   if (lastLineBreak > 0) return value.slice(0, lastLineBreak).trim();
 
   return value;
-};
-
-export const generateLifeInsight = async (
-  apiKey: string,
-  events: CalendarEvent[],
-  todos: Todo[],
-  journalEntries: JournalEntry[],
-  modelName: string = DEFAULT_GEMINI_MODEL,
-  provider: ApiConnection['provider'] = 'gemini'
-): Promise<AiPost> => {
-  if (!apiKey) {
-    throw new Error("API Key is required.");
-  }
-
-  const today = new Date().toISOString().split("T")[0];
-
-  const contextData = {
-    currentDate: today,
-    recentEvents: events.slice(0, 10),
-    pendingTasks: todos.filter((t) => !t.completed).slice(0, 20),
-    completedTasks: todos.filter((t) => t.completed).slice(0, 10),
-    recentJournal: journalEntries.slice(0, 5),
-  };
-
-  const prompt = `
-You are the Dayflow analysis assistant.
-Write in Korean.
-
-Analyze this context:
-${JSON.stringify(contextData, null, 2)}
-
-Output JSON with:
-- title: short but compelling
-- content: practical and readable analysis
-- tags: array of short tags
-`;
-
-  try {
-    if (provider === 'xai') {
-      const xaiSystemPrompt = `${prompt}\n\nIMPORTANT: You MUST respond with a valid JSON object with exactly these keys: "title" (string), "content" (string), "tags" (array of strings).`;
-      const parsed = await callXaiChatJSON(
-        apiKey,
-        xaiSystemPrompt,
-        [{ role: 'user', content: 'Generate the insight now.' }],
-        modelName,
-        { temperature: 0.5, maxTokens: 900 }
-      );
-      return {
-        id: crypto.randomUUID(),
-        title: parsed.title || "오늘의 인사이트",
-        content: parsed.content || "분석 결과를 생성하지 못했습니다.",
-        tags: Array.isArray(parsed.tags) ? parsed.tags : ["Insight", "Daily"],
-        date: new Date().toISOString(),
-        type: "analysis",
-      };
-    }
-
-    if (provider === 'openai') {
-      const parsed = await callOpenAIChatJSON(
-        apiKey,
-        `${prompt}\n\n반드시 "title", "content", "tags" 키를 가진 JSON 객체로만 답하세요.`,
-        [{ role: 'user', content: 'Generate the insight now.' }],
-        modelName,
-        { temperature: 0.5, maxTokens: 900 }
-      );
-      return {
-        id: crypto.randomUUID(),
-        title: parsed.title || "오늘의 인사이트",
-        content: parsed.content || "분석 결과를 생성하지 못했습니다.",
-        tags: Array.isArray(parsed.tags) ? parsed.tags : ["Insight", "Daily"],
-        date: new Date().toISOString(),
-        type: "analysis",
-      };
-    }
-
-    if (provider === 'anthropic') {
-      const parsed = await callAnthropicChatJSON(
-        apiKey,
-        `${prompt}\n\n반드시 "title", "content", "tags" 키를 가진 JSON 객체로만 답하세요.`,
-        [{ role: 'user', content: 'Generate the insight now.' }],
-        modelName,
-        { temperature: 0.5, maxTokens: 900 }
-      );
-      return {
-        id: crypto.randomUUID(),
-        title: parsed.title || "오늘의 인사이트",
-        content: parsed.content || "분석 결과를 생성하지 못했습니다.",
-        tags: Array.isArray(parsed.tags) ? parsed.tags : ["Insight", "Daily"],
-        date: new Date().toISOString(),
-        type: "analysis",
-      };
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await generateGeminiContentWithRetry(ai, {
-      model: normalizeGeminiModelName(modelName),
-      contents: prompt,
-      config: {
-        safetySettings: GEMINI_SAFETY_SETTINGS,
-        responseMimeType: "application/json",
-        temperature: 0.5,
-        maxOutputTokens: 900,
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            content: { type: Type.STRING },
-            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-          },
-          required: ["title", "content", "tags"],
-        },
-      },
-    });
-
-    const parsed = JSON.parse(response.text || "{}");
-    return {
-      id: crypto.randomUUID(),
-      title: parsed.title || "오늘의 인사이트",
-      content: parsed.content || "분석 결과를 생성하지 못했습니다.",
-      tags: Array.isArray(parsed.tags) ? parsed.tags : ["Insight", "Daily"],
-      date: new Date().toISOString(),
-      type: "analysis",
-    };
-  } catch (error) {
-    console.error("AI generation failed:", error);
-    throw new Error("AI insight generation failed.");
-  }
 };
 
 export interface ChatActionResult {

@@ -3,7 +3,6 @@ import {
     CalendarEvent,
     Todo,
     JournalEntry,
-    AiPost,
     TodoList,
     AppSettings,
     AIAgent,
@@ -20,12 +19,16 @@ import { ArrowUp, Edit3, Save, X, FlaskConical, Zap, ChevronDown, ChevronUp, Che
 import {
     DEFAULT_GEMINI_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
+    CHAT_PROVIDERS as DEFAULT_CHAT_PROVIDERS,
     getActiveAIConfig,
     getAgentAIConfig,
     getDefaultModelForProvider,
     getModelOptionsForProvider,
+    getProviderDefaultBaseUrl,
+    getProviderDisplayName as getConfiguredProviderDisplayName,
     hasUsableAIConnection,
     isChatSupportedProvider,
+    isHostedOpenAICompatibleProvider,
     normalizeProviderModelName,
 } from '../utils/aiConfig';
 import { ApiUsageStats } from '../types';
@@ -33,6 +36,7 @@ import { callGeminiAPI } from '../utils/gemini';
 import { testXaiConnection } from '../services/xaiService';
 import { testOpenAIConnection } from '../services/openaiService';
 import { testAnthropicConnection } from '../services/anthropicService';
+import { testOpenAICompatibleConnection } from '../services/openAICompatibleService';
 import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
 import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
 import {
@@ -48,13 +52,11 @@ interface ChatViewProps {
     events: CalendarEvent[];
     todos: Todo[];
     entries: JournalEntry[];
-    posts: AiPost[];
     todoLists: TodoList[];
     onAddEvent: (event: CalendarEvent) => void | Promise<void>;
     onDeleteEvent: (id: string) => void;
     onAddTodo: (text: string, listId?: string, dueDate?: string, stepId?: string, category?: Todo['category']) => void | Promise<void>;
     onAddEntry: (title: string, content: string, category?: string, mood?: JournalEntry['mood']) => void | Promise<void>;
-    onAddPost: (post: AiPost) => void;
     requireConfirm?: boolean;
     settings: AppSettings;
     onUpdateSettings?: (settings: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
@@ -99,15 +101,10 @@ const LEGACY_MODEL_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
 type PersonaEditorTab = 'profile' | 'api';
 type ApiSelection = '__default__' | '__new__' | string;
 
-const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama', 'custom'];
+const CHAT_PROVIDERS = DEFAULT_CHAT_PROVIDERS;
 
 const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xAI';
-    if (provider === 'openai') return 'OpenAI';
-    if (provider === 'anthropic') return 'Anthropic';
-    if (provider === 'gemini') return 'Gemini';
-    if (provider === 'ollama') return 'Ollama';
-    return '기타 로컬 서버';
+    return getConfiguredProviderDisplayName(provider);
 };
 
 const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
@@ -115,6 +112,10 @@ const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
     if (provider === 'openai') return 'sk-...';
     if (provider === 'anthropic') return 'sk-ant-...';
     if (provider === 'gemini') return 'AIza...';
+    if (provider === 'deepseek') return 'sk-...';
+    if (provider === 'qwen') return 'sk-...';
+    if (provider === 'kimi') return 'sk-...';
+    if (provider === 'glm') return 'API Key...';
     if (provider === 'custom') return '선택 사항';
     return 'API Key';
 };
@@ -418,13 +419,11 @@ const ChatView: React.FC<ChatViewProps> = ({
     events,
     todos,
     entries,
-    posts,
     todoLists,
     onAddEvent,
     onDeleteEvent,
     onAddTodo,
     onAddEntry,
-    onAddPost,
     requireConfirm = true,
     settings,
     onUpdateSettings,
@@ -703,6 +702,9 @@ const ChatView: React.FC<ChatViewProps> = ({
             if (!(agentApiDraft.baseUrl || '').trim()) return '로컬 서버 주소를 입력해 주세요.';
             return null;
         }
+        if (isHostedOpenAICompatibleProvider(provider) && !(agentApiDraft.baseUrl || getProviderDefaultBaseUrl(provider) || '').trim()) {
+            return '해당 서비스의 연결 주소를 확인해 주세요.';
+        }
         if (!(agentApiDraft.apiKey || '').trim()) return 'API Key를 입력해 주세요.';
         return null;
     };
@@ -749,6 +751,8 @@ const ChatView: React.FC<ChatViewProps> = ({
                 await testOpenAIConnection(apiKey, modelName);
             } else if (provider === 'anthropic') {
                 await testAnthropicConnection(apiKey, modelName);
+            } else if (isHostedOpenAICompatibleProvider(provider)) {
+                await testOpenAICompatibleConnection(apiKey, agentApiDraft.baseUrl || getProviderDefaultBaseUrl(provider) || '', modelName);
             } else {
                 await callGeminiAPI(apiKey, '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.', undefined, modelName);
             }
@@ -807,8 +811,8 @@ const ChatView: React.FC<ChatViewProps> = ({
                 provider,
                 modelName: normalizeProviderModelName(provider, agentApiDraft.modelName || ''),
                 apiKey: provider === 'ollama' ? '' : (agentApiDraft.apiKey || '').trim(),
-                baseUrl: provider === 'ollama' || provider === 'custom'
-                    ? (agentApiDraft.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim()
+                baseUrl: provider === 'ollama' || provider === 'custom' || isHostedOpenAICompatibleProvider(provider)
+                    ? (agentApiDraft.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : getProviderDefaultBaseUrl(provider) || '')).trim()
                     : undefined,
                 isActive: true,
             };
@@ -2131,7 +2135,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                                                 provider,
                                                                 modelName: getDefaultModelForProvider(provider),
                                                                 apiKey: '',
-                                                                baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
+                                                                 baseUrl: provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : getProviderDefaultBaseUrl(provider),
                                                             });
                                                         }}
                                                         className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[var(--color-primary)]"

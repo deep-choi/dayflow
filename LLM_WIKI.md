@@ -33,7 +33,6 @@ Dayflow 프로젝트의 분석 문서가 체계적으로 **구조화된 모듈 �
 | **Interaction** | `@dnd-kit/core`, `@dnd-kit/sortable` | 무한 캔버스 칸반 보드 및 드래그 앤 드롭 할 일 관리 |
 | **Icons & Dates** | `lucide-react`, `date-fns` | 직관적인 아이콘 세트 및 날짜 연산 |
 | **Backend Service** | Supabase (PostgreSQL DB, Auth, RLS) | 사용자 인증, RLS 보안 정책이 적용된 클라우드 데이터베이스 |
-| **Server Automation** | Supabase Edge Functions (Deno/TypeScript) | 오프라인 상태에서도 동작하는 서버 사이드 AI 트리거 루틴 (`process-ai-triggers`) |
 | **AI Integration** | `@google/genai`, OpenAI, Anthropic, xAI, Ollama | Multi-Provider 지원 및 커스텀 API 키/엔드포인트 연동 |
 | **Hosting & Deploy** | Firebase Hosting (`life-a01e2`) | 최적화된 글로벌 CDN 기반 프론트엔드 호스팅 |
 
@@ -54,14 +53,12 @@ flowchart TD
 
     subgraph Supabase Cloud Backend
         SyncService <--> SupabaseDB[(PostgreSQL + RLS)]
-        EdgeFunc[Edge Function: process-ai-triggers] <--> SupabaseDB
     end
 
     subgraph AI External API Provider
         AIServices <--> GeminiAPI[Google Gemini API]
         AIServices <--> OpenAIAPI[OpenAI / Anthropic / xAI]
         AIServices <--> LocalOllama[Ollama / Local LLM Server]
-        EdgeFunc <--> GeminiAPI
     end
 ```
 
@@ -77,7 +74,6 @@ Dayflow는 단일 페이지 애플리케이션(SPA) 구조로, `App.tsx`가 중�
 | [`TodoView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/TodoView.tsx) | 할 일 관리 뷰 | Trello 방식의 무한 캔버스 패닝 지원, `@dnd-kit` 드래그 앤 드롭 항목 이동, 하위 단계(SubTask) 분할 및 인라인 편집 지원 |
 | [`CalendarView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/CalendarView.tsx) | 캘린더 뷰 | 월간 그리드 달력, 마우스 휠을 통한 연/월 이동, 더블 클릭 일정 추가, 모바일 스타일 타임 피커 지원 |
 | [`ChatView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/ChatView.tsx) | AI 대화 뷰 | 멀티 AI 페르소나 그룹/단일 대화, 온보딩 프로세스, 챗 대화 내 의도 파악(Intent Parsing) 후 일정/할일/일기 즉시 등록 제안 |
-| [`CommunityBoardView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/CommunityBoardView.tsx) | AI 커뮤니티 피드 | AI 페르소나들이 자율적으로 생성한 생각과 일상을 공유하는 피드. 사용자가 AI 글에 역으로 반응/댓글 작성 가능 |
 | [`PersonaSettingsView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/PersonaSettingsView.tsx) | 페르소나 & 메모리 설정 | 페르소나별 성격, 역할, 어조, 아바타 튜닝 및 사용자와 대화하며 수집된 장기 기억(Fact, Preference, Goal) 관리 |
 | [`ApiSettingsView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/ApiSettingsView.tsx) | API 및 시스템 설정 | Gemini, OpenAI, Anthropic, xAI, Ollama 연결 관리 및 토큰/요청 사용량 통계 추적, 다크/라이트 테마 변경 |
 
@@ -104,9 +100,6 @@ Dayflow는 특정 AI에 종속되지 않는 유연한 구조를 가지고 있습
 2. **Preference (선호)**: *"아침 운동을 좋아함."*, *"간결한 답변을 원함."*
 3. **Goal (목표)**: *"올해 안에 프론트엔드 프로젝트 완성하기"*
 
-### 5.4. Server-Side AI Automation
-브라우저를 닫아둔 상태에서도 Supabase Edge Function (`process-ai-triggers`)이 서버 스케줄에 따라 실행되어 주간/일간 리포트 생성 및 AI 반응을 오프라인 상태에서도 작성합니다.
-
 ---
 
 ## 💾 6. 데이터 모델 & persistence layer
@@ -122,7 +115,7 @@ Dayflow는 오프라인 로컬 우선(Local-First) 경험을 위해 **LocalStora
 - `ApiConnection`: LLM 프로바이더 커넥션 객체 (API 키, 모델명, BaseURL)
 
 ### 6.2. DB 스키마 & RLS 보안 ([`supabase_schema.sql`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/supabase_schema.sql))
-- 모든 테이블 (`profiles`, `todos`, `todo_lists`, `journal_entries`, `calendar_events`, `community_posts` 등)에 **Row Level Security (RLS)**가 적용되어 본인의 `auth.uid()`에 해당하는 데이터만 조회/수정/삭제 가능.
+- 모든 활성 데이터 테이블 (`profiles`, `todos`, `todo_lists`, `journal_entries`, `calendar_events` 등)에 **Row Level Security (RLS)**가 적용되어 본인의 `auth.uid()`에 해당하는 데이터만 조회/수정/삭제 가능.
 
 ---
 
@@ -138,7 +131,6 @@ dayflow/
 │   ├── TodoView.tsx            # 할 일 칸반 보드 화면
 │   ├── CalendarView.tsx        # 캘린더 화면
 │   ├── ChatView.tsx            # AI 대화 & 액션 제안 화면
-│   ├── CommunityBoardView.tsx  # AI 소셜 피드 화면
 │   ├── PersonaSettingsView.tsx # 페르소나 관리 화면
 │   └── ApiSettingsView.tsx     # API 키 및 설정 화면
 ├── services/                   # 비즈니스 로직 & 외부 서비스 통신
@@ -175,16 +167,5 @@ npm run build
 # Firebase Hosting 배포
 npm run deploy
 ```
-
-### 8.3. Supabase Edge Function 배포 (Server AI Automation)
-```bash
-# 워커 시크릿 키 설정
-npx supabase secrets set LS_AI_WORKER_SECRET="your-secret"
-
-# Edge Function 배포
-npx supabase functions deploy process-ai-triggers
-```
-
----
 
 > **Note**: 본 문서는 프로젝트 환경 변화에 따라 업데이트되는 최신 지식 기반 문서(LLM Wiki)입니다. 추가적인 문의나 확장이 필요한 경우 관련 소스 코드 파일 링크를 참조하세요.

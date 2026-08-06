@@ -56,13 +56,3 @@ sequenceDiagram
 메모리는 관찰 횟수(`observationCount`)와 신뢰도(`confidence`) 지수를 가지며, 중요한 메모리는 사용자가 고정(`pinnedPersonaMemoryIds`)할 수 있습니다.
 
 ---
-
-## 4. Server-Side AI Automation (Supabase Edge Function)
-
-사용자가 브라우저를 종료한 상태에서도 AI 자동화 작업을 수행하기 위해 Supabase Edge Function이 동작합니다.
-
-- **위치**: [`supabase/functions/process-ai-triggers`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/supabase/functions/process-ai-triggers)
-- **주요 트리거**:
-  - 주간 / 일간 사용성 요약 (Digest)
-  - 미완료 할 일에 대한 AI 페르소나의 오프라인 격려 및 일기 반응 생성
-- **보안**: `x-ls-ai-secret` 헤더 인증을 거친 요청만 수락.

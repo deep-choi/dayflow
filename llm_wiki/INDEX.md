@@ -19,7 +19,6 @@ Dayflow 웹서비스의 시스템 아키텍처, 데이터 모델, AI 서비스 �
    - Multi-LLM 연동 체계 (Gemini, OpenAI, Anthropic, xAI, Ollama)
    - Intent & Action Parsing (채팅 기반 일정/할일/일기 자동 등록)
    - Persona Memory System (Fact, Preference, Goal 추론 및 저장)
-   - Server-Side AI Automation (Supabase Edge Function: `process-ai-triggers`)
 
 4. [💾 데이터 모델 & 동기화 엔진 (DATA_AND_SYNC.md)](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/llm_wiki/DATA_AND_SYNC.md)
    - `types.ts` 인터페이스 모델 상세

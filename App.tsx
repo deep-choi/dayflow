@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { ViewState, CalendarEvent, Todo, JournalEntry, AiPost, CommunityPost, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, Comment, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
-import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, Edit3, LogOut, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ViewState, CalendarEvent, Todo, JournalEntry, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
-import { ko } from 'date-fns/locale/ko';
 import { supabase } from './utils/supabase';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { DEFAULT_AGENTS } from './data/defaultAgents';
 import { normalizeKoreanText } from './utils/encodingFix';
-import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncCommunityPosts, syncAgents, syncChatSessions, syncPersonaMemories, syncUserData, setOnSyncError, seedSyncSnapshot, clearUserSyncState } from './services/syncService';
+import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncAgents, syncChatSessions, syncPersonaMemories, syncUserData, setOnSyncError, seedSyncSnapshot, clearUserSyncState } from './services/syncService';
 import { debugManualSync } from './utils/debugSync';
 import { useAuthSession } from './hooks/useAuthSession';
 import { clearChatSessionsCache, loadChatSessionsCache, saveChatSessionsCache } from './utils/chatSessionCache';
@@ -431,17 +430,6 @@ const buildPersonaMemoryContext = (
   return truncateMemoryText(blocks.join('\n'), PERSONA_MEMORY_TOTAL_CHAR_LIMIT);
 };
 
-const normalizeCommunityPost = (post: any): CommunityPost => ({
-  id: post.id,
-  author: post.author,
-  content: post.content,
-  timestamp: typeof post.timestamp === 'string' ? post.timestamp : new Date(post.timestamp).toISOString(),
-  replyTo: post.replyTo ?? post.reply_to ?? undefined,
-  trigger: post.trigger,
-  order: typeof post.order === 'number' ? post.order : 0,
-  comments: Array.isArray(post.comments) ? post.comments : undefined,
-});
-
 const parseStoredTimestampParts = (value: unknown): { date: string; time: string } => {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!raw) return { date: '', time: '' };
@@ -714,7 +702,6 @@ const THEME_META_COLOR = {
 const DEFAULT_THEME: ThemeMode = 'system';
 
 const DEFAULT_SETTINGS: AppSettings = {
-  autoAiReactions: false,
   chatActionConfirm: true,
   theme: DEFAULT_THEME,
   apiConnections: [],
@@ -724,6 +711,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   pinnedPersonaMemoryIds: [],
   lastRoutineResetDate: undefined,
   routineProgress: {},
+};
+
+const withoutLegacyAiAutomationSetting = (
+  value: Partial<AppSettings> | null | undefined,
+): Partial<AppSettings> => {
+  if (!value) return {};
+  const { autoAiReactions: _legacyAutoAiReactions, ...currentSettings } = value as Partial<AppSettings> & {
+    autoAiReactions?: unknown;
+  };
+  return currentSettings;
 };
 
 const getSystemTheme = (): Exclude<ThemeMode, 'system'> => {
@@ -898,8 +895,6 @@ const CACHE_KEYS = [
   'todos',
   'todoSteps',
   'entries',
-  'posts',
-  'communityPosts',
   'aiAgents',
   'chatSessions',
   'personaMemories',
@@ -924,8 +919,6 @@ const CHAT_CACHE_MAX_QUICK_REPLY_CHARS = 120;
 
 const NON_ESSENTIAL_CACHE_KEYS: CacheKey[] = [
   'activityLog',
-  'communityPosts',
-  'posts',
 ];
 
 const isQuotaExceededError = (error: unknown): boolean => {
@@ -1135,6 +1128,7 @@ const App: React.FC = () => {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error'>('idle');
   const [currentView, setCurrentView] = useState<ViewState>(() => resolveViewFromUrl());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileAccountMenuOpen, setIsMobileAccountMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
@@ -1146,6 +1140,7 @@ const App: React.FC = () => {
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const sidebarProfileButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileAccountMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   const openSettingsModal = useCallback((tab: SettingsTab = 'account', hideTabs: boolean = false) => {
     setSettingsTab(tab);
@@ -1218,10 +1213,6 @@ const App: React.FC = () => {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [todoSteps, setTodoSteps] = useState<TodoStep[]>([]);
   const [entries, setEntries] = useState<JournalEntry[]>([]);
-  const [posts, setPosts] = useState<AiPost[]>([]);
-
-  // Community Board State
-  const [communityPosts, setCommunityPosts] = useState<CommunityPost[]>([]);
   const [aiAgents, setAiAgents] = useState<AIAgent[]>(DEFAULT_AGENTS);
 
   // Activity Log & Settings
@@ -1251,14 +1242,6 @@ const App: React.FC = () => {
   const [editingCategoryName, setEditingCategoryName] = useState('');
   const [activeCategoryMenu, setActiveCategoryMenu] = useState<string | null>(null);
 
-  // AI Diary Selection States
-  const [selectedAiPostId, setSelectedAiPostId] = useState<string | null>(null);
-  const [selectedAiAgentId, setSelectedAiAgentId] = useState<string>('ARIA');
-  const [isAddingAiAgent, setIsAddingAiAgent] = useState(false);
-  const [aiAgentInput, setAiAgentInput] = useState('');
-  const [editingAiAgentId, setEditingAiAgentId] = useState<string | null>(null);
-  const [editingAiAgentName, setEditingAiAgentName] = useState('');
-  const [activeAiAgentMenu, setActiveAiAgentMenu] = useState<string | null>(null);
   const primaryActiveChatAgentId = activeChatAgentIds[0] || aiAgents[0]?.id || 'ARIA';
 
   useEffect(() => {
@@ -1379,11 +1362,6 @@ const App: React.FC = () => {
       { text: trimmed.slice(0, 280), timestamp: new Date().toISOString() }
     ].slice(-30);
   };
-
-  useEffect(() => {
-    if (!settings.autoAiReactions) return;
-    setSettings(prev => (prev.autoAiReactions ? { ...prev, autoAiReactions: false } : prev));
-  }, [settings.autoAiReactions]);
 
   const capturePersonaMemoriesFromUserMessage = (text: string, targetAgentIds: string[]) => {
     if (!currentUser?.id) return;
@@ -1528,8 +1506,6 @@ const App: React.FC = () => {
     setTodoSteps([]);
     setTodos([]);
     setEntries([]);
-    setPosts([]);
-    setCommunityPosts([]);
     setAiAgents(DEFAULT_AGENTS);
     setChatSessions([]);
     setPersonaMemories([]);
@@ -1541,8 +1517,6 @@ const App: React.FC = () => {
     setJournalCategories([]);
     setSelectedJournalId(null);
     setSelectedJournalCategory('메모장');
-    setSelectedAiPostId(null);
-    setSelectedAiAgentId(DEFAULT_AGENTS[0]?.id ?? 'ARIA');
     setUndoToast(null);
     recentChatObservationsRef.current = [];
     settingsSyncBaselineRef.current = { ...DEFAULT_SETTINGS };
@@ -1555,8 +1529,6 @@ const App: React.FC = () => {
     const cachedTodoSteps = readCacheState<TodoStep[]>(userId, 'todoSteps', []);
     const cachedTodos = readCacheState<Todo[]>(userId, 'todos', []);
     const cachedEntries = readCacheState<JournalEntry[]>(userId, 'entries', []);
-    const cachedPosts = readCacheState<AiPost[]>(userId, 'posts', []);
-    const cachedCommunityPosts = readCacheState<CommunityPost[]>(userId, 'communityPosts', []);
     const cachedAgentsRaw = readCacheState<AIAgent[]>(userId, 'aiAgents', DEFAULT_AGENTS);
     const normalizedAgents = (cachedAgentsRaw.length > 0 ? cachedAgentsRaw : DEFAULT_AGENTS).map((agent, idx) => normalizeAIAgent(agent, idx));
     const cachedActivityLog = readCacheState<ActivityItem[]>(userId, 'activityLog', []);
@@ -1577,8 +1549,6 @@ const App: React.FC = () => {
       listId: normalizeTodoListId(todo.listId) || undefined,
     })));
     setEntries(cachedEntries);
-    setPosts(cachedPosts);
-    setCommunityPosts(cachedCommunityPosts);
     setAiAgents(normalizedAgents);
     setChatSessions([]);
     setPersonaMemories(
@@ -1589,10 +1559,9 @@ const App: React.FC = () => {
         : []
     );
     setActivityLog(cachedActivityLog);
-    setSettings({ ...DEFAULT_SETTINGS, ...cachedSettings });
+    setSettings({ ...DEFAULT_SETTINGS, ...withoutLegacyAiAutomationSetting(cachedSettings) });
     setCalendarTags(cachedTags.length > 0 ? normalizeDefaultCalendarTagColors(cachedTags) : DEFAULT_TAGS);
     setJournalCategories(cachedCategories);
-    setSelectedAiAgentId(prev => normalizedAgents.some(agent => agent.id === prev) ? prev : (normalizedAgents[0]?.id || 'ARIA'));
   };
 
   const hydrateChatSessionsFromIndexedCache = async (userId: string) => {
@@ -1677,7 +1646,6 @@ const App: React.FC = () => {
       }
       setIsDataLoaded(false);
       setIsMobileMenuOpen(false);
-      setActiveAiAgentMenu(null);
       if (activeUserId) clearUserSyncState(activeUserId);
     },
   });
@@ -1731,20 +1699,6 @@ const App: React.FC = () => {
       syncEntries(currentUser.id, entries);
     }
   }, [entries, currentUser?.id, isDataLoaded]);
-
-  useEffect(() => {
-    if (currentUser && isDataLoaded) {
-      writeCacheState(currentUser.id, 'posts', posts);
-    }
-  }, [posts, currentUser?.id, isDataLoaded]);
-
-  useEffect(() => {
-    if (currentUser && isDataLoaded) {
-      writeCacheState(currentUser.id, 'communityPosts', communityPosts);
-      if (skipSyncRef.current) return;
-      syncCommunityPosts(currentUser.id, communityPosts);
-    }
-  }, [communityPosts, currentUser?.id, isDataLoaded]);
 
   useEffect(() => {
     if (currentUser && isDataLoaded) {
@@ -1880,6 +1834,12 @@ const App: React.FC = () => {
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [isMobileMenuOpen]);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) {
+      setIsMobileAccountMenuOpen(false);
+    }
+  }, [isMobileMenuOpen]);
   useEffect(() => {
     setChatSessions(prev => {
       let changed = false;
@@ -1901,12 +1861,6 @@ const App: React.FC = () => {
       const valid = dedupeAgentIds(prev).filter(id => aiAgents.some(agent => agent.id === id));
       if (valid.length === 0 && aiAgents[0]?.id) return [aiAgents[0].id];
       return isSameAgentIdList(prev, valid) ? prev : valid;
-    });
-  }, [aiAgents]);
-  useEffect(() => {
-    setSelectedAiAgentId(prev => {
-      if (aiAgents.some(agent => agent.id === prev)) return prev;
-      return aiAgents[0]?.id || '';
     });
   }, [aiAgents]);
   useEffect(() => {
@@ -2200,7 +2154,13 @@ const App: React.FC = () => {
         if (Array.isArray(dbUserData.calendar_tags) && dbUserData.calendar_tags.length > 0) {
           setCalendarTags(normalizeDefaultCalendarTagColors(dbUserData.calendar_tags));
         }
-        if (dbUserData.settings) setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...dbUserData.settings }));
+        if (dbUserData.settings) {
+          setSettings(prev => ({
+            ...DEFAULT_SETTINGS,
+            ...prev,
+            ...withoutLegacyAiAutomationSetting(dbUserData.settings),
+          }));
+        }
       }
 
       if (canHydrateChatFromTables) {
@@ -2220,7 +2180,6 @@ const App: React.FC = () => {
       let dbJournalCategories: any[] | null = null;
       let dbJournalEntries: any[] | null = null;
       let dbAiAgents: any[] | null = null;
-      let dbPosts: any[] | null = null;
       let dbPersonaMemories: any[] | null = null;
 
       try {
@@ -2229,7 +2188,6 @@ const App: React.FC = () => {
             supabase.from('journal_categories').select('*').eq('user_id', userId),
             supabase.from('journal_entries').select('*').eq('user_id', userId).order('date', { ascending: false }),
             supabase.from('ai_agents').select('*').eq('user_id', userId).order('order'),
-            supabase.from('community_posts').select('*').eq('user_id', userId).order('timestamp', { ascending: false }),
             supabase.from('persona_memories').select('*').eq('user_id', userId).order('last_observed_at', { ascending: false })
           ]),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Secondary fetch timeout')), 10000))
@@ -2242,7 +2200,6 @@ const App: React.FC = () => {
           journalCategoriesRes,
           journalEntriesRes,
           aiAgentsRes,
-          postsRes,
           personaMemoriesRes
         ] = secondaryResults;
         const isPersonaMemoryTableUnavailable = (errorCode?: string) => errorCode === '42P01' || errorCode === '42703';
@@ -2251,7 +2208,6 @@ const App: React.FC = () => {
           journalCategoriesRes?.error,
           journalEntriesRes?.error,
           aiAgentsRes?.error,
-          postsRes?.error,
           isPersonaMemoryTableUnavailable(personaMemoriesRes?.error?.code) ? null : personaMemoriesRes?.error,
         ].filter(Boolean);
         if (secondaryErrors.length > 0) {
@@ -2261,7 +2217,6 @@ const App: React.FC = () => {
         dbJournalCategories = journalCategoriesRes?.data || null;
         dbJournalEntries = journalEntriesRes?.data || null;
         dbAiAgents = aiAgentsRes?.data || null;
-        dbPosts = postsRes?.data || null;
         dbPersonaMemories = isPersonaMemoryTableUnavailable(personaMemoriesRes?.error?.code)
           ? []
           : (personaMemoriesRes?.data || null);
@@ -2281,12 +2236,6 @@ const App: React.FC = () => {
         }
         if (dbAiAgents && dbAiAgents.length > 0) {
           setAiAgents(dbAiAgents.map((a: any, i: number) => normalizeAIAgent(a, i)));
-        }
-        if (dbPosts) {
-          setCommunityPosts((dbPosts || [])
-            .map(normalizeCommunityPost)
-            .filter(p => !!p.id)
-            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
         }
         if (Array.isArray(dbPersonaMemories)) {
           const mappedMemories = (dbPersonaMemories
@@ -2311,7 +2260,6 @@ const App: React.FC = () => {
       seedSyncSnapshot('todo_steps', userId, (dbTodoSteps || []).map((row: any) => String(row.id)));
       seedSyncSnapshot('journal_entries', userId, (dbJournalEntries || []).map((row: any) => String(row.id)));
       seedSyncSnapshot('journal_categories', userId, (dbJournalCategories || []).map((row: any) => String(row.id)));
-      seedSyncSnapshot('community_posts', userId, (dbPosts || []).map((row: any) => String(row.id)));
       seedSyncSnapshot('ai_agents', userId, (dbAiAgents || []).map((row: any) => String(row.id)));
 
       const seededChatSessions = chatSessionsFromTables.length > 0
@@ -2381,62 +2329,6 @@ const App: React.FC = () => {
 
     resetRoutineCompletedStatus();
   }, [isDataLoaded, todayDate, currentUser?.id, settings.lastRoutineResetDate, todos, todoLists, todoTabs]);
-
-  // Community post handler
-  // Community post handler
-  const addCommunityPost = async (post: CommunityPost) => {
-    const newOrder = communityPosts.length > 0 ? Math.min(...communityPosts.map(p => p.order || 0)) - 1 : 0;
-    const postWithOrder = { ...post, order: newOrder };
-    setCommunityPosts(prev => [postWithOrder, ...prev]);
-
-    if (currentUser) {
-      const { error } = await supabase.from('community_posts').insert([{
-        id: postWithOrder.id,
-        user_id: currentUser.id,
-        author: postWithOrder.author,
-        content: postWithOrder.content,
-        timestamp: postWithOrder.timestamp,
-        reply_to: postWithOrder.replyTo,
-        trigger: postWithOrder.trigger,
-        "order": newOrder
-      }]);
-
-      if (error) {
-        console.error('Failed to persist AI post:', error);
-      }
-    }
-  };
-
-  const updateCommunityPost = (id: string, updates: Partial<CommunityPost>) => {
-    setCommunityPosts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
-  };
-
-  const deleteCommunityPost = (id: string) => {
-    if (window.confirm('정말로 이 AI 게시글을 삭제하시겠습니까?')) {
-      setCommunityPosts(prev => prev.filter(p => p.id !== id));
-      if (selectedAiPostId === id) setSelectedAiPostId(null);
-
-      if (currentUser) {
-        supabase.from('community_posts').delete().eq('id', id).eq('user_id', currentUser.id)
-          .then(({ error }) => {
-            if (error) {
-              console.error('Failed to delete AI post:', error);
-            }
-          });
-      }
-    }
-  };
-
-  const addCommunityComment = (postId: string, comment: Omit<Comment, 'id' | 'timestamp'>) => {
-    const newComment: Comment = {
-      id: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...comment,
-    };
-    setCommunityPosts(prev => prev.map(p =>
-      p.id === postId ? { ...p, comments: [...(p.comments || []), newComment] } : p
-    ));
-  };
 
   const persistTodoTabsForUser = async (userId: string, tabsToPersist: TodoTab[]): Promise<any> => {
     if (tabsToPersist.length === 0) return null;
@@ -2699,23 +2591,6 @@ const App: React.FC = () => {
     }
   };
 
-  const addAiAgent = async (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    if (aiAgents.some(a => a.name === trimmed)) return;
-    const newAgent: AIAgent = normalizeAIAgent({
-      id: crypto.randomUUID(),
-      name: trimmed,
-      emoji: '👤',
-      role: '새로운 페르소나',
-      personality: '사용자가 직접 생성한 AI 페르소나입니다.',
-      tone: '친절하고 공손한 스타일',
-      color: '#37352f',
-    });
-    const nextAgents = normalizeAgentCollection([...aiAgents, newAgent]);
-    setAiAgents(nextAgents);
-  };
-
   const updateAiAgent = async (id: string, updates: Partial<AIAgent>) => {
     const currentAgent = aiAgents.find(a => a.id === id);
     if (!currentAgent) return;
@@ -2749,12 +2624,9 @@ const App: React.FC = () => {
       return;
     }
 
-    if (window.confirm(`'${agent.name}' 페르소나를 삭제하시겠습니까? 관련 게시글은 삭제되지 않습니다.`)) {
+    if (window.confirm(`'${agent.name}' 페르소나를 삭제하시겠습니까?`)) {
       const nextAgents = normalizeAgentCollection(aiAgents.filter(a => a.id !== id));
       setAiAgents(nextAgents);
-      if (selectedAiAgentId === id) {
-        setSelectedAiAgentId(nextAgents[0]?.id || '');
-      }
     }
   };
 
@@ -2899,8 +2771,6 @@ const App: React.FC = () => {
       events,
       todos,
       entries,
-      posts,
-      communityPosts,
       agents: aiAgents,
       personaMemories,
       settings,
@@ -2917,7 +2787,7 @@ const App: React.FC = () => {
   };
 
   const handleClearAllData = async () => {
-    const confirmed = window.confirm('모든 기록을 삭제할까요? (일정/할 일/메모/채팅/레거시 AI 게시글/활동 기록)\n이 작업은 되돌릴 수 없습니다.');
+    const confirmed = window.confirm('모든 기록을 삭제할까요? (일정/할 일/메모/채팅/활동 기록)\n이 작업은 되돌릴 수 없습니다.');
     if (!confirmed) return;
 
     if (currentUser) {
@@ -2932,14 +2802,11 @@ const App: React.FC = () => {
         };
 
         await Promise.all([
-          safeDeleteByUser('ai_trigger_queue'),
-          safeDeleteByUser('ai_agent_rotations'),
           safeDeleteByUser('chat_messages'),
           safeDeleteByUser('chat_sessions'),
           safeDeleteByUser('persona_memories'),
           safeDeleteByUser('user_data'),
           safeDeleteByUser('ai_agents'),
-          safeDeleteByUser('community_posts'),
           safeDeleteByUser('calendar_events'),
           safeDeleteByUser('journal_categories'),
           safeDeleteByUser('journal_entries'),
@@ -2962,8 +2829,6 @@ const App: React.FC = () => {
     setTodoSteps([]);
     setEntries([]);
     setJournalCategories([]);
-    setPosts([]);
-    setCommunityPosts([]);
     setAiAgents(DEFAULT_AGENTS);
     setChatSessions([]);
     setPersonaMemories([]);
@@ -2973,8 +2838,6 @@ const App: React.FC = () => {
     setCalendarTags(DEFAULT_TAGS);
     setSelectedJournalId(null);
     setSelectedJournalCategory('메모장');
-    setSelectedAiPostId(null);
-    setSelectedAiAgentId(DEFAULT_AGENTS[0]?.id ?? 'ARIA');
     if (currentUser) {
       clearUserScopedCache(currentUser.id);
       void clearChatSessionsCache(currentUser.id);
@@ -2984,11 +2847,6 @@ const App: React.FC = () => {
 
   const handleClearActivity = () => {
     setActivityLog([]);
-  };
-
-  const handleClearPosts = () => {
-    setPosts([]);
-    setCommunityPosts([]);
   };
 
   const handleClearEvents = () => {
@@ -3048,7 +2906,6 @@ const App: React.FC = () => {
         todoLists,
         entries,
         journalCategories,
-        communityPosts,
         aiAgents,
         settings,
         activityLog,
@@ -3755,9 +3612,6 @@ const App: React.FC = () => {
     }
   }
 
-  const addPost = (post: AiPost) => setPosts(prev => [post, ...prev]);
-  const deletePost = (id: string) => setPosts(prev => prev.filter(p => p.id !== id));
-
   const addCalendarTag = () => {
     const newTag: CalendarTag = {
       id: crypto.randomUUID(),
@@ -3954,7 +3808,6 @@ const App: React.FC = () => {
       onExportData={handleExportData}
       onClearAllData={handleClearAllData}
       onClearActivity={handleClearActivity}
-      onClearPosts={handleClearPosts}
       onClearEvents={handleClearEvents}
       onClearTodos={handleClearTodos}
       onClearEntries={handleClearEntries}
@@ -4051,13 +3904,11 @@ const App: React.FC = () => {
             events={events}
             todos={effectiveTodos}
             entries={entries}
-            posts={posts}
             todoLists={todoLists}
             onAddEvent={(event) => requireAuth() ? addEvent(event) : undefined}
             onDeleteEvent={(id) => { if (requireAuth()) deleteEvent(id); }}
             onAddTodo={(...args) => requireAuth() ? addTodo(...args) : undefined}
             onAddEntry={(...args) => requireAuth() ? addEntry(...args) : undefined}
-            onAddPost={(post) => { if (requireAuth()) addPost(post); }}
             requireConfirm={settings.chatActionConfirm}
             settings={settings}
             onUpdateSettings={setSettings}
@@ -4323,153 +4174,6 @@ const App: React.FC = () => {
           }
 
           {
-            !isSidebarCollapsed && currentView === 'board' && (
-              <div className="hidden lg:block mt-4 pt-4 border-t border-[#e9e9e8] px-3 space-y-6">
-                {/* AI Agents (Categories) */}
-                <div className="space-y-0.5">
-                  <div className="px-3 flex items-center justify-between mb-1.5 group">
-                    <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">AI 페르소나</span>
-                    <button
-                      onClick={() => setIsAddingAiAgent(!isAddingAiAgent)}
-                      className={`p-0.5 hover:bg-[#f3f3f3] rounded transition-all ${isAddingAiAgent ? 'bg-[#f3f3f3]' : ''}`}
-                    >
-                      <Plus size={14} className="text-[#787774]" />
-                    </button>
-                  </div>
-
-                  {isAddingAiAgent && (
-                    <div className="px-2 mb-2">
-                      <input
-                        type="text"
-                        placeholder="새 페르소나..."
-                        value={aiAgentInput}
-                        onChange={e => setAiAgentInput(e.target.value)}
-                        className="w-full bg-white border border-[#e9e9e8] rounded-[4px] py-1.5 px-3 text-[14px] leading-5 outline-none"
-                        autoFocus
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            addAiAgent(aiAgentInput);
-                            setAiAgentInput('');
-                            setIsAddingAiAgent(false);
-                          }
-                          if (e.key === 'Escape') setIsAddingAiAgent(false);
-                        }}
-                      />
-                    </div>
-                  )}
-
-                  {aiAgents.map(agent => (
-                    <div key={agent.id} className="relative group/agent">
-                      {editingAiAgentId === agent.id ? (
-                        <div className="px-2 py-1">
-                          <input
-                            type="text"
-                            value={editingAiAgentName}
-                            onChange={e => setEditingAiAgentName(e.target.value)}
-                            className="w-full bg-white border border-[#d4d4d4] rounded-lg py-1 px-2 text-[14px] leading-5 outline-none"
-                            autoFocus
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                updateAiAgent(agent.id, { name: editingAiAgentName });
-                                setEditingAiAgentId(null);
-                              }
-                              if (e.key === 'Escape') setEditingAiAgentId(null);
-                            }}
-                            onBlur={() => {
-                              updateAiAgent(agent.id, { name: editingAiAgentName });
-                              setEditingAiAgentId(null);
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex items-center">
-                          <button
-                            onClick={() => setSelectedAiAgentId(agent.id)}
-                            className={`flex-1 flex items-center px-3 py-2 rounded-lg transition-colors group ${selectedAiAgentId === agent.id
-                              ? 'bg-[#f7f7f7] text-[#171717]'
-                              : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
-                              }`}
-                          >
-                            <span className="text-[14px] leading-5 truncate">{agent.name}</span>
-                            <span className="ml-2 text-[13px] leading-5 font-normal opacity-45">
-                              {communityPosts.filter(p => p.author === agent.id).length}
-                            </span>
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveAiAgentMenu(activeAiAgentMenu === agent.id ? null : agent.id);
-                            }}
-                            className={`p-1 hover:bg-[#eeeeee] rounded opacity-0 group-hover/agent:opacity-100 transition-opacity mr-1 ${activeAiAgentMenu === agent.id ? 'opacity-100 bg-[#eeeeee]' : ''}`}
-                          >
-                            <MoreVertical size={14} className="text-[#9b9a97]" />
-                          </button>
-                        </div>
-                      )}
-
-                      {activeAiAgentMenu === agent.id && (
-                        <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-[#e9e9e8] rounded-lg z-[100] py-1 animate-in fade-in zoom-in-95 duration-100">
-                          <button
-                            onClick={() => {
-                              setEditingAiAgentId(agent.id);
-                              setEditingAiAgentName(agent.name);
-                              setActiveAiAgentMenu(null);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] leading-5 text-[#37352f] hover:bg-[#f3f3f3] transition-colors text-left"
-                          >
-                            <Edit3 size={12} className="text-[#9b9a97]" /> 이름 변경
-                          </button>
-                          <button
-                            onClick={() => {
-                              deleteAiAgent(agent.id);
-                              setActiveAiAgentMenu(null);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] leading-5 text-[#eb5757] hover:bg-[#fff0f0] transition-colors text-left"
-                          >
-                            <Trash2 size={12} /> 삭제
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                {/* AI Post List */}
-                <div className="space-y-0.5 overflow-hidden">
-                  <div className="px-3 mb-1.5">
-                    <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">AI 게시글</span>
-                  </div>
-                  <div className="max-h-[350px] overflow-y-auto custom-scrollbar space-y-0.5">
-                    {communityPosts
-                      .filter(p => !selectedAiAgentId || p.author === selectedAiAgentId)
-                      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                      .slice(0, 5)
-                      .map(post => (
-                        <button
-                          key={post.id}
-                          onClick={() => setSelectedAiPostId(post.id)}
-                          className={`w-full text-left px-3 py-2 rounded-lg transition-colors group ${selectedAiPostId === post.id
-                            ? 'bg-[#f7f7f7] text-[#171717]'
-                            : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
-                            }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-[14px] leading-5 truncate pr-2">
-                              {post.content.split('\n')[0].substring(0, 15)}...
-                            </span>
-                            <span className="text-[13px] leading-5 font-normal opacity-50 flex-shrink-0">
-                              {format(parseISO(post.timestamp), 'MM.dd')}
-                            </span>
-                          </div>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              </div>
-            )
-          }
-
-          {
             !isSidebarCollapsed && currentView === 'journal' && (
               <div className="px-3 overflow-hidden">
                 <div className="border-t border-[#e9e9e8] pt-6 mt-6 mb-2 px-3">
@@ -4708,7 +4412,7 @@ const App: React.FC = () => {
           onMouseDown={() => setIsSettingsModalOpen(false)}
         >
           <div
-            className={`relative flex max-h-[calc(100dvh-24px)] sm:max-h-[calc(100dvh-48px)] w-full ${isHideSettingsTabs ? 'max-w-[560px]' : 'max-w-[960px] h-[90dvh] sm:h-[85vh]'} flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-[#e9e9e8]`}
+          className={`relative flex max-h-[calc(100dvh-24px)] sm:max-h-[calc(100dvh-48px)] w-full ${isHideSettingsTabs ? 'max-w-[560px]' : 'max-w-[960px] h-[90dvh] sm:h-[85vh]'} flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-[#e9e9e8]`}
             onMouseDown={(event) => event.stopPropagation()}
           >
             <button
@@ -4719,7 +4423,7 @@ const App: React.FC = () => {
             >
               <X size={16} />
             </button>
-            <div className={`overflow-y-auto custom-scrollbar flex-1 ${isHideSettingsTabs ? 'px-4 pt-3 sm:px-6' : ''}`}>
+            <div className={`min-h-0 overflow-y-auto custom-scrollbar flex-1 ${isHideSettingsTabs ? 'px-4 pt-3 sm:px-6' : ''}`}>
               <React.Suspense fallback={<ViewLoadingFallback />}>
                 {renderSettingsView()}
               </React.Suspense>
@@ -4761,7 +4465,7 @@ const App: React.FC = () => {
                         : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
                     >
                       <item.icon size={18} className={isActive ? 'text-[var(--color-primary)]' : 'text-[#8a8a8a]'} strokeWidth={isActive ? 2.5 : 2} />
-                      <span className={`text-[14px] leading-5 ${isActive ? 'font-medium' : 'font-normal'}`}>{item.label}</span>
+                      <span className={`text-[15px] leading-5 ${isActive ? 'font-medium' : 'font-normal'}`}>{item.label}</span>
                     </button>
                   );
                 })}
@@ -4770,17 +4474,6 @@ const App: React.FC = () => {
               <div className="border-t border-[#e9e9e8] pt-3">
                 <div className="flex items-center justify-between px-1 mb-2">
                   <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">채팅 내역</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleNewChat();
-                      setIsMobileMenuOpen(false);
-                    }}
-                    className="p-1 rounded-md text-[#787774] hover:text-[#37352f] hover:bg-[#f7f7f7] transition-colors"
-                    aria-label="새 채팅"
-                  >
-                    <Plus size={13} />
-                  </button>
                 </div>
                 <div className="space-y-1 max-h-52 overflow-y-auto">
                   {historySessions.length === 0 ? (
@@ -4803,7 +4496,7 @@ const App: React.FC = () => {
                               ? 'bg-[#f7f7f7] text-[#171717]'
                               : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
                           >
-                            <span className="block truncate">{session.title}</span>
+                            <span className="mobile-chat-history-title block truncate">{session.title}</span>
                           </button>
                           <button
                             type="button"
@@ -4815,10 +4508,10 @@ const App: React.FC = () => {
                                 }
                               }
                             }}
-                            className="shrink-0 p-1.5 rounded-md text-[#8a8a8a] hover:bg-[#f3f3f3] hover:text-[#171717] transition-colors"
+                            className="shrink-0 p-2 rounded-md text-[#8a8a8a] hover:bg-[#f3f3f3] hover:text-[#171717] transition-colors"
                             aria-label="채팅 삭제"
                           >
-                            <Trash2 size={12} />
+                            <Trash2 size={16} strokeWidth={1.8} />
                           </button>
                         </div>
                       ))
@@ -4828,16 +4521,16 @@ const App: React.FC = () => {
             </div>
             <div className="p-3 border-t border-[#e9e9e8]">
               {currentUser ? (
-                <div className="flex items-center justify-between gap-2">
+                <div className="relative">
                   <button
+                    ref={mobileAccountMenuButtonRef}
                     type="button"
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      setIsSettingsModalOpen(true);
-                    }}
-                    className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-2 text-left transition-colors hover:bg-[#f7f7f7]"
-                    title="설정"
-                    aria-label="설정 열기"
+                    onClick={() => setIsMobileAccountMenuOpen((prev) => !prev)}
+                    className="flex w-full items-center gap-3 rounded-lg p-2 text-left text-[#8a8a8a] transition-colors hover:bg-[#f3f3f3] hover:text-[#37352f]"
+                    title="계정 메뉴"
+                    aria-label="계정 메뉴"
+                    aria-haspopup="menu"
+                    aria-expanded={isMobileAccountMenuOpen}
                   >
                     <div className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] flex-shrink-0 overflow-hidden">
                       {currentUser?.avatar ? (
@@ -4846,25 +4539,30 @@ const App: React.FC = () => {
                         currentUser?.name?.[0] || 'U'
                       )}
                     </div>
-                    <span className="min-w-0 flex-1 text-[13px] leading-5 font-normal text-[#37352f] truncate">{currentUser?.name}</span>
-                    <span className="shrink-0 text-[#8a8a8a]">
-                      <SettingsIcon size={15} />
+                    <span className="min-w-0 flex-1 text-[14px] leading-5 font-normal text-[#37352f] truncate">{currentUser?.name}</span>
+                    <span className="shrink-0">
+                      <SettingsIcon size={17} />
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
+                  <UserMenuPopover
+                    isOpen={isMobileAccountMenuOpen}
+                    onClose={() => setIsMobileAccountMenuOpen(false)}
+                    currentUser={currentUser}
+                    triggerRef={mobileAccountMenuButtonRef}
+                    positionClassName="left-0 right-0 bottom-full mb-2 w-auto"
+                    onOpenTab={(tab, hideTabs = true) => {
+                      setIsMobileMenuOpen(false);
+                      openSettingsModal(tab, hideTabs);
+                    }}
+                    onOpenFullSettings={() => {
+                      setIsMobileMenuOpen(false);
+                      openSettingsModal('account');
+                    }}
+                    onLogout={() => {
                       setIsMobileMenuOpen(false);
                       handleLogout();
                     }}
-                    disabled={isLoggingOut}
-                    className="flex items-center gap-1 px-2 py-1.5 hover:bg-[#f3f3f3] rounded text-[#8a8a8a] hover:text-[#171717] transition-colors text-[13px] leading-5 font-normal disabled:opacity-60 disabled:cursor-not-allowed"
-                    title="로그아웃"
-                    aria-label="로그아웃"
-                  >
-                    <LogOut size={14} />
-                    <span>{isLoggingOut ? '처리 중...' : '로그아웃'}</span>
-                  </button>
+                  />
                 </div>
               ) : (
                 <button

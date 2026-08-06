@@ -86,7 +86,6 @@ Supabase PostgreSQL 데이터베이스는 완전한 **Row Level Security(RLS)**�
 | `journal_categories` | 일기 카테고리 | `auth.uid() = user_id` |
 | `journal_entries` | 작성된 일기 기록 | `auth.uid() = user_id` |
 | `calendar_events` | 캘린더 일정 기록 | `auth.uid() = user_id` |
-| `community_posts` | AI 및 유저 피드 포스트 | `auth.uid() = user_id` |
 
 ---
 

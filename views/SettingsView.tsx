@@ -5,9 +5,10 @@ import { callGeminiAPI } from '../utils/gemini';
 import { testXaiConnection } from '../services/xaiService';
 import { testOpenAIConnection } from '../services/openaiService';
 import { testAnthropicConnection } from '../services/anthropicService';
+import { testOpenAICompatibleConnection } from '../services/openAICompatibleService';
 import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
 import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
-import { DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL, getDefaultModelForProvider, getModelOptionsForProvider, hasProviderModelOptions, isChatSupportedProvider, normalizeProviderModelName } from '../utils/aiConfig';
+import { DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL, CHAT_PROVIDERS, getDefaultModelForProvider, getModelOptionsForProvider, getProviderDefaultBaseUrl, getProviderDisplayName as getConfiguredProviderDisplayName, hasProviderModelOptions, isChatSupportedProvider, isHostedOpenAICompatibleProvider, normalizeProviderModelName } from '../utils/aiConfig';
 import PersonaSettingsView from './PersonaSettingsView';
 import AvatarCropperModal from '../components/AvatarCropperModal';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
@@ -28,7 +29,6 @@ interface SettingsViewProps {
     onExportData: () => void;
     onClearAllData: () => void;
     onClearActivity: () => void;
-    onClearPosts: () => void;
     onClearEvents: () => void;
     onClearTodos: () => void;
     onClearEntries: () => void;
@@ -56,12 +56,7 @@ const normalizeConnectionModelName = (provider: ApiConnection['provider'], model
 };
 
 const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
-    if (provider === 'xai') return 'xAI';
-    if (provider === 'openai') return 'OpenAI';
-    if (provider === 'anthropic') return 'Anthropic';
-    if (provider === 'gemini') return 'Gemini';
-    if (provider === 'ollama') return 'Ollama';
-    return '기타 로컬 서버';
+    return getConfiguredProviderDisplayName(provider);
 };
 
 const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
@@ -69,6 +64,10 @@ const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
     if (provider === 'openai') return 'sk-...';
     if (provider === 'anthropic') return 'sk-ant-...';
     if (provider === 'gemini') return 'AIza...';
+    if (provider === 'deepseek') return 'sk-...';
+    if (provider === 'qwen') return 'sk-...';
+    if (provider === 'kimi') return 'sk-...';
+    if (provider === 'glm') return 'API Key...';
     if (provider === 'custom') return '선택 사항';
     return 'API Key';
 };
@@ -87,7 +86,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     onExportData,
     onClearAllData,
     onClearActivity,
-    onClearPosts,
     onClearEvents,
     onClearTodos,
     onClearEntries,
@@ -126,7 +124,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             case 'api':
                 return {
                     title: 'API & AI 모델 설정',
-                    description: 'Gemini, OpenAI, Anthropic, Ollama 등 AI 연동 Key를 설정합니다.',
+                    description: 'Gemini, OpenAI, DeepSeek, Qwen, Kimi, GLM 등 AI 연동 Key를 설정합니다.',
                 };
             case 'theme':
                 return {
@@ -244,14 +242,15 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         const modelName = (newConnection.modelName || '').trim();
         const apiKey = (newConnection.apiKey || '').trim();
         const isLocalProvider = provider === 'ollama' || provider === 'custom';
-        const baseUrl = (newConnection.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim();
-        if (!modelName || (!isLocalProvider && !apiKey) || (isLocalProvider && !baseUrl)) return;
+        const needsBaseUrl = isLocalProvider || isHostedOpenAICompatibleProvider(provider);
+        const baseUrl = (newConnection.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : getProviderDefaultBaseUrl(provider) || DEFAULT_OLLAMA_BASE_URL)).trim();
+        if (!modelName || (!isLocalProvider && !apiKey) || (needsBaseUrl && !baseUrl)) return;
         const connection: ApiConnection = {
             id: crypto.randomUUID(),
             provider,
             modelName: normalizeConnectionModelName(provider, modelName),
             apiKey,
-            baseUrl: isLocalProvider ? baseUrl : undefined,
+            baseUrl: needsBaseUrl ? baseUrl : undefined,
             isActive: true
         };
         persistConnections([...connections, connection], connection.id);
@@ -280,6 +279,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 await testOpenAIConnection(conn.apiKey, conn.modelName);
             } else if (conn.provider === 'anthropic') {
                 await testAnthropicConnection(conn.apiKey, conn.modelName);
+            } else if (isHostedOpenAICompatibleProvider(conn.provider)) {
+                await testOpenAICompatibleConnection(conn.apiKey, conn.baseUrl || getProviderDefaultBaseUrl(conn.provider) || '', conn.modelName);
             } else {
                 await callGeminiAPI(conn.apiKey, '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.', undefined, conn.modelName);
             }
@@ -334,19 +335,19 @@ const SettingsView: React.FC<SettingsViewProps> = ({
         <div className={`flex w-full h-full font-sans ${hideTabs ? 'flex-col max-w-[560px] mx-auto px-4 sm:px-6 pt-3 pb-20 overflow-y-auto custom-scrollbar' : 'flex-col sm:flex-row overflow-hidden'}`}>
             {/* Sidebar Navigation */}
             {!hideTabs && (
-                <div className="sm:w-[260px] shrink-0 sm:border-r border-b sm:border-b-0 border-[#e9e9e8] bg-[#f7f7f5] sm:overflow-y-auto pt-3.5 sm:pt-7 pb-2.5 sm:pb-6 px-3.5 sm:px-4 flex flex-col sm:block gap-2 sm:gap-6 shrink-0">
-                    <div className="flex sm:block overflow-x-auto scrollbar-hide space-x-1.5 sm:space-x-0 sm:space-y-7 pb-1 sm:pb-0">
+                <div className="sm:w-[260px] shrink-0 sm:border-r border-b sm:border-b-0 border-[#e9e9e8] bg-[#f7f7f5] sm:overflow-y-auto py-2.5 sm:pt-7 sm:pb-6 pl-3 pr-12 sm:px-4 flex flex-col sm:block gap-2 sm:gap-6">
+                    <div className="flex sm:block overflow-x-auto scrollbar-hide gap-1.5 sm:space-x-0 sm:space-y-7">
                         {SIDEBAR_GROUPS.map((group, idx) => (
                             <div key={idx} className="flex sm:block shrink-0 sm:shrink gap-1 sm:gap-0">
                                 <h3 className="hidden sm:block px-3.5 text-xs sm:text-sm font-medium text-[#787774] tracking-wide uppercase mb-2.5">{group.title}</h3>
-                                <div className="flex sm:block space-x-1 sm:space-x-0 sm:space-y-2">
+                                <div className="flex sm:block gap-1 sm:space-x-0 sm:space-y-2">
                                     {group.items.map(item => (
                                         <button
                                             key={item.id}
                                             onClick={() => setActiveTab(item.id as SettingsTab)}
-                                            className={`flex items-center gap-3.5 px-4 py-2.5 rounded-xl text-sm sm:text-base transition-all whitespace-nowrap ${activeTab === item.id ? 'bg-[#e8e8e6] text-[#37352f] font-medium shadow-2xs' : 'text-[#787774] hover:bg-[#efefed] hover:text-[#37352f] font-medium'}`}
+                                            className={`flex items-center gap-2 sm:gap-3.5 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-sm sm:text-base transition-all whitespace-nowrap ${activeTab === item.id ? 'bg-[#e8e8e6] text-[#37352f] font-medium shadow-2xs' : 'text-[#787774] hover:bg-[#efefed] hover:text-[#37352f] font-medium'}`}
                                         >
-                                            <item.icon size={20} className={`w-5 h-5 ${activeTab === item.id ? 'text-[#37352f]' : 'text-[#787774]'}`} />
+                                            <item.icon size={18} className={`w-[18px] h-[18px] sm:w-5 sm:h-5 ${activeTab === item.id ? 'text-[#37352f]' : 'text-[#787774]'}`} />
                                             <span>{item.label}</span>
                                         </button>
                                     ))}
@@ -587,7 +588,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                                                 <div className="flex items-center gap-2.5 flex-wrap">
                                                     <span className="text-base font-medium text-[#37352f]">{conn.provider.toUpperCase()}</span>
                                                     {isSelected && <span className="text-xs font-medium text-blue-600 bg-blue-50 border border-[#d0e1fd] px-2.5 py-0.5 rounded-lg">기본 사용 중</span>}
-                                                    {(conn.provider === 'gemini' || conn.provider === 'openai' || conn.provider === 'anthropic' || conn.provider === 'xai') && !conn.apiKey?.trim() && (
+                                                    {conn.provider !== 'ollama' && conn.provider !== 'custom' && !conn.apiKey?.trim() && (
                                                         <span className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-lg">API Key 미등록</span>
                                                     )}
                                                 </div>
@@ -630,7 +631,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                                         </div>
 
                                         {/* API Key Direct Input Field */}
-                                        {(conn.provider === 'gemini' || conn.provider === 'openai' || conn.provider === 'anthropic' || conn.provider === 'xai' || conn.provider === 'custom') && (
+                                        {conn.provider !== 'ollama' && (
                                             <div className="pt-3 border-t border-[#f0f0ee] flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                                                 <div className="relative flex-1 flex items-center rounded-xl border border-[#e9e9e8] bg-[#fbfbfb] focus-within:bg-white focus-within:border-[#d4d4d4] transition-all px-3.5 py-2">
                                                     <input
@@ -671,7 +672,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     {/* Add Connection Modal */}
                     {isAdding && (
                         <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center z-50 p-4">
-                            <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5">
+                            <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 max-h-[calc(100vh-2rem)] overflow-y-auto">
                                 <div className="flex justify-between items-center mb-2">
                                     <h3 className="text-base font-medium">새 API 연결 추가</h3>
                                     <button onClick={() => setIsAdding(false)} className="p-1 hover:bg-[#f1f1f0] rounded-full"><X size={20} className="text-[#9b9a97]" /></button>
@@ -679,7 +680,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                                 <div>
                                     <label className="block text-sm font-medium mb-2">Provider</label>
                                     <div className="grid grid-cols-3 gap-2">
-                                        {(['gemini', 'xai', 'openai', 'anthropic', 'ollama', 'custom'] as const).map(provider => {
+                                        {CHAT_PROVIDERS.map(provider => {
                                             return (
                                                 <button key={provider} onClick={() => {
                                                     setOllamaModels([]);
@@ -688,7 +689,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                                                         provider,
                                                         modelName: getDefaultModelForProvider(provider),
                                                         apiKey: '',
-                                                        baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
+                                                        baseUrl: provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : getProviderDefaultBaseUrl(provider),
                                                     });
                                                 }}
                                                     className={`px-3 py-2.5 rounded-xl text-sm font-medium transition-colors ${newConnection.provider === provider ? 'bg-[#eeeeee] text-[#171717]' : 'bg-[#f7f7f7] text-[#787774] hover:bg-[#eeeeee]'}`}>
@@ -733,7 +734,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                                     <label className="block text-sm font-medium mb-2">API Key{newConnection.provider === 'custom' ? ' (선택 사항)' : ''}</label>
                                     <input type="password" placeholder={getApiKeyPlaceholder(newConnection.provider)} value={newConnection.apiKey || ''} onChange={e => setNewConnection({ ...newConnection, apiKey: e.target.value })} className="w-full p-3 border border-[#e9e9e8] rounded-xl focus:outline-none focus:border-[#d4d4d4] font-mono text-sm" />
                                 </div>}
-                                <button onClick={addConnection} disabled={!newConnection.modelName || (!['ollama', 'custom'].includes(newConnection.provider || '') && !newConnection.apiKey)} className="w-full py-3.5 bg-[#f7f7f7] text-[#171717] rounded-xl hover:bg-[#eeeeee] transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed mt-2">
+                                 <button onClick={addConnection} disabled={!newConnection.modelName || (!['ollama', 'custom'].includes(newConnection.provider || '') && !newConnection.apiKey)} className="w-full py-3.5 bg-[#f7f7f7] text-[#171717] rounded-xl hover:bg-[#eeeeee] transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed mt-2">
                                     연결 추가하기
                                 </button>
                             </div>
@@ -766,7 +767,6 @@ const SettingsView: React.FC<SettingsViewProps> = ({
 
                     <div className="divide-y divide-[#f0f0ee]">
                         {[
-                            { label: '레거시 AI 게시글', desc: '이전 버전에서 생성된 AI 게시글 데이터를 정리합니다.', action: onClearPosts },
                             { label: '캘린더', desc: '저장된 일정 데이터를 모두 삭제합니다.', action: onClearEvents },
                             { label: '할 일', desc: '할 일 목록과 항목을 모두 삭제합니다.', action: onClearTodos },
                             { label: '메모장', desc: '작성한 메모/일기를 모두 삭제합니다.', action: onClearEntries },

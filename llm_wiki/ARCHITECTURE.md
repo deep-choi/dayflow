@@ -19,7 +19,6 @@ flowchart TD
         App <--> TView[TodoView]
         App <--> CView[CalendarView]
         App <--> ChatView[ChatView]
-        App <--> BView[CommunityBoardView]
         App <--> PView[PersonaSettingsView]
         App <--> AView[ApiSettingsView]
     end
@@ -36,8 +35,6 @@ flowchart TD
         PView <--> GeminiSvc
         GeminiSvc <--> MultiLLM[Gemini / OpenAI / Anthropic / xAI / Ollama API]
         
-        SupabaseCloud <--> EdgeFunc[Supabase Edge Function: process-ai-triggers]
-        EdgeFunc <--> MultiLLM
     end
 ```
 
@@ -58,11 +55,10 @@ dayflow/
 │   ├── TodoView.tsx            # 무한 캔버스 칸반 할 일 관리 (dnd-kit 기반)
 │   ├── CalendarView.tsx        # 월간 그리드 캘린더 & 일정 등록
 │   ├── ChatView.tsx            # 멀티 페르소나 대화 & 액션 파싱
-│   ├── CommunityBoardView.tsx  # AI 페르소나 자율 포스트 피드
 │   ├── PersonaSettingsView.tsx # 페르소나 튜닝 및 사용자 장기 기억 관리
 │   └── ApiSettingsView.tsx     # LLM 프로바이더 연동 및 사용량 추적
 ├── services/                   # 외부 API 통신 및 비즈니스 로직
-│   ├── geminiService.ts        # Gemini API 핵심 로직 (대화, 액션 파싱, 라이프 인사이트)
+│   ├── geminiService.ts        # Gemini API 핵심 로직 (대화 및 액션 파싱)
 │   ├── syncService.ts          # Supabase Cloud 백엔드 양방향 디바운스 동기화
 │   ├── trialChatService.ts     # 체험판 AI 프록시 연결 서비스
 │   ├── openaiService.ts        # OpenAI Chat / JSON 호출
@@ -73,9 +69,8 @@ dayflow/
 ├── hooks/                      # 커스텀 React 훅
 │   └── useAuthSession.ts       # Supabase Auth 세션 및 로그인 유저 상태 관리
 ├── supabase/                   # Supabase 데이터베이스 및 Edge Functions
-│   ├── supabase_schema.sql     # PostgreSQL Schema & RLS 보안 정책
-│   └── functions/              # Deno 기반 Edge Functions (서버 사이드 트리거)
-└── docs/                       # 배포 및 서버 자동화 가이드 문서
+│   └── supabase_schema.sql     # PostgreSQL Schema & RLS 보안 정책
+└── docs/                       # 배포 가이드 문서
 ```
 
 ---

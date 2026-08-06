@@ -12,6 +12,7 @@ interface UserMenuPopoverProps {
   onLogout: () => void;
   triggerRef?: React.RefObject<HTMLElement | null>;
   isSidebarCollapsed?: boolean;
+  positionClassName?: string;
 }
 
 export const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({
@@ -23,6 +24,7 @@ export const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({
   onLogout,
   triggerRef,
   isSidebarCollapsed = false,
+  positionClassName,
 }) => {
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -56,9 +58,9 @@ export const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({
 
   if (!isOpen) return null;
 
-  const positionClasses = isSidebarCollapsed
+  const positionClasses = positionClassName ?? (isSidebarCollapsed
     ? 'left-full bottom-0 ml-2.5 w-56'
-    : 'left-3 right-3 sm:left-4 sm:right-4 bottom-full mb-2 w-auto max-w-full';
+    : 'left-3 right-3 sm:left-4 sm:right-4 bottom-full mb-2 w-auto max-w-full');
 
   return (
     <div

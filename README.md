@@ -20,12 +20,6 @@ View your app in AI Studio: https://ai.studio/apps/drive/1Duckm0yaNKJzyW14PA3wGB
 4. Run the app:
    `npm run dev`
 
-## Server-side AI automation
-
-For AI diary generation while the browser is closed, see:
-
-- [docs/SERVER_AI_AUTOMATION.md](docs/SERVER_AI_AUTOMATION.md)
-
 ## Deployment
 
 Firebase Hosting is the only operational deploy target for this app.

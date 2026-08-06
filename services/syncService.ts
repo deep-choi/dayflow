@@ -1,5 +1,5 @@
 import { supabase } from '../utils/supabase';
-import { CalendarEvent, Todo, TodoList, TodoTab, TodoStep, JournalEntry, JournalCategory, CommunityPost, AIAgent, AppSettings, ChatSession, ActivityItem, AiPost, CalendarTag, PersonaMemory } from '../types';
+import { CalendarEvent, Todo, TodoList, TodoTab, TodoStep, JournalEntry, JournalCategory, AIAgent, AppSettings, ChatSession, ActivityItem, CalendarTag, PersonaMemory } from '../types';
 
 // ─── Debounce helper ──────────────────────────────────────────────
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -500,75 +500,6 @@ export const syncJournalCategories = (userId: string, categories: JournalCategor
     });
 };
 
-// ─── Community Posts ──────────────────────────────────────────────
-export const syncCommunityPosts = (userId: string, posts: CommunityPost[]) => {
-    if (!userId) {
-        console.error('[Sync] syncCommunityPosts aborted: No userId provided');
-        return;
-    }
-    debouncedSync(scopedKey('community_posts', userId), async () => {
-        const rows = posts.map((p, i) => ({
-            id: p.id,
-            user_id: userId,
-            author: p.author,
-            content: p.content,
-            timestamp: p.timestamp,
-            reply_to: p.replyTo || null,
-            trigger: p.trigger || null,
-            order: p.order ?? i,
-        }));
-        const rowIds = rows.map((row) => row.id);
-        const deletedIds = getDeletedIds('community_posts', userId, rowIds);
-
-        if (rows.length > 0) {
-            const { error: upsertError } = await supabase.from('community_posts').upsert(rows, { onConflict: 'id' });
-            if (upsertError) throw upsertError;
-        }
-
-        if (deletedIds.length > 0) {
-            const { error: deleteError } = await supabase
-                .from('community_posts')
-                .delete()
-                .eq('user_id', userId)
-                .in('id', deletedIds);
-            if (deleteError) throw deleteError;
-        }
-    });
-};
-
-// ─── AI Posts (Insights) ──────────────────────────────────────────
-export const syncAiPosts = (userId: string, posts: AiPost[]) => {
-    debouncedSync(scopedKey('ai_posts', userId), async () => {
-        const rows = posts.map((p, i) => ({
-            id: p.id,
-            user_id: userId,
-            author: 'AI',
-            content: JSON.stringify({ title: p.title, content: p.content, tags: p.tags, type: p.type }),
-            timestamp: p.date,
-            trigger: '__ai_post__',
-            order: i,
-        }));
-        const rowIds = rows.map((row) => row.id);
-        const deletedIds = getDeletedIds('ai_posts', userId, rowIds);
-
-        if (rows.length > 0) {
-            const { error: upsertError } = await supabase.from('community_posts').upsert(rows, { onConflict: 'id' });
-            if (upsertError) throw upsertError;
-        }
-
-        if (deletedIds.length > 0) {
-            const { error: deleteError } = await supabase
-                .from('community_posts')
-                .delete()
-                .eq('user_id', userId)
-                .eq('trigger', '__ai_post__')
-                .in('id', deletedIds);
-            if (deleteError) throw deleteError;
-        }
-    });
-};
-
-// ─── AI Agents ────────────────────────────────────────────────────
 // ─── AI Agents ────────────────────────────────────────────────────
 export const syncAgents = (userId: string, agents: AIAgent[]) => {
     if (!userId) {

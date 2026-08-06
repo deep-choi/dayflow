@@ -9,14 +9,19 @@ import { callGeminiAPI } from '../utils/gemini';
 import { testXaiConnection } from '../services/xaiService';
 import { testOpenAIConnection } from '../services/openaiService';
 import { testAnthropicConnection } from '../services/anthropicService';
+import { testOpenAICompatibleConnection } from '../services/openAICompatibleService';
 import { listOllamaModels, testOllamaConnection } from '../services/ollamaService';
 import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
 import {
   DEFAULT_GEMINI_MODEL,
   DEFAULT_OLLAMA_BASE_URL,
+  CHAT_PROVIDERS as DEFAULT_CHAT_PROVIDERS,
   getDefaultModelForProvider,
   getModelOptionsForProvider,
+  getProviderDefaultBaseUrl,
+  getProviderDisplayName as getConfiguredProviderDisplayName,
   isChatSupportedProvider,
+  isHostedOpenAICompatibleProvider,
   normalizeProviderModelName,
 } from '../utils/aiConfig';
 
@@ -34,15 +39,10 @@ interface PersonaSettingsViewProps {
 type PersonaEditorTab = 'profile' | 'api';
 type ApiSelection = '__default__' | '__new__' | string;
 
-const CHAT_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'openai', 'anthropic', 'xai', 'ollama', 'custom'];
+const CHAT_PROVIDERS = DEFAULT_CHAT_PROVIDERS;
 
 const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
-  if (provider === 'xai') return 'xAI';
-  if (provider === 'openai') return 'OpenAI';
-  if (provider === 'anthropic') return 'Anthropic';
-  if (provider === 'gemini') return 'Gemini';
-  if (provider === 'ollama') return 'Ollama';
-  return '기타 로컬 서버';
+  return getConfiguredProviderDisplayName(provider);
 };
 
 const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
@@ -50,6 +50,10 @@ const getApiKeyPlaceholder = (provider?: ApiConnection['provider']): string => {
   if (provider === 'openai') return 'sk-...';
   if (provider === 'anthropic') return 'sk-ant-...';
   if (provider === 'gemini') return 'AIza...';
+  if (provider === 'deepseek') return 'sk-...';
+  if (provider === 'qwen') return 'sk-...';
+  if (provider === 'kimi') return 'sk-...';
+  if (provider === 'glm') return 'API Key...';
   if (provider === 'custom') return '선택 사항';
   return 'API Key';
 };
@@ -212,6 +216,9 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
       if (!(apiConnectionDraft.baseUrl || '').trim()) return '로컬 서버 주소를 입력해 주세요.';
       return null;
     }
+    if (isHostedOpenAICompatibleProvider(provider) && !(apiConnectionDraft.baseUrl || getProviderDefaultBaseUrl(provider) || '').trim()) {
+      return '해당 서비스의 연결 주소를 확인해 주세요.';
+    }
     if (!(apiConnectionDraft.apiKey || '').trim()) return 'API Key를 입력해 주세요.';
     return null;
   };
@@ -259,6 +266,8 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
         await testOpenAIConnection(apiKey, modelName);
       } else if (provider === 'anthropic') {
         await testAnthropicConnection(apiKey, modelName);
+      } else if (isHostedOpenAICompatibleProvider(provider)) {
+        await testOpenAICompatibleConnection(apiKey, apiConnectionDraft.baseUrl || getProviderDefaultBaseUrl(provider) || '', modelName);
       } else {
         await callGeminiAPI(apiKey, '간단한 연결 확인입니다. "연결 성공"이라고만 답해주세요.', undefined, modelName);
       }
@@ -292,8 +301,8 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
         provider,
         modelName: normalizeProviderModelName(provider, apiConnectionDraft.modelName || ''),
         apiKey: provider === 'ollama' ? '' : (apiConnectionDraft.apiKey || '').trim(),
-        baseUrl: provider === 'ollama' || provider === 'custom'
-          ? (apiConnectionDraft.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)).trim()
+        baseUrl: provider === 'ollama' || provider === 'custom' || isHostedOpenAICompatibleProvider(provider)
+          ? (apiConnectionDraft.baseUrl || (provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : getProviderDefaultBaseUrl(provider) || '')).trim()
           : undefined,
         isActive: true,
       };
@@ -404,10 +413,10 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6 pb-12">
-      <div className="pb-5 border-b border-[#f0f0ee]">
-        <h2 className="text-xl font-medium text-[#37352f] tracking-tight">페르소나 설정</h2>
-        <p className="text-sm text-[#787774] mt-1">이름, 말투, 프로필, 연결 모델을 손쉽게 변경하세요.</p>
+    <div className="max-w-6xl mx-auto space-y-5 sm:space-y-6 pb-5 sm:pb-12">
+      <div className="pb-3 sm:pb-5 border-b border-[#f0f0ee]">
+        <h2 className="text-lg sm:text-xl font-medium text-[#37352f] tracking-tight">페르소나 설정</h2>
+        <p className="text-sm text-[#787774] mt-1">이름, 말투, 프로필, 연결 모델을 변경하세요.</p>
       </div>
 
       <div className="divide-y divide-[#f0f0ee]">
@@ -415,8 +424,8 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
           const connection = settings.apiConnections?.find((conn) => conn.id === agent.connectionId);
 
           return (
-            <div key={agent.id} className="py-4.5 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 group">
-              <div className="flex items-center gap-3.5 min-w-0 flex-1">
+            <div key={agent.id} className="py-3.5 sm:py-4.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3 sm:gap-4 group">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
                 <div
                   className="w-10 h-10 sm:w-11 sm:h-11 rounded-full overflow-hidden flex items-center justify-center shrink-0 shadow-2xs border border-black/5"
                   style={{ backgroundColor: agent.color || '#37352f' }}
@@ -429,8 +438,8 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base font-medium text-[#37352f] leading-snug">{agent.name}</h3>
-                    <span className="px-2 py-0.5 rounded-md bg-[#f4f4f2] text-[#5f5f5f] text-sm font-medium">
+                    <h3 className="text-[15px] sm:text-base font-medium text-[#37352f] leading-snug">{agent.name}</h3>
+                    <span className="px-1.5 sm:px-2 py-0.5 rounded-md bg-[#f4f4f2] text-[#5f5f5f] text-sm font-medium">
                       {agent.role}
                     </span>
                     {connection && (
@@ -442,32 +451,30 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 shrink-0 pt-1 sm:pt-0">
-                <button
-                  onClick={() => openEditor(agent)}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-[#37352f] bg-[#f4f4f2] hover:bg-[#eaeaea] transition-all"
-                >
-                  <Edit3 size={13} /> 편집
-                </button>
-              </div>
+              <button
+                onClick={() => openEditor(agent)}
+                className="inline-flex h-9 shrink-0 items-center gap-1 px-3 rounded-lg text-sm font-medium text-[#37352f] bg-[#f4f4f2] hover:bg-[#eaeaea] transition-all"
+              >
+                <Edit3 size={14} /> 편집
+              </button>
             </div>
           );
         })}
       </div>
 
       {/* Bottom Action Bar */}
-      <div className="pt-5 border-t border-[#f0f0ee] flex items-center justify-end gap-2.5">
+      <div className="pt-4 sm:pt-5 border-t border-[#f0f0ee] grid grid-cols-2 sm:flex sm:items-center sm:justify-end gap-2.5">
         <button
           onClick={resetAgents}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-[#5f5f5f] bg-[#f4f4f2] hover:bg-[#eaeaea] hover:text-[#37352f] transition-all"
+          className="inline-flex items-center justify-center gap-2 px-2 sm:px-4 py-2.5 rounded-xl text-sm font-medium text-[#5f5f5f] bg-[#f4f4f2] hover:bg-[#eaeaea] hover:text-[#37352f] transition-all whitespace-nowrap"
         >
           <RotateCcw size={15} /> 기본값으로 복원
         </button>
         <button
           onClick={addCustomAgent}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.98] transition-all shadow-xs"
+          className="inline-flex items-center justify-center gap-2 px-2 sm:px-5 py-2.5 rounded-xl text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 active:scale-[0.98] transition-all shadow-xs whitespace-nowrap"
         >
-          <Plus size={16} /> 새 페르소나 추가
+          <Plus size={16} /> 새 페르소나
         </button>
       </div>
 
@@ -707,7 +714,7 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                                 provider,
                                 modelName: getDefaultModelForProvider(provider),
                                 apiKey: '',
-                                baseUrl: provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : undefined,
+                                 baseUrl: provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : provider === 'ollama' ? DEFAULT_OLLAMA_BASE_URL : getProviderDefaultBaseUrl(provider),
                               });
                             }}
                             className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm outline-none bg-white focus:border-[#d4d4d4]"
@@ -750,13 +757,13 @@ const PersonaSettingsView: React.FC<PersonaSettingsViewProps> = ({
                         </label>
                       </div>
 
-                      {(apiConnectionDraft.provider === 'ollama' || apiConnectionDraft.provider === 'custom') && (
-                        <label className="block">
-                          <span className="text-xs font-medium text-[#787774] ml-1 uppercase">{apiConnectionDraft.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</span>
-                          <input
-                            value={apiConnectionDraft.baseUrl || (apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
-                            onChange={(e) => updateApiDraft({ baseUrl: e.target.value })}
-                            placeholder={apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
+                       {(apiConnectionDraft.provider === 'ollama' || apiConnectionDraft.provider === 'custom') && (
+                         <label className="block">
+                           <span className="text-xs font-medium text-[#787774] ml-1 uppercase">{apiConnectionDraft.provider === 'ollama' ? 'Ollama 서버 주소' : '로컬 서버 주소'}</span>
+                           <input
+                             value={apiConnectionDraft.baseUrl || (apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL)}
+                             onChange={(e) => updateApiDraft({ baseUrl: e.target.value })}
+                             placeholder={apiConnectionDraft.provider === 'custom' ? DEFAULT_LOCAL_SERVER_BASE_URL : DEFAULT_OLLAMA_BASE_URL}
                             className="mt-1 w-full px-3 py-2 rounded-lg border border-[#dcdcd9] text-sm font-mono outline-none bg-white focus:border-[#d4d4d4]"
                           />
                         </label>

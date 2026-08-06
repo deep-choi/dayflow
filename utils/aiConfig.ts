@@ -4,7 +4,15 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_XAI_MODEL = 'grok-4.3';
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-0';
+export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
+export const DEFAULT_QWEN_MODEL = 'qwen3.7-max';
+export const DEFAULT_KIMI_MODEL = 'kimi-k3';
+export const DEFAULT_GLM_MODEL = 'glm-5.2';
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
+export const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+export const DEFAULT_QWEN_BASE_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+export const DEFAULT_KIMI_BASE_URL = 'https://api.moonshot.ai/v1';
+export const DEFAULT_GLM_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4';
 
 export interface ModelOption {
     id: string;
@@ -52,6 +60,68 @@ export const ANTHROPIC_MODEL_OPTIONS: ModelOption[] = [
     { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', description: '3.5 세대 하이쿠' },
 ];
 
+export const DEEPSEEK_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', description: '최신 고속 범용 모델 (추천)' },
+    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: '최신 고성능 추론 모델' },
+];
+
+export const QWEN_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'qwen3.7-max', label: 'Qwen3.7 Max', description: '최신 플래그십·복합 추론 (추천)' },
+    { id: 'qwen3.7-plus', label: 'Qwen3.7 Plus', description: '범용 고성능' },
+    { id: 'qwen3.6-plus', label: 'Qwen3.6 Plus', description: '안정적인 범용 모델' },
+    { id: 'qwen3.6-flash', label: 'Qwen3.6 Flash', description: '빠른 응답·저비용' },
+    { id: 'qwen3.5-plus', label: 'Qwen3.5 Plus', description: '검증된 범용 모델' },
+    { id: 'qwen3.5-flash', label: 'Qwen3.5 Flash', description: '경량 고속 모델' },
+    { id: 'qwen3-max', label: 'Qwen3 Max', description: 'Qwen3 추론 모델' },
+];
+
+export const KIMI_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'kimi-k3', label: 'Kimi K3', description: '최신 1M 컨텍스트 플래그십 (추천)' },
+    { id: 'kimi-k2.7-code', label: 'Kimi K2.7 Code', description: '코딩 특화 256K 컨텍스트' },
+    { id: 'kimi-k2.7-code-highspeed', label: 'Kimi K2.7 Code Highspeed', description: '고속 코딩 응답' },
+    { id: 'kimi-k2.6', label: 'Kimi K2.6', description: '텍스트·이미지·추론 범용 모델' },
+];
+
+export const GLM_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'glm-5.2', label: 'GLM-5.2', description: '최신 1M 컨텍스트 플래그십 (추천)' },
+    { id: 'glm-5.1', label: 'GLM-5.1', description: '장기 작업·코딩 강화' },
+    { id: 'glm-5', label: 'GLM-5', description: 'Agent·복합 시스템 작업' },
+    { id: 'glm-5-turbo', label: 'GLM-5 Turbo', description: '장기 작업 최적화' },
+    { id: 'glm-4.7', label: 'GLM-4.7', description: '범용 대화·추론·에이전트' },
+    { id: 'glm-4.7-flashx', label: 'GLM-4.7 FlashX', description: '경량 고속 응답' },
+    { id: 'glm-4.7-flash', label: 'GLM-4.7 Flash', description: '무료 경량 모델' },
+];
+
+export const CHAT_PROVIDERS: ApiConnection['provider'][] = [
+    'gemini', 'openai', 'anthropic', 'xai', 'deepseek', 'qwen', 'kimi', 'glm', 'ollama', 'custom',
+];
+
+export const getProviderDisplayName = (provider: ApiConnection['provider']): string => {
+    if (provider === 'xai') return 'xAI';
+    if (provider === 'deepseek') return 'DeepSeek';
+    if (provider === 'qwen') return 'Qwen';
+    if (provider === 'kimi') return 'Kimi';
+    if (provider === 'glm') return 'GLM';
+    if (provider === 'ollama') return 'Ollama';
+    if (provider === 'custom') return '로컬 서버';
+    if (provider === 'anthropic') return 'Anthropic';
+    if (provider === 'openai') return 'OpenAI';
+    return 'Gemini';
+};
+
+export const getProviderDefaultBaseUrl = (provider: ApiConnection['provider']): string | undefined => {
+    if (provider === 'deepseek') return DEFAULT_DEEPSEEK_BASE_URL;
+    if (provider === 'qwen') return DEFAULT_QWEN_BASE_URL;
+    if (provider === 'kimi') return DEFAULT_KIMI_BASE_URL;
+    if (provider === 'glm') return DEFAULT_GLM_BASE_URL;
+    if (provider === 'ollama') return DEFAULT_OLLAMA_BASE_URL;
+    if (provider === 'custom') return undefined;
+    return undefined;
+};
+
+export const isHostedOpenAICompatibleProvider = (provider: ApiConnection['provider']): boolean =>
+    provider === 'deepseek' || provider === 'qwen' || provider === 'kimi' || provider === 'glm';
+
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
     'gemini-3.5': 'gemini-3.5-flash',
     'gemini-3.0-pro': 'gemini-3-pro-preview',
@@ -82,6 +152,10 @@ export const getDefaultModelForProvider = (provider: ApiConnection['provider']):
     if (provider === 'xai') return DEFAULT_XAI_MODEL;
     if (provider === 'openai') return DEFAULT_OPENAI_MODEL;
     if (provider === 'anthropic') return DEFAULT_ANTHROPIC_MODEL;
+    if (provider === 'deepseek') return DEFAULT_DEEPSEEK_MODEL;
+    if (provider === 'qwen') return DEFAULT_QWEN_MODEL;
+    if (provider === 'kimi') return DEFAULT_KIMI_MODEL;
+    if (provider === 'glm') return DEFAULT_GLM_MODEL;
     return '';
 };
 
@@ -90,6 +164,10 @@ export const getModelOptionsForProvider = (provider: ApiConnection['provider']):
     if (provider === 'xai') return XAI_MODEL_OPTIONS;
     if (provider === 'openai') return OPENAI_MODEL_OPTIONS;
     if (provider === 'anthropic') return ANTHROPIC_MODEL_OPTIONS;
+    if (provider === 'deepseek') return DEEPSEEK_MODEL_OPTIONS;
+    if (provider === 'qwen') return QWEN_MODEL_OPTIONS;
+    if (provider === 'kimi') return KIMI_MODEL_OPTIONS;
+    if (provider === 'glm') return GLM_MODEL_OPTIONS;
     return [];
 };
 
@@ -127,7 +205,7 @@ export interface ActiveAIConfig {
     baseUrl?: string;
 }
 
-const CHAT_SUPPORTED_PROVIDERS: ApiConnection['provider'][] = ['gemini', 'xai', 'openai', 'anthropic', 'ollama', 'custom'];
+const CHAT_SUPPORTED_PROVIDERS = CHAT_PROVIDERS;
 
 export const isChatSupportedProvider = (provider: ApiConnection['provider']): boolean => {
     return CHAT_SUPPORTED_PROVIDERS.includes(provider);

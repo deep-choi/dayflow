@@ -5,10 +5,8 @@ const files = [
     'App.tsx',
     'views/ApiSettingsView.tsx',
     'views/AuthView.tsx',
-    'views/BoardView.tsx',
     'views/CalendarView.tsx',
     'views/ChatView.tsx',
-    'views/CommunityBoardView.tsx',
     'views/JournalView.tsx',
     'views/LandingView.tsx',
     'views/TodoView.tsx'

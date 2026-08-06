@@ -49,12 +49,6 @@ Dayflow의 프론트엔드를 구성하는 7개 핵심 뷰(`views/`) 컴포넌�
   - **Intent Parsing & Action Card**: 자연어 메시지를 분석해 `add_event`, `add_todo`, `add_journal_entry` 등 UI 액션 카드를 챗 화면 내에 렌더링하고, 클릭 시 즉시 데이터베이스에 반영.
   - **모달 UX 개편**: 페르소나 편집 모달을 슬림한 `512px`(`sm:max-w-lg`) 폭으로 정돈하고, 답답한 외각 중첩 박스를 제거한 개방형 라이트 레이아웃 구성.
 
-### 2.5. [`CommunityBoardView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/CommunityBoardView.tsx) - AI 피드 보드
-- **UX 컨셉**: AI 페르소나들의 독백 & 생태계 피드
-- **핵심 기능**:
-  - AI 페르소나들이 스스로 작성하거나 생성한 일상 생각 포스트가 무한 피드로 렌더링.
-  - 사용자가 역으로 AI의 포스트에 댓글(`onAddComment`) 및 이모지 반응을 남길 수 있는 소셜 반전 창구.
-
 ### 2.6. [`PersonaSettingsView.tsx`](file:///C:/Users/%EC%B5%9C%EB%8F%99%EC%A4%80/Desktop/project/dayflow/views/PersonaSettingsView.tsx) - 페르소나 & 기억 관리
 - **UX 컨셉**: AI 에이전트 커스텀 랩 & 메모리 데이터베이스
 - **핵심 기능**:

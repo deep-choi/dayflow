@@ -48,7 +48,6 @@ export interface JournalEntry {
   mood: 'good' | 'neutral' | 'bad';
   category?: string;
   order?: number;
-  comments?: Comment[];
 }
 
 export interface JournalCategory {
@@ -74,31 +73,12 @@ export interface CalendarEvent {
   type: string; // CalendarTag id
 }
 
-export interface AiPost {
-  id: string;
-  title: string;
-  content: string; // Markdown supported
-  date: string; // ISO date string
-  tags: string[];
-  type: 'analysis' | 'suggestion';
-}
-
-export interface Comment {
-  id: string;
-  authorId: string; // 'USER' or AI agent id
-  authorName: string;
-  authorEmoji?: string;
-  content: string;
-  timestamp: string;
-}
-
 export interface AvatarFrame {
   zoom: number;
   x: number;
   y: number;
 }
 
-// AI Community Board Types
 export type ChatResponseLength = 'short' | 'medium' | 'long';
 
 export interface AIAgent {
@@ -113,18 +93,6 @@ export interface AIAgent {
   avatarFrame?: AvatarFrame;
   connectionId?: string; // Optional: per-persona API connection override
   responseLength?: ChatResponseLength;
-}
-
-export interface CommunityPost {
-  id: string;
-  author: string;
-  content: string;
-  timestamp: string;
-  replyTo?: string;
-  trigger?: string;
-  reactions?: { emoji: string; count: number }[];
-  order?: number;
-  comments?: Comment[];
 }
 
 export interface ActivityItem {
@@ -146,7 +114,7 @@ export interface ActivityItem {
 
 export interface ApiConnection {
   id: string;
-  provider: 'gemini' | 'openai' | 'anthropic' | 'xai' | 'ollama' | 'custom';
+  provider: 'gemini' | 'openai' | 'anthropic' | 'xai' | 'deepseek' | 'qwen' | 'kimi' | 'glm' | 'ollama' | 'custom';
   modelName: string; // e.g. "gemini-3-flash-preview", "gpt-4"
   apiKey: string;
   baseUrl?: string;
@@ -167,7 +135,6 @@ export interface RoutineProgress {
 export type ThemeMode = 'system' | 'light' | 'dark';
 
 export interface AppSettings {
-  autoAiReactions: boolean;
   chatActionConfirm: boolean;
   theme: ThemeMode;
   geminiApiKey?: string; // @deprecated use apiConnections
@@ -287,25 +254,3 @@ export interface PersonaMemory {
 }
 
 export type ViewState = 'dashboard' | 'calendar' | 'todo' | 'journal' | 'board' | 'chat' | 'settings' | 'api-settings' | 'personas';
-
-export interface TriggerContext {
-  trigger: 'todo_completed' | 'todo_added' | 'event_added' | 'journal_added' | 'scheduled_digest';
-  data: {
-    text?: string;
-    title?: string;
-    date?: string;
-    mood?: string;
-    slot?: string;
-    completed?: number;
-    pending?: number;
-    total?: number;
-    completionRate?: number;
-    nextTodo?: string;
-    weekCount?: number;
-    pendingTodos?: number;
-    completedTodos?: number;
-    totalEvents?: number;
-    recentJournal?: { title: string; content: string; mood: string; date: string }[];
-    recentChats?: { text: string; timestamp: string }[];
-  };
-}
