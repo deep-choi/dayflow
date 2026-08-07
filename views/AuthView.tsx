@@ -193,8 +193,8 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
                         </button>
                     )}
                     {isModal && (
-                        <div className="mb-8 pr-10 text-center sm:text-left">
-                            <h1 className="text-[26px] leading-9 font-medium tracking-[-0.02em] text-[#171717]">로그인 또는 회원가입</h1>
+                        <div className="mb-8 text-left">
+                            <h1 className="pr-10 text-[26px] leading-9 font-medium tracking-[-0.02em] text-[#171717]">로그인 또는 회원가입</h1>
                             <p className="mt-3 text-[16px] leading-6 text-[#5f5f5f]">기록을 저장하고 어디서든 이어서 사용하세요.</p>
                         </div>
                     )}

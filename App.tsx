@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ViewState, CalendarEvent, Todo, JournalEntry, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
-import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, CircleHelp } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { supabase } from './utils/supabase';
 import { useRegisterSW } from 'virtual:pwa-register/react';
@@ -15,7 +15,6 @@ import { getAvatarImageStyle, sanitizeAvatarFrame } from './utils/avatarFrame';
 import { getDarkAdaptiveColor } from './utils/colorPalette';
 
 import { UserMenuPopover } from './components/UserMenuPopover';
-import { HelpModal } from './components/HelpModal';
 import type { SettingsTab } from './views/SettingsView';
 
 const CalendarView = React.lazy(() => import('./views/CalendarView'));
@@ -24,6 +23,7 @@ const JournalView = React.lazy(() => import('./views/JournalView'));
 const SettingsView = React.lazy(() => import('./views/SettingsView'));
 const ChatView = React.lazy(() => import('./views/ChatView'));
 const AuthView = React.lazy(() => import('./views/AuthView'));
+const SupportView = React.lazy(() => import('./views/SupportView'));
 
 type ChatObservation = {
   text: string;
@@ -1037,7 +1037,7 @@ const recoverFromStorageQuota = (userId: string, key: CacheKey): void => {
   });
 };
 
-const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat'];
+const VALID_VIEWS: ViewState[] = ['calendar', 'todo', 'journal', 'chat', 'support'];
 
 const normalizeView = (rawView: string | null): ViewState => {
   if (!rawView) return 'chat';
@@ -1137,7 +1137,6 @@ const App: React.FC = () => {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('account');
   const [isHideSettingsTabs, setIsHideSettingsTabs] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const sidebarProfileButtonRef = useRef<HTMLButtonElement>(null);
   const mobileAccountMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -4010,6 +4009,14 @@ const App: React.FC = () => {
     return <div className="min-h-screen bg-white" />;
   }
 
+  if (currentView === 'support') {
+    return (
+      <React.Suspense fallback={<ViewLoadingFallback />}>
+        <SupportView onBackToApp={() => setCurrentView('chat')} />
+      </React.Suspense>
+    );
+  }
+
 
 
   return (
@@ -4250,8 +4257,18 @@ const App: React.FC = () => {
 
         </div>
 
-        {/* Bottom Section: User Profile */}
+        {/* Bottom Section: Customer support and user profile */}
         <div className={`relative shrink-0 ${isSidebarCollapsed ? 'p-3' : 'p-4'}`}>
+          <button
+            type="button"
+            onClick={() => setCurrentView('support')}
+            className={`${isSidebarCollapsed ? 'mx-auto mb-3 flex h-11 w-11 items-center justify-center p-0' : 'mb-3 flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5'} text-[#5f5f5f] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]`}
+            aria-label="고객지원"
+            title={isSidebarCollapsed ? '고객지원' : undefined}
+          >
+            <CircleHelp size={18} className="shrink-0 text-[#8a8a8a]" />
+            {!isSidebarCollapsed && <span className="text-[14px] leading-5 font-medium">고객지원</span>}
+          </button>
           {currentUser ? (
             <>
               <button
@@ -4472,6 +4489,20 @@ const App: React.FC = () => {
               </nav>
 
               <div className="border-t border-[#e9e9e8] pt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCurrentView('support');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-[14px] leading-5 text-[#5f5f5f] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
+                >
+                  <CircleHelp size={18} className="text-[#8a8a8a]" />
+                  <span className="text-[15px] leading-5 font-normal">고객지원</span>
+                </button>
+              </div>
+
+              <div className="border-t border-[#e9e9e8] pt-3">
                 <div className="flex items-center justify-between px-1 mb-2">
                   <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">채팅 내역</span>
                 </div>
@@ -4604,7 +4635,6 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-      <HelpModal isOpen={isHelpModalOpen} onClose={() => setIsHelpModalOpen(false)} />
     </div>
   );
 };
