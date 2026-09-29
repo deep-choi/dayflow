@@ -588,6 +588,8 @@ const stripTodoOptionalColumns = <T extends Record<string, any>>(value: T, colum
   return next;
 };
 
+// Upsert rather than insert: the debounced background sync (syncTodos) may already have
+// written this row while we were awaiting, and a plain insert would then hit todos_pkey.
 const retryTodoInsertWithFallback = async (
   row: Record<string, any>,
 ): Promise<{ error: any; payload: Record<string, any> }> => {
@@ -595,7 +597,7 @@ const retryTodoInsertWithFallback = async (
   let attempt = 0;
 
   while (attempt < TODO_OPTIONAL_DB_COLUMNS.length) {
-    const result = await supabase.from('todos').insert([payload]);
+    const result = await supabase.from('todos').upsert([payload], { onConflict: 'id' });
     const unsupportedColumns = getUnsupportedTodoColumns(result.error);
     if (!result.error || unsupportedColumns.length === 0) {
       return { error: result.error, payload };
@@ -604,7 +606,7 @@ const retryTodoInsertWithFallback = async (
     attempt += 1;
   }
 
-  const finalResult = await supabase.from('todos').insert([payload]);
+  const finalResult = await supabase.from('todos').upsert([payload], { onConflict: 'id' });
   return { error: finalResult.error, payload };
 };
 
@@ -2514,13 +2516,14 @@ const App: React.FC = () => {
         alert(`단계를 저장하지 못했습니다: ${getSupabaseErrorMessage(listError, '목록 저장 오류')}`);
         return;
       }
-      const { error } = await supabase.from('todo_steps').insert([{
+      // Upsert: the background step sync may have saved this row while the list was being persisted.
+      const { error } = await supabase.from('todo_steps').upsert([{
         id: newStep.id,
         user_id: currentUser.id,
         list_id: newStep.listId,
         title: newStep.title,
         "order": newStep.order
-      }]);
+      }], { onConflict: 'id' });
       if (error) {
         setTodoSteps(prev => prev.filter(step => step.id !== newStep.id));
         alert(`단계를 저장하지 못했습니다: ${error.message || '알 수 없는 오류'}`);
