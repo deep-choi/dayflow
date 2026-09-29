@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Todo, TodoList, TodoTab, TodoStep } from '../types';
 import { Check, ChevronRight, MoreVertical, CalendarIcon, Trash2, Plus, GripVertical, AlertCircle, X, Maximize2, CheckSquare, Layout, Edit3 } from '../components/Icons';
@@ -55,6 +55,10 @@ interface TodoViewProps {
 
 
 
+const UNASSIGNED_TAB_FILTER = '__unassigned';
+const UNASSIGNED_TAB_LABEL = '미분류';
+const ADD_LIST_TILE = 'add-list-tile' as const;
+
 // Checkbox Component
 const Checkbox = ({ checked, onClick }: { checked: boolean; onClick: (e: React.MouseEvent) => void }) => (
   <button
@@ -83,13 +87,13 @@ const formatShortDate = (dateStr?: string) => {
 };
 
 // --- List Settings Modal (Date & Tab) ---
-const ListSettingsModal = ({ listId, lists, tabs, onClose, onUpdateList, onAddList }: any) => {
+const ListSettingsModal = ({ listId, lists, tabs, defaultTabId, onClose, onUpdateList, onAddList }: any) => {
   const isEditing = !!listId;
   const list = isEditing ? lists.find((l: TodoList) => l.id === listId) : null;
 
   const [title, setTitle] = useState(list?.title || '');
   const [dueDate, setDueDate] = useState(list?.dueDate || '');
-  const [tabId, setTabId] = useState<string>(list?.tabId || tabs[0]?.id || '');
+  const [tabId, setTabId] = useState<string>(list?.tabId || defaultTabId || tabs[0]?.id || '');
 
   const handleSave = () => {
     if (isEditing) {
@@ -1077,7 +1081,7 @@ const TodoView: React.FC<TodoViewProps> = ({
   const hasSidebarSlot = Boolean(sidebarSlot);
   const [filterMode, setFilterMode] = useState<string>('all');
   const [listSettingsModal, setListSettingsModal] = useState<string | null>(null);
-  const [newListModal, setNewListModal] = useState(false);
+  const [newListTabId, setNewListTabId] = useState<string | null>(null);
   const [tabSettingsModal, setTabSettingsModal] = useState<string | null>(null);
   const [newTabModal, setNewTabModal] = useState(false);
 
@@ -1092,11 +1096,33 @@ const TodoView: React.FC<TodoViewProps> = ({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  const sortedTabs = [...tabs].sort((a, b) => a.order - b.order);
+  const tabIdSet = new Set(tabs.map(tab => tab.id));
+  const isUnassignedList = (list: TodoList) => !list.tabId || !tabIdSet.has(list.tabId);
+  const unassignedListCount = lists.filter(isUnassignedList).length;
+  const matchesFilter = (list: TodoList) => {
+    if (filterMode === 'all') return true;
+    if (filterMode === UNASSIGNED_TAB_FILTER) return isUnassignedList(list);
+    return list.tabId === filterMode;
+  };
+  const openNewListModal = (tabId?: string) => {
+    const fallbackTabId = tabIdSet.has(filterMode) ? filterMode : sortedTabs[0]?.id;
+    setNewListTabId(tabId || fallbackTabId || '');
+  };
+
+  useEffect(() => {
+    // Fall back to "all" when the selected tab disappears (deleted, or no unassigned lists left).
+    if (filterMode === 'all') return;
+    if (filterMode === UNASSIGNED_TAB_FILTER ? unassignedListCount === 0 : !tabIdSet.has(filterMode)) {
+      setFilterMode('all');
+    }
+  }, [filterMode, unassignedListCount, tabs]);
+
   const filteredTodos = todos.filter(t => {
     if (filterMode === 'all') return true;
     const list = lists.find(l => l.id === t.listId);
     if (!list) return false;
-    return list.tabId === filterMode;
+    return matchesFilter(list);
   });
 
   const [editingListId, setEditingListId] = useState<string | null>(null);
@@ -1116,7 +1142,7 @@ const TodoView: React.FC<TodoViewProps> = ({
   const [activeType, setActiveType] = useState<'List' | 'Todo' | null>(null);
 
   const sortedLists = [...lists]
-    .filter(l => filterMode === 'all' || l.tabId === filterMode)
+    .filter(matchesFilter)
     .sort((a, b) => a.order - b.order);
 
   // Infinite Canvas State
@@ -1151,16 +1177,36 @@ const TodoView: React.FC<TodoViewProps> = ({
     return () => observer.disconnect();
   }, [isMobile]);
 
-  const masonryColumns = useMemo(() => {
-    const columnCount = Math.max(1, Math.min(masonryColumnCount, Math.max(sortedLists.length, 1)));
-    const columns: TodoList[][] = Array.from({ length: columnCount }, () => []);
+  // Group cards under the tab they belong to; lists whose tab no longer exists go to "미분류".
+  const boardSections = [
+    ...sortedTabs.map(tab => ({
+      id: tab.id,
+      tab: tab as TodoTab | null,
+      title: tab.name,
+      lists: sortedLists.filter(list => list.tabId === tab.id),
+    })),
+    {
+      id: UNASSIGNED_TAB_FILTER,
+      tab: null as TodoTab | null,
+      title: UNASSIGNED_TAB_LABEL,
+      lists: sortedLists.filter(isUnassignedList),
+    },
+  ].filter(section => (
+    filterMode === 'all'
+      ? section.tab !== null || section.lists.length > 0
+      : section.id === filterMode
+  ));
 
-    sortedLists.forEach((list, index) => {
-      columns[index % columnCount].push(list);
+  // Distribute cards (plus the trailing "add list" tile) across masonry columns.
+  const toMasonryColumns = (sectionLists: TodoList[], includeAddTile: boolean) => {
+    const items: (TodoList | typeof ADD_LIST_TILE)[] = includeAddTile ? [...sectionLists, ADD_LIST_TILE] : sectionLists;
+    const columnCount = Math.max(1, Math.min(masonryColumnCount, items.length));
+    const columns: (TodoList | typeof ADD_LIST_TILE)[][] = Array.from({ length: columnCount }, () => []);
+    items.forEach((item, index) => {
+      columns[index % columnCount].push(item);
     });
-
     return columns;
-  }, [masonryColumnCount, sortedLists]);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -1361,13 +1407,51 @@ const TodoView: React.FC<TodoViewProps> = ({
     }),
   };
 
-  const sortedTabs = [...tabs].sort((a, b) => a.order - b.order);
+  const renderFilterRow = (
+    key: string,
+    label: string,
+    count: number,
+    options: { tab?: TodoTab; muted?: boolean } = {}
+  ) => {
+    const isActive = filterMode === key;
+    const { tab, muted } = options;
+
+    return (
+      <div key={key} className="group relative">
+        <button
+          type="button"
+          onClick={() => setFilterMode(key)}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${isActive ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
+          style={tab ? {
+            '--todo-tab-color': tab.color,
+            '--todo-tab-dark-color': getDarkAdaptiveColor(tab.color),
+          } as React.CSSProperties : undefined}
+        >
+          {tab && <span className="todo-tab-dot h-2 w-2 shrink-0 rounded-full" />}
+          {muted && <span className="h-2 w-2 shrink-0 rounded-full border border-[#b5b5b5]" />}
+          <span className="flex-1 truncate text-left">{label}</span>
+          <span className={`text-[13px] leading-5 ${tab ? 'transition-opacity group-hover:opacity-0' : ''} ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{count}</span>
+        </button>
+        {tab && (
+          <button
+            type="button"
+            onClick={() => setTabSettingsModal(tab.id)}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
+            aria-label={`${tab.name} 탭 편집`}
+            title="탭 편집"
+          >
+            <Edit3 size={13} />
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const sidebarContent = (
     <>
       <button
         type="button"
-        onClick={() => setNewListModal(true)}
+        onClick={() => openNewListModal()}
         className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
       >
         <Plus size={18} className="shrink-0" />
@@ -1387,48 +1471,46 @@ const TodoView: React.FC<TodoViewProps> = ({
         </button>
       </div>
       <div className="space-y-0.5">
-        <button
-          type="button"
-          onClick={() => setFilterMode('all')}
-          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${filterMode === 'all' ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
-        >
-          <span className="flex-1 truncate text-left">모두 보기</span>
-          <span className={`text-[13px] leading-5 ${filterMode === 'all' ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{lists.length}</span>
-        </button>
-
-        {sortedTabs.map(tab => {
-          const isActive = filterMode === tab.id;
-          const listCount = lists.filter(list => list.tabId === tab.id).length;
-
-          return (
-            <div key={tab.id} className="group relative">
-              <button
-                type="button"
-                onClick={() => setFilterMode(tab.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${isActive ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
-                style={{
-                  '--todo-tab-color': tab.color,
-                  '--todo-tab-dark-color': getDarkAdaptiveColor(tab.color),
-                } as React.CSSProperties}
-              >
-                <span className="todo-tab-dot h-2 w-2 shrink-0 rounded-full" />
-                <span className="flex-1 truncate text-left">{tab.name}</span>
-                <span className={`text-[13px] leading-5 transition-opacity group-hover:opacity-0 ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{listCount}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setTabSettingsModal(tab.id)}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
-                aria-label={`${tab.name} 탭 편집`}
-                title="탭 편집"
-              >
-                <Edit3 size={13} />
-              </button>
-            </div>
-          );
-        })}
+        {renderFilterRow('all', '모두 보기', lists.length)}
+        {sortedTabs.map(tab => renderFilterRow(tab.id, tab.name, lists.filter(list => list.tabId === tab.id).length, { tab }))}
+        {unassignedListCount > 0 && renderFilterRow(UNASSIGNED_TAB_FILTER, UNASSIGNED_TAB_LABEL, unassignedListCount, { muted: true })}
       </div>
     </>
+  );
+
+  const renderListCard = (list: TodoList) => (
+    <SortableList
+      key={list.id}
+      list={list}
+      lists={lists}
+      todos={filteredTodos}
+      editingListId={editingListId}
+      editingListTitle={editingListTitle}
+      setEditingListTitle={setEditingListTitle}
+      saveListTitle={saveListTitle}
+      setEditingListId={setEditingListId}
+      startEditingList={startEditingList}
+      handleMoveTodo={handleMoveTodo}
+      onAddTodo={onAddTodo}
+      onUpdateTodo={onUpdateTodo}
+      onToggleTodo={onToggleTodo}
+      onDeleteTodo={onDeleteTodo}
+      editingTodoId={editingTodoId}
+      editingTodoText={editingTodoText}
+      setEditingTodoText={setEditingTodoText}
+      setEditingTodoId={setEditingTodoId}
+      startEditingTodo={startEditingTodo}
+      saveTodoText={saveTodoText}
+      setContextMenu={setContextMenu}
+      setListMenu={setListMenu}
+      getDueLabel={getDueLabel}
+      tabs={tabs}
+      steps={steps}
+      onAddStep={onAddStep}
+      onUpdateStep={onUpdateStep}
+      onDeleteStep={onDeleteStep}
+      isMobile={isMobile}
+    />
   );
 
   return (
@@ -1489,6 +1571,18 @@ const TodoView: React.FC<TodoViewProps> = ({
               </div>
             ))}
 
+            {unassignedListCount > 0 && (
+              <button
+                onClick={() => setFilterMode(UNASSIGNED_TAB_FILTER)}
+                className={`inline-flex h-10 flex-shrink-0 items-center justify-center rounded-lg border px-4 text-sm font-medium whitespace-nowrap transition-colors ${filterMode === UNASSIGNED_TAB_FILTER
+                  ? 'bg-[var(--color-primary)] text-white border-transparent'
+                  : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
+                  }`}
+              >
+                {UNASSIGNED_TAB_LABEL}
+              </button>
+            )}
+
             <button
               onClick={() => setNewTabModal(true)}
               className="h-10 w-10 rounded-lg bg-[#f7f7f7] flex items-center justify-center text-[#8a8a8a] hover:bg-[#eeeeee] hover:text-[#171717] transition-colors flex-shrink-0"
@@ -1504,54 +1598,46 @@ const TodoView: React.FC<TodoViewProps> = ({
             items={sortedLists.map(l => l.id)}
             strategy={rectSortingStrategy}
           >
-            <div ref={boardRef} className="flex flex-col items-start gap-4 sm:flex-row sm:gap-6">
-              {masonryColumns.map((column, columnIndex) => (
-                <div key={columnIndex} className="flex w-full flex-col gap-4 sm:w-[300px] sm:shrink-0 sm:gap-6">
-                  {column.map((list) => (
-                    <SortableList
-                      key={list.id}
-                      list={list}
-                      lists={lists}
-                      todos={filteredTodos}
-                      editingListId={editingListId}
-                      editingListTitle={editingListTitle}
-                      setEditingListTitle={setEditingListTitle}
-                      saveListTitle={saveListTitle}
-                      setEditingListId={setEditingListId}
-                      startEditingList={startEditingList}
-                      handleMoveTodo={handleMoveTodo}
-                      onAddTodo={onAddTodo}
-                      onUpdateTodo={onUpdateTodo}
-                      onToggleTodo={onToggleTodo}
-                      onDeleteTodo={onDeleteTodo}
-                      editingTodoId={editingTodoId}
-                      editingTodoText={editingTodoText}
-                      setEditingTodoText={setEditingTodoText}
-                      setEditingTodoId={setEditingTodoId}
-                      startEditingTodo={startEditingTodo}
-                      saveTodoText={saveTodoText}
-                      setContextMenu={setContextMenu}
-                      setListMenu={setListMenu}
-                      getDueLabel={getDueLabel}
-                      tabs={tabs}
-                      steps={steps}
-                      onAddStep={onAddStep}
-                      onUpdateStep={onUpdateStep}
-                      onDeleteStep={onDeleteStep}
-                      isMobile={isMobile}
-                    />
-                  ))}
-                </div>
-              ))}
+            <div ref={boardRef} className="flex flex-col gap-10">
+              {boardSections.map(section => (
+                <section key={section.id}>
+                  <div className="mb-4 flex items-center gap-2">
+                    {section.tab ? (
+                      <span
+                        className="todo-tab-dot h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{
+                          '--todo-tab-color': section.tab.color,
+                          '--todo-tab-dark-color': getDarkAdaptiveColor(section.tab.color),
+                        } as React.CSSProperties}
+                      />
+                    ) : (
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full border border-[#b5b5b5]" />
+                    )}
+                    <h2 className="text-[16px] leading-6 font-medium text-[#37352f]">{section.title}</h2>
+                    <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">{section.lists.length}</span>
+                  </div>
 
-              <div className="flex h-[50px] min-w-[50px] items-center justify-center opacity-50 transition-opacity hover:opacity-100">
-                <button
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-[#e9e9e8] bg-white text-[var(--color-primary)] transition-colors hover:bg-[#f7f7f7]"
-                  onClick={() => setNewListModal(true)}
-                >
-                  <Plus />
-                </button>
-              </div>
+                  <div className="flex flex-col items-start gap-4 sm:flex-row sm:gap-6">
+                    {toMasonryColumns(section.lists, Boolean(section.tab)).map((column, columnIndex) => (
+                      <div key={columnIndex} className="flex w-full flex-col gap-4 sm:w-[300px] sm:shrink-0 sm:gap-6">
+                        {column.map(item => (
+                          item === ADD_LIST_TILE ? (
+                            <button
+                              key={ADD_LIST_TILE}
+                              type="button"
+                              onClick={() => openNewListModal(section.id)}
+                              className="flex h-12 w-full items-center gap-2.5 rounded-xl bg-[#f7f7f7] px-4 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
+                            >
+                              <Plus size={18} className="shrink-0" />
+                              <span className="truncate">{section.title}에 목록 추가</span>
+                            </button>
+                          ) : renderListCard(item)
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
           </SortableContext>
         </div>
@@ -1662,11 +1748,12 @@ const TodoView: React.FC<TodoViewProps> = ({
             onUpdateList={onUpdateList}
           />
         )}
-        {newListModal && (
+        {newListTabId !== null && (
           <ListSettingsModal
+            defaultTabId={newListTabId}
             lists={lists}
             tabs={tabs}
-            onClose={() => setNewListModal(false)}
+            onClose={() => setNewListTabId(null)}
             onAddList={onAddList}
           />
         )}

@@ -9,6 +9,8 @@ import {
   Search,
   MoreVertical,
   ChevronLeft,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import { format, parseISO, isValid } from 'date-fns';
 import { ko } from 'date-fns/locale';
@@ -85,6 +87,7 @@ const JournalView: React.FC<JournalViewProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showActions, setShowActions] = useState(false);
   const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState(false);
   const [showMobileDetail, setShowMobileDetail] = useState(false);
   const [categoryInput, setCategoryInput] = useState('');
   const [newTitle, setNewTitle] = useState('');
@@ -92,6 +95,7 @@ const JournalView: React.FC<JournalViewProps> = ({
   const [newCategory, setNewCategory] = useState(categories[0]?.name || DEFAULT_CATEGORY_NAME);
 
   const actionMenuRef = useRef<HTMLDivElement>(null);
+  const categoryMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const categoryInputRef = useRef<HTMLInputElement>(null);
 
@@ -148,6 +152,11 @@ const JournalView: React.FC<JournalViewProps> = ({
       if (actionMenuRef.current && !actionMenuRef.current.contains(event.target as Node)) {
         setShowActions(false);
       }
+      if (categoryMenuRef.current && !categoryMenuRef.current.contains(event.target as Node)) {
+        setIsCategoryMenuOpen(false);
+        setIsAddingCategory(false);
+        setCategoryInput('');
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -170,6 +179,7 @@ const JournalView: React.FC<JournalViewProps> = ({
     setEditingId(null);
     setCategoryInput('');
     setIsAddingCategory(false);
+    setIsCategoryMenuOpen(false);
   };
 
   const startWriting = () => {
@@ -190,7 +200,7 @@ const JournalView: React.FC<JournalViewProps> = ({
   const handleCreate = () => {
     const title = newTitle.trim();
     const content = newContent.trim();
-    if (!title || !content) return;
+    if (!title && !content) return;
 
     if (editingId) {
       onUpdateEntry(editingId, { title, content, category: newCategory });
@@ -234,6 +244,17 @@ const JournalView: React.FC<JournalViewProps> = ({
     setNewCategory(name);
     setCategoryInput('');
     setIsAddingCategory(false);
+    setIsCategoryMenuOpen(false);
+  };
+
+  const canSaveDraft = Boolean(newTitle.trim() || newContent.trim());
+  const editingEntry = editingId ? entries.find(entry => entry.id === editingId) : undefined;
+
+  const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((event.metaKey || event.ctrlKey) && (event.key === 'Enter' || event.key === 's')) {
+      event.preventDefault();
+      if (canSaveDraft) handleCreate();
+    }
   };
 
   const sidebarContent = (
@@ -403,106 +424,144 @@ const JournalView: React.FC<JournalViewProps> = ({
 
         <main className={`${!isWriting && !showMobileDetail ? 'hidden lg:block' : 'block'} min-h-0 flex-1 overflow-y-auto bg-white custom-scrollbar`}>
           {isWriting ? (
-            <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col px-4 py-5 sm:px-8 sm:py-10">
-              <div className="mb-5 flex items-center justify-between lg:hidden">
-                <button
-                  type="button"
-                  onClick={cancelWriting}
-                  className="inline-flex h-9 items-center gap-1 rounded-lg pr-3 text-sm font-medium text-[#5f5f5f]"
-                >
-                  <ChevronLeft size={18} />
-                  목록
-                </button>
-              </div>
-
-              <div className="mb-8 flex flex-col gap-5 border-b border-[#e9e9e8] pb-6 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className="text-[13px] leading-5 font-medium text-[#8a8a8a]">카테고리</span>
-                    <select
-                      value={newCategory}
-                      onChange={event => setNewCategory(event.target.value)}
-                      className="h-11 min-w-[140px] cursor-pointer rounded-xl border border-[#e9e9e8] bg-white px-4 text-sm font-normal text-[#171717] outline-none transition-colors hover:bg-[#f7f7f7] focus:border-[var(--color-primary)]"
-                    >
-                      {categorySelectOptions.map(category => (
-                        <option key={category.id} value={category.name}>
-                          {category.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingCategory(value => !value)}
-                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium text-[#787774] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
-                    >
-                      <Plus size={15} />
-                      카테고리
-                    </button>
-                  </div>
-
-                  {isAddingCategory && (
-                    <div className="mt-3 flex max-w-[430px] items-center gap-2">
-                      <input
-                        ref={categoryInputRef}
-                        type="text"
-                        value={categoryInput}
-                        onChange={event => setCategoryInput(event.target.value)}
-                        onKeyDown={event => {
-                          if (event.key === 'Enter') void submitCategory();
-                          if (event.key === 'Escape') {
-                            setCategoryInput('');
-                            setIsAddingCategory(false);
-                          }
-                        }}
-                        placeholder="새 카테고리"
-                        className="h-11 min-w-0 flex-1 rounded-xl border border-[#e9e9e8] bg-white px-4 text-sm font-normal text-[#171717] outline-none transition-colors placeholder:text-[#b5b5b5] focus:border-[var(--color-primary)]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void submitCategory()}
-                        disabled={!categoryInput.trim()}
-                        className="h-11 rounded-xl bg-[#f7f7f7] px-4 text-sm font-medium text-[#171717] transition-colors hover:bg-[#eeeeee] disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        추가
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex shrink-0 items-center gap-3">
+            <div className="flex min-h-full flex-col" onKeyDown={handleEditorKeyDown}>
+              <div className="sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[#e9e9e8] bg-white px-4 sm:px-8">
+                <div className="flex min-w-0 items-center">
                   <button
                     type="button"
                     onClick={cancelWriting}
-                    className="h-11 rounded-xl px-4 text-sm font-normal text-[#787774] transition-colors hover:bg-[#f7f7f7]"
+                    className="inline-flex h-9 items-center gap-1 rounded-lg pr-3 text-sm font-medium text-[#5f5f5f] lg:hidden"
+                  >
+                    <ChevronLeft size={18} />
+                    목록
+                  </button>
+                  <span className="hidden truncate text-[14px] leading-5 font-normal text-[#8a8a8a] lg:inline">
+                    {editingId ? '메모 수정' : '새 메모'}
+                  </span>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="mr-2 hidden text-[13px] leading-5 font-normal text-[#b5b5b5] xl:inline">Ctrl + Enter로 저장</span>
+                  <button
+                    type="button"
+                    onClick={cancelWriting}
+                    className="h-9 rounded-lg px-3 text-sm font-normal text-[#5f5f5f] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
                   >
                     취소
                   </button>
                   <button
                     type="button"
                     onClick={handleCreate}
-                    disabled={!newTitle.trim() || !newContent.trim()}
-                    className="h-11 rounded-xl bg-[#f7f7f7] px-5 text-sm font-medium text-[#171717] transition-colors hover:bg-[#eeeeee] disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={!canSaveDraft}
+                    className="h-9 rounded-lg bg-[var(--color-primary)] px-4 text-sm font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    {editingId ? '수정 완료' : '메모 저장'}
+                    {editingId ? '수정 완료' : '저장'}
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-0">
+              <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col px-4 py-6 sm:px-8 sm:py-10">
+                {/* Category picker: styled like the category chip in the detail view */}
+                <div className="relative mb-6 self-start" ref={categoryMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsCategoryMenuOpen(value => !value)}
+                    className={`inline-flex items-center gap-1 rounded px-2.5 py-1 text-[13px] leading-5 font-medium transition-colors ${isCategoryMenuOpen ? 'bg-[#eeeeee] text-[#171717]' : 'bg-[#f7f7f7] text-[#5f5f5f] hover:bg-[#eeeeee] hover:text-[#171717]'}`}
+                    aria-haspopup="listbox"
+                    aria-expanded={isCategoryMenuOpen}
+                  >
+                    {newCategory}
+                    <ChevronDown size={14} />
+                  </button>
+
+                  {isCategoryMenuOpen && (
+                    <div className="absolute left-0 top-full z-20 mt-1.5 w-56 rounded-xl border border-[#e9e9e8] bg-white py-1.5">
+                      <div className="max-h-60 overflow-y-auto px-1 custom-scrollbar" role="listbox">
+                        {categorySelectOptions.map(category => (
+                          <button
+                            key={category.id}
+                            type="button"
+                            role="option"
+                            aria-selected={newCategory === category.name}
+                            onClick={() => {
+                              setNewCategory(category.name);
+                              setIsCategoryMenuOpen(false);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-normal text-[#37352f] transition-colors hover:bg-[#f7f7f7]"
+                          >
+                            <span className="min-w-0 flex-1 truncate">{category.name}</span>
+                            {newCategory === category.name && <Check size={14} className="shrink-0 text-[var(--color-primary)]" />}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="my-1 border-t border-[#e9e9e8]" />
+
+                      <div className="px-1">
+                        {isAddingCategory ? (
+                          <div className="px-2 py-1">
+                            <input
+                              ref={categoryInputRef}
+                              type="text"
+                              value={categoryInput}
+                              onChange={event => setCategoryInput(event.target.value)}
+                              onKeyDown={event => {
+                                if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                                  event.preventDefault();
+                                  void submitCategory();
+                                }
+                                if (event.key === 'Escape') {
+                                  setCategoryInput('');
+                                  setIsAddingCategory(false);
+                                }
+                              }}
+                              placeholder="새 카테고리 이름"
+                              className="h-9 w-full rounded-lg border border-[#e9e9e8] bg-white px-3 text-sm font-normal text-[#171717] outline-none transition-colors placeholder:text-[#b5b5b5] focus:border-[var(--color-primary)]"
+                            />
+                            <p className="mt-1.5 px-1 text-[13px] leading-5 font-normal text-[#9b9a97]">Enter로 추가</p>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setIsAddingCategory(true)}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-normal text-[#5f5f5f] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
+                          >
+                            <Plus size={14} className="shrink-0" />
+                            새 카테고리
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <input
                   type="text"
-                  placeholder="제목을 입력하세요"
+                  placeholder="제목"
                   value={newTitle}
                   onChange={event => setNewTitle(event.target.value)}
-                  className="w-full border-x-0 border-t-0 border-b border-[#e9e9e8] bg-transparent px-0 pb-5 pt-2 text-[24px] leading-8 font-medium tracking-normal text-[#171717] placeholder:text-[#c8c8c8] outline-none transition-colors focus:border-[var(--color-primary)] focus:ring-0"
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.metaKey && !event.ctrlKey) {
+                      event.preventDefault();
+                      textareaRef.current?.focus();
+                    }
+                  }}
+                  className="w-full border-none bg-transparent p-0 text-[24px] leading-8 font-medium tracking-normal text-[#171717] placeholder:text-[#c8c8c8] outline-none focus:ring-0"
                   autoFocus
                 />
+
+                <div className="mt-4 mb-8 flex items-center gap-2 border-b border-[#e9e9e8] pb-5 text-[13px] leading-5 font-normal text-[#9b9a97]">
+                  <span className="font-medium text-[#37352f]">작성일</span>
+                  <span className="h-1 w-1 rounded-full bg-[#e9e9e8]" />
+                  <span>{formatDateLong(editingEntry?.date ?? new Date().toISOString())}</span>
+                </div>
+
                 <textarea
                   ref={textareaRef}
-                  placeholder="내용을 입력하세요..."
+                  placeholder="내용을 입력하세요"
                   value={newContent}
                   onChange={event => setNewContent(event.target.value)}
-                  className="min-h-[420px] w-full resize-none overflow-hidden border-none bg-transparent px-0 pb-2 pt-6 text-[15px] font-normal leading-7 text-[#37352f] placeholder:text-[#c8c8c8] outline-none focus:ring-0"
+                  className="min-h-[320px] w-full flex-1 resize-none overflow-hidden border-none bg-transparent p-0 text-base font-normal leading-7 text-[#37352f] placeholder:text-[#c8c8c8] outline-none focus:ring-0"
                 />
               </div>
             </div>

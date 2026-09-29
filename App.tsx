@@ -4119,7 +4119,7 @@ const App: React.FC = () => {
 
         {/* Context Panel */}
         {!isSidebarCollapsed && (
-          <div className="flex min-h-0 w-[208px] xl:w-[228px] flex-col">
+          <div className="flex min-h-0 w-[248px] xl:w-[272px] flex-col">
             <div className="h-[72px] shrink-0 flex items-center px-5">
               <h2 className="truncate text-[18px] leading-6 font-semibold tracking-[-0.02em] text-[#37352f]">
                 {SIDEBAR_RAIL_LABELS[currentView] ?? headerLabel}
