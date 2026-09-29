@@ -4,6 +4,8 @@ import { ChevronLeft, ChevronRight, Plus, X, Trash2, CalendarIcon, Check, Clock,
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, startOfWeek, endOfWeek, parseISO, isToday as dfIsToday } from 'date-fns';
 import { ko } from 'date-fns/locale/ko';
 import { getDarkAdaptiveColor } from '../utils/colorPalette';
+import { useBackLayer } from '../hooks/useBackLayer';
+import { COMPACT_LAYOUT_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 interface CalendarViewProps {
   events: CalendarEvent[];
@@ -13,11 +15,16 @@ interface CalendarViewProps {
   onUpdateEvent: (event: CalendarEvent, previous: CalendarEvent) => void;
 }
 
+const MOBILE_DOT_LIMIT = 3;
+
 const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, onDeleteEvent, onUpdateEvent }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const [overflowDay, setOverflowDay] = useState<{ date: Date; events: CalendarEvent[] } | null>(null);
   const lastWheelTime = useRef<number>(0);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Below lg, tapping a day selects it and lists its events underneath instead of opening the editor.
+  const isCompactLayout = useMediaQuery(COMPACT_LAYOUT_QUERY);
 
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -40,6 +47,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
   const [showStartMinPicker, setShowStartMinPicker] = useState(false);
   const [showEndHourPicker, setShowEndHourPicker] = useState(false);
   const [showEndMinPicker, setShowEndMinPicker] = useState(false);
+
+  useBackLayer(showModal, () => setShowModal(false));
+  useBackLayer(Boolean(overflowDay), () => setOverflowDay(null));
 
   const hourOptions = Array.from({ length: 12 }, (_, i) => i + 1);
   const minuteOptions = ['00', '10', '20', '30', '40', '50'];
@@ -74,6 +84,34 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
   const handlePrevMonth = () => setCurrentDate(subMonths(currentDate, 1));
   const handleNextMonth = () => setCurrentDate(addMonths(currentDate, 1));
+  const handleToday = () => {
+    const today = new Date();
+    setCurrentDate(today);
+    setSelectedDate(today);
+  };
+
+  const selectDay = (day: Date) => {
+    setSelectedDate(day);
+    if (!isSameMonth(day, currentDate)) setCurrentDate(day);
+  };
+
+  // A horizontal swipe on the month grid moves between months.
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if (dx < 0) handleNextMonth();
+    else handlePrevMonth();
+  };
 
   const handleWheel = (e: React.WheelEvent) => {
     const now = Date.now();
@@ -239,6 +277,34 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
     );
   };
 
+  const renderEventListItem = (event: CalendarEvent, day: Date, onSelect: () => void) => {
+    const tag = getTag(event.type);
+    const timeLabel = getEventTimeLabel(event, day);
+
+    return (
+      <button
+        key={event.id}
+        type="button"
+        onClick={onSelect}
+        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[#f7f7f7]"
+      >
+        <span
+          className="calendar-tag-dot h-2.5 w-2.5 shrink-0 rounded-full"
+          style={{
+            '--calendar-tag-color': tag?.color || '#37352f',
+            '--calendar-tag-dark-color': getDarkAdaptiveColor(tag?.color || '#37352f'),
+          } as React.CSSProperties}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[14px] font-medium text-[#171717]">{event.title}</span>
+          <span className="mt-0.5 block text-[12px] text-[#8a8a8a]">
+            {timeLabel || '하루 종일'}
+          </span>
+        </span>
+      </button>
+    );
+  };
+
   const renderMoreButton = (day: Date, dayEvents: CalendarEvent[], hiddenCount: number, compact = false) => (
     <button
       type="button"
@@ -256,6 +322,8 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
     </button>
   );
 
+  const selectedDayEvents = selectedDate ? getDayEvents(selectedDate) : [];
+
   try {
     return (
       <div className="flex h-full bg-white text-[#37352f] overflow-hidden font-sans">
@@ -266,20 +334,37 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
           onWheel={handleWheel}
         >
           {/* Helper Header */}
-          <div className="min-h-16 flex items-center justify-between px-4 sm:px-8 border-b border-[#e9e9e8] bg-white">
-            <div className="flex items-center gap-3">
-              <h1 className="text-lg font-medium tracking-normal tabular-nums">
+          <div className="min-h-12 lg:min-h-16 flex items-center justify-between gap-3 px-3 sm:px-8 border-b border-[#e9e9e8] bg-white">
+            <div className="flex items-center gap-1 lg:gap-3">
+              <h1 className="px-1 text-lg font-medium tracking-normal tabular-nums">
                 {format(currentDate, 'yyyy년 M월', { locale: ko })}
               </h1>
-              <div className="flex items-center gap-1">
-                <button onClick={handlePrevMonth} className="p-1 hover:bg-[#efefef] rounded transition-colors text-[#9b9a97]">
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  onClick={handlePrevMonth}
+                  className="flex h-10 w-10 lg:h-8 lg:w-8 items-center justify-center rounded-lg hover:bg-[#efefef] transition-colors text-[#9b9a97]"
+                  aria-label="이전 달"
+                >
                   <ChevronLeft size={18} />
                 </button>
-                <button onClick={handleNextMonth} className="p-1 hover:bg-[#efefef] rounded transition-colors text-[#9b9a97]">
+                <button
+                  type="button"
+                  onClick={handleNextMonth}
+                  className="flex h-10 w-10 lg:h-8 lg:w-8 items-center justify-center rounded-lg hover:bg-[#efefef] transition-colors text-[#9b9a97]"
+                  aria-label="다음 달"
+                >
                   <ChevronRight size={18} />
                 </button>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={handleToday}
+              className="h-9 lg:h-8 shrink-0 rounded-lg border border-[#e9e9e8] px-3 text-sm font-medium text-[#5f5f5f] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]"
+            >
+              오늘
+            </button>
           </div>
 
           {/* Grid Header */}
@@ -292,7 +377,11 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
           </div>
 
           {/* Calendar Cells */}
-          <div className="flex-1 flex flex-col h-full min-h-0 divide-y divide-[#e9e9e8]">
+          <div
+            className="flex-1 flex flex-col min-h-0 divide-y divide-[#e9e9e8]"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+          >
             {(() => {
               const weeks = [];
               for (let i = 0; i < calendarDays.length; i += 7) {
@@ -306,13 +395,16 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                     const isSelected = selectedDate && isSameDay(day, selectedDate);
                     const isCurrentMonth = isSameMonth(day, currentDate);
                     const isToday = dfIsToday(day);
-                    const mobileVisibleCount = dayEvents.length > 2 ? 1 : 2;
                     const desktopVisibleCount = 3;
 
                     return (
                       <div
                         key={day.toISOString()}
                         onClick={() => {
+                          if (isCompactLayout) {
+                            selectDay(day);
+                            return;
+                          }
                           setSelectedDate(day);
                           openAddModal(day);
                         }}
@@ -337,8 +429,9 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                               e.stopPropagation();
                               openAddModal(day);
                             }}
+                            aria-label="이 날짜에 일정 추가"
                             className={`
-                      w-5 h-5 flex items-center justify-center rounded hover:bg-[#e0e0e0] text-[#9b9a97] hover:text-[#37352f]
+                      hidden lg:flex w-5 h-5 items-center justify-center rounded hover:bg-[#e0e0e0] text-[#9b9a97] hover:text-[#37352f]
                       opacity-0 group-hover:opacity-100 transition-all
                       ${isSelected ? 'opacity-100' : ''}
                     `}
@@ -349,9 +442,23 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
                         {/* Event Bars */}
                         <div className="min-h-0 flex-1 overflow-hidden">
-                          <div className="flex flex-col gap-0.5 sm:hidden">
-                            {dayEvents.slice(0, mobileVisibleCount).map(event => renderEventBar(event, day, true))}
-                            {dayEvents.length > mobileVisibleCount && renderMoreButton(day, dayEvents, dayEvents.length - mobileVisibleCount, true)}
+                          <div className="flex flex-wrap items-center gap-1 px-1 sm:hidden" aria-hidden="true">
+                            {dayEvents.slice(0, MOBILE_DOT_LIMIT).map(event => {
+                              const tag = getTag(event.type);
+                              return (
+                                <span
+                                  key={event.id}
+                                  className="calendar-tag-dot h-1.5 w-1.5 rounded-full"
+                                  style={{
+                                    '--calendar-tag-color': tag?.color || '#37352f',
+                                    '--calendar-tag-dark-color': getDarkAdaptiveColor(tag?.color || '#37352f'),
+                                  } as React.CSSProperties}
+                                />
+                              );
+                            })}
+                            {dayEvents.length > MOBILE_DOT_LIMIT && (
+                              <span className="text-[13px] leading-none font-medium text-[#9b9a97]">+{dayEvents.length - MOBILE_DOT_LIMIT}</span>
+                            )}
                           </div>
 
                           <div className="hidden min-h-0 flex-col gap-0.5 overflow-hidden sm:flex">
@@ -366,6 +473,31 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
               ));
             })()}
           </div>
+
+          {isCompactLayout && selectedDate && (
+            <section className="h-[38%] shrink-0 overflow-y-auto border-t border-[#e9e9e8] bg-white custom-scrollbar" aria-label="선택한 날짜의 일정">
+              <div className="sticky top-0 z-[1] flex items-center justify-between gap-3 bg-white px-4 py-3">
+                <h2 className="text-[15px] font-medium text-[#171717]">
+                  {format(selectedDate, 'M월 d일 (E)', { locale: ko })}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => openAddModal(selectedDate)}
+                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--color-primary)] px-3 text-sm font-medium text-white transition-colors hover:bg-[var(--color-primary-hover)]"
+                >
+                  <Plus size={16} />
+                  일정 추가
+                </button>
+              </div>
+              {selectedDayEvents.length === 0 ? (
+                <p className="px-4 pb-4 text-sm text-[#8a8a8a]">일정이 없어요.</p>
+              ) : (
+                <div className="space-y-1 px-2 pb-4">
+                  {selectedDayEvents.map(event => renderEventListItem(event, selectedDate, () => openEditModal(event)))}
+                </div>
+              )}
+            </section>
+          )}
         </div>
 
 
@@ -394,36 +526,10 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
               <div className="min-h-0 flex-1 overflow-y-auto p-3 custom-scrollbar">
                 <div className="space-y-1">
-                  {overflowDay.events.map(event => {
-                    const tag = getTag(event.type);
-                    const timeLabel = getEventTimeLabel(event, overflowDay.date);
-
-                    return (
-                      <button
-                        key={event.id}
-                        type="button"
-                        onClick={() => {
-                          setOverflowDay(null);
-                          openEditModal(event);
-                        }}
-                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[#f7f7f7]"
-                      >
-                        <span
-                          className="calendar-tag-dot h-2.5 w-2.5 shrink-0 rounded-full"
-                          style={{
-                            '--calendar-tag-color': tag?.color || '#37352f',
-                            '--calendar-tag-dark-color': getDarkAdaptiveColor(tag?.color || '#37352f'),
-                          } as React.CSSProperties}
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[14px] font-medium text-[#171717]">{event.title}</span>
-                          <span className="mt-0.5 block text-[12px] text-[#8a8a8a]">
-                            {timeLabel || '하루 종일'}
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
+                  {overflowDay.events.map(event => renderEventListItem(event, overflowDay.date, () => {
+                    setOverflowDay(null);
+                    openEditModal(event);
+                  }))}
                 </div>
               </div>
 
@@ -447,10 +553,10 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
         {/* Modern Modal Overlay */}
         {showModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-[3px] p-4 transition-all animate-[fadeIn_0.2s_ease-out]">
-            <div className="bg-white w-full max-w-[480px] rounded-2xl overflow-hidden text-[#37352f] flex flex-col max-h-[90vh]">
+          <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-[3px] p-0 sm:p-4 transition-all animate-[fadeIn_0.2s_ease-out]">
+            <div className="bg-white w-full max-w-[480px] rounded-t-2xl sm:rounded-2xl overflow-hidden text-[#37352f] flex flex-col max-h-[92dvh] sm:max-h-[90dvh]">
               {/* Modal Header */}
-              <div className="px-6 py-4 flex items-center justify-between border-b border-[#f1f1f0]">
+              <div className="px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between border-b border-[#f1f1f0]">
                 <h3 className="text-[15px] font-medium text-[#787774]">
                   {isEditing ? '일정 수정' : '새 일정'}
                 </h3>
@@ -474,7 +580,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
               </div>
 
               {/* Modal Body */}
-              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar">
                 <div className="space-y-6">
                   {/* Title Input */}
                   <div className="relative group">
@@ -493,7 +599,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                   <div className="space-y-4">
                     {/* Date */}
                     <div className="flex items-center group">
-                      <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
+                      <div className="w-24 sm:w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
                         <CalendarIcon size={16} className="text-[#9b9a97]" /> 시작일
                       </div>
                       <div className="flex-1 min-h-[36px] flex items-center">
@@ -507,7 +613,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                     </div>
 
                     <div className="flex items-center group">
-                      <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
+                      <div className="w-24 sm:w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
                         <CalendarIcon size={16} className="text-[#9b9a97]" /> 종료일
                       </div>
                       <div className="flex-1 min-h-[36px] flex items-center">
@@ -523,7 +629,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
                     {/* All Day Toggle */}
                     <div className="flex items-center">
-                      <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
+                      <div className="w-24 sm:w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
                         <Clock size={16} className="text-[#9b9a97]" /> 시간 설정
                       </div>
                       <div className="flex-1 flex items-center justify-between">
@@ -551,10 +657,19 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                     {!isAllDay && (
                       <div className="flex flex-col gap-3 animate-[fadeIn_0.2s_ease-out]">
                         <div className="flex items-center">
-                          <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
+                          <div className="w-24 sm:w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
                             <div className="w-4" /> 시작 시간
                           </div>
                           <div className="flex-1 flex items-center gap-2 relative">
+                            {isCompactLayout ? (
+                              <input
+                                type="time"
+                                value={startTime}
+                                onChange={(e) => setStartTime(e.target.value)}
+                                className="h-10 rounded-lg border border-[#e2e2e2] bg-[#f7f7f5] px-3 text-[16px] font-medium text-[#37352f] outline-none focus:border-[var(--color-primary)]"
+                                aria-label="시작 시간"
+                              />
+                            ) : (
                             <div className="flex items-center bg-[#f1f1f0] rounded-lg p-0.5 border border-[#e2e2e2] relative z-[70]">
                               <button
                                 onClick={() => {
@@ -620,15 +735,25 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                 )}
                               </div>
                             </div>
+                            )}
                           </div>
                         </div>
 
                         {/* End Time Container */}
                         <div className="flex items-center">
-                          <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
+                          <div className="w-24 sm:w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0">
                             <div className="w-4" /> 종료 시간
                           </div>
                           <div className="flex-1 flex items-center gap-2 relative">
+                            {isCompactLayout ? (
+                              <input
+                                type="time"
+                                value={endTime}
+                                onChange={(e) => setEndTime(e.target.value)}
+                                className="h-10 rounded-lg border border-[#e2e2e2] bg-[#f7f7f5] px-3 text-[16px] font-medium text-[#37352f] outline-none focus:border-[var(--color-primary)]"
+                                aria-label="종료 시간"
+                              />
+                            ) : (
                             <div className="flex items-center bg-[#f1f1f0] rounded-lg p-0.5 border border-[#e2e2e2] relative z-[60]">
                               <button
                                 onClick={() => {
@@ -694,6 +819,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
                                 )}
                               </div>
                             </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -701,7 +827,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
 
                     {/* Tags */}
                     <div className="flex items-start">
-                      <div className="w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0 pt-1.5">
+                      <div className="w-24 sm:w-28 flex items-center gap-2.5 text-[#787774] text-[14px] font-medium shrink-0 pt-1.5">
                         <Check size={16} className="text-[#9b9a97]" /> 태그
                       </div>
                       <div className="flex-1 flex gap-2 flex-wrap">
@@ -747,10 +873,10 @@ const CalendarView: React.FC<CalendarViewProps> = ({ events, tags, onAddEvent, o
               </div>
 
               {/* Modal Footer */}
-              <div className="px-6 py-4 bg-[#fbfbfa] border-t border-[#f1f1f0] flex justify-end">
+              <div className="px-4 sm:px-6 pt-3 sm:pt-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-4 bg-[#fbfbfa] border-t border-[#f1f1f0] flex justify-end">
                 <button
                   onClick={handleSave}
-                  className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white px-8 py-2.5 rounded-xl text-sm font-bold transition-all active:scale-95 shadow-sm shadow-blue-100"
+                  className="w-full sm:w-auto bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white px-8 py-2.5 rounded-xl text-sm font-bold transition-all active:scale-95 shadow-sm shadow-blue-100"
                 >
                   일정 저장
                 </button>

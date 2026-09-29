@@ -1255,3 +1255,10 @@ select {
     display: none !important;
   }
 }
+
+/* iOS Safari zooms into form fields smaller than 16px; keep them at 16px on touch screens. */
+@media (pointer: coarse) {
+  :is(input, textarea, select):is(.text-xs, .text-sm, .text-\[11px\], .text-\[12px\], .text-\[13px\], .text-\[14px\], .text-\[15px\]) {
+    font-size: 16px !important;
+  }
+}

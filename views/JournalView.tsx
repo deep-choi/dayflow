@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { format, parseISO, isValid } from 'date-fns';
 import { ko } from 'date-fns/locale';
+import { useBackLayer } from '../hooks/useBackLayer';
+import { COMPACT_LAYOUT_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 interface JournalViewProps {
   entries: JournalEntry[];
@@ -247,6 +249,12 @@ const JournalView: React.FC<JournalViewProps> = ({
     setIsCategoryMenuOpen(false);
   };
 
+  const isCompactLayout = useMediaQuery(COMPACT_LAYOUT_QUERY);
+  useBackLayer(isCompactLayout && (showMobileDetail || isWriting), () => {
+    if (isWriting) cancelWriting();
+    else setShowMobileDetail(false);
+  });
+
   const canSaveDraft = Boolean(newTitle.trim() || newContent.trim());
   const editingEntry = editingId ? entries.find(entry => entry.id === editingId) : undefined;
 
@@ -375,6 +383,28 @@ const JournalView: React.FC<JournalViewProps> = ({
         </div>
       </header>
 
+      {categories.length > 0 && (
+        <div className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} ${hasSidebarSlot ? 'lg:hidden' : ''} shrink-0 items-center gap-2 overflow-x-auto border-b border-[#e9e9e8] px-4 py-2.5 no-scrollbar sm:px-8`}>
+          {[{ id: 'all', name: 'all', label: '전체' }, ...categories.map(category => ({ id: category.id, name: category.name, label: category.name }))].map(item => {
+            const isActive = selectedCategory === item.name;
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelectCategory(item.name)}
+                className={`inline-flex h-8 shrink-0 items-center rounded-full px-3.5 text-[13px] leading-5 font-medium whitespace-nowrap transition-colors ${isActive
+                  ? 'bg-[var(--color-primary)] text-white'
+                  : 'bg-[#f7f7f7] text-[#5f5f5f] hover:bg-[#eeeeee] hover:text-[#171717]'}`}
+                aria-pressed={isActive}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         <aside className={`${isWriting || showMobileDetail ? 'hidden lg:block' : 'block'} ${hasSidebarSlot ? 'lg:hidden' : ''} h-full min-h-0 w-full overflow-y-auto border-b border-[#e9e9e8] bg-[#fbfbfa] custom-scrollbar lg:h-auto lg:w-[360px] lg:border-b-0 lg:border-r`}>
           {filteredEntries.map(entry => {
@@ -388,13 +418,13 @@ const JournalView: React.FC<JournalViewProps> = ({
                   setShowMobileDetail(true);
                   setIsWriting(false);
                 }}
-                className={`journal-entry-list-item w-full border-b border-l-0 border-b-[#e9e9e8] p-4 text-left transition-colors sm:p-5 lg:border-l-2 ${
+                className={`journal-entry-list-item w-full border-b border-l-0 border-b-[#e9e9e8] px-4 py-3 text-left transition-colors sm:p-5 lg:border-l-2 ${
                   isSelected
                     ? 'is-selected lg:border-l-[var(--color-primary)] lg:bg-white'
                     : 'border-l-transparent border-t-transparent border-r-transparent hover:bg-white/50'
                 }`}
               >
-                <div className="mb-2 flex items-start justify-between gap-3">
+                <div className="mb-1 flex items-start justify-between gap-3 sm:mb-2">
                   <h3 className={`min-w-0 flex-1 truncate text-[15px] font-medium ${isSelected ? 'text-[#171717]' : 'text-[#37352f]'}`}>
                     {entry.title || '제목 없음'}
                   </h3>
@@ -403,7 +433,7 @@ const JournalView: React.FC<JournalViewProps> = ({
                   </span>
                 </div>
 
-                <p className="mb-3 line-clamp-2 text-sm font-normal leading-relaxed text-[#8a8a8a]">
+                <p className="mb-2 line-clamp-1 text-sm font-normal leading-relaxed text-[#8a8a8a] sm:mb-3 sm:line-clamp-2">
                   {entry.content || '내용 없음'}
                 </p>
 
@@ -425,7 +455,7 @@ const JournalView: React.FC<JournalViewProps> = ({
         <main className={`${!isWriting && !showMobileDetail ? 'hidden lg:block' : 'block'} min-h-0 flex-1 overflow-y-auto bg-white custom-scrollbar`}>
           {isWriting ? (
             <div className="flex min-h-full flex-col" onKeyDown={handleEditorKeyDown}>
-              <div className="sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[#e9e9e8] bg-white px-4 sm:px-8">
+              <div className="sticky top-0 z-10 flex h-12 lg:h-14 shrink-0 items-center justify-between gap-3 border-b border-[#e9e9e8] bg-white px-4 sm:px-8">
                 <div className="flex min-w-0 items-center">
                   <button
                     type="button"

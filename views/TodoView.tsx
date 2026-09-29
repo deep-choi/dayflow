@@ -30,6 +30,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getDarkAdaptiveColor, normalizeThemeColorValue, TODO_TAB_COLOR_OPTIONS } from '../utils/colorPalette';
+import { TOUCH_POINTER_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 interface TodoViewProps {
   todos: Todo[];
@@ -378,7 +379,7 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
                     }}
                   />
                   <button
-                    className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all"
+                    className="opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 p-1 text-gray-400 hover:text-red-500 transition-all"
                     onClick={() => setSubTasks(subTasks.filter(s => s.id !== st.id))}
                   >
                     <Trash2 size={14} />
@@ -565,7 +566,7 @@ const SortableTodoItem = ({
       </div>
 
       {!isEditing && (
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-opacity">
           <button
             className="p-1 hover:bg-[#e0e0e0] rounded-full text-[#5f6368] transition-all"
             onClick={(e) => {
@@ -956,7 +957,7 @@ const SortableList = ({
                     </div>
                   )}
 
-                  <div className="flex items-center opacity-0 group-hover/step:opacity-100 transition-opacity">
+                  <div className="flex items-center opacity-0 group-hover/step:opacity-100 pointer-coarse:opacity-100 transition-opacity">
                     <button
                       onClick={() => setDraft({ text: ' ', stepId: step.id })}
                       className="p-1 hover:bg-blue-50 text-blue-500 rounded transition-colors mr-0.5"
@@ -1049,7 +1050,7 @@ const SortableList = ({
                       )}
                     </div>
                     <button
-                      className="opacity-0 group-hover:opacity-100 text-[#5f6368] hover:text-[#d93025] p-1"
+                      className="opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 text-[#5f6368] hover:text-[#d93025] p-1"
                       onClick={() => onDeleteTodo(todo.id)}
                     >
                       <Trash2 size={14} />
@@ -1094,6 +1095,8 @@ const TodoView: React.FC<TodoViewProps> = ({
   const [newTabModal, setNewTabModal] = useState(false);
 
   const [isMobile, setIsMobile] = useState(false);
+  const isTouchPointer = useMediaQuery(TOUCH_POINTER_QUERY);
+  const isDragDisabled = isMobile || isTouchPointer;
 
   useEffect(() => {
     const checkMobile = () => {
@@ -1105,6 +1108,14 @@ const TodoView: React.FC<TodoViewProps> = ({
   }, []);
 
   const sortedTabs = [...tabs].sort((a, b) => a.order - b.order);
+  const getMenuPosition = (x: number, y: number, width: number, estimatedHeight: number): React.CSSProperties => {
+    const margin = 8;
+    const left = Math.min(Math.max(x - width + 12, margin), window.innerWidth - width - margin);
+    const opensUpward = y + estimatedHeight > window.innerHeight - margin;
+    return opensUpward
+      ? { left, bottom: Math.max(window.innerHeight - y, margin) }
+      : { left, top: y };
+  };
   const tabIdSet = new Set(tabs.map(tab => tab.id));
   const isUnassignedList = (list: TodoList) => !list.tabId || !tabIdSet.has(list.tabId);
   const unassignedListCount = lists.filter(isUnassignedList).length;
@@ -1434,13 +1445,13 @@ const TodoView: React.FC<TodoViewProps> = ({
           {tab && <span className="todo-tab-dot h-2 w-2 shrink-0 rounded-full" />}
           {muted && <span className="h-2 w-2 shrink-0 rounded-full border border-[#b5b5b5]" />}
           <span className="flex-1 truncate text-left">{label}</span>
-          <span className={`text-[13px] leading-5 ${tab ? 'transition-opacity group-hover:opacity-0' : ''} ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{count}</span>
+          <span className={`text-[13px] leading-5 ${tab ? 'transition-opacity group-hover:opacity-0 pointer-coarse:opacity-0' : ''} ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{count}</span>
         </button>
         {tab && (
           <button
             type="button"
             onClick={() => setTabSettingsModal(tab.id)}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
             aria-label={`${tab.name} 탭 편집`}
             title="탭 편집"
           >
@@ -1504,7 +1515,7 @@ const TodoView: React.FC<TodoViewProps> = ({
       onAddStep={onAddStep}
       onUpdateStep={onUpdateStep}
       onDeleteStep={onDeleteStep}
-      isMobile={isMobile}
+      isMobile={isDragDisabled}
     />
   );
 
@@ -1545,8 +1556,14 @@ const TodoView: React.FC<TodoViewProps> = ({
             {sortedTabs.map(tab => (
               <div key={tab.id} className="relative group flex-shrink-0">
                 <button
-                  onClick={() => setFilterMode(tab.id)}
-                  className={`todo-filter-tab inline-flex h-10 items-center justify-center rounded-lg border px-4 text-sm font-medium whitespace-nowrap transition-colors ${filterMode === tab.id
+                  onClick={() => {
+                    if (isTouchPointer && filterMode === tab.id) {
+                      setTabSettingsModal(tab.id);
+                      return;
+                    }
+                    setFilterMode(tab.id);
+                  }}
+                  className={`todo-filter-tab inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border px-4 text-sm font-medium whitespace-nowrap transition-colors ${filterMode === tab.id
                     ? 'is-active'
                     : 'bg-[#f7f7f7] text-[#5f5f5f] border-transparent hover:bg-[#eeeeee] hover:text-[#171717]'
                     }`}
@@ -1554,12 +1571,15 @@ const TodoView: React.FC<TodoViewProps> = ({
                     '--todo-tab-color': tab.color,
                     '--todo-tab-dark-color': getDarkAdaptiveColor(tab.color),
                   } as React.CSSProperties}
+                  aria-label={isTouchPointer && filterMode === tab.id ? `${tab.name} 탭 편집` : undefined}
                 >
                   {tab.name}
+                  {isTouchPointer && filterMode === tab.id && <Edit3 size={13} className="opacity-80" />}
                 </button>
                 <button
                   onClick={(e) => { e.stopPropagation(); setTabSettingsModal(tab.id); }}
-                  className="absolute -top-1 -right-1 w-4 h-4 bg-white border border-gray-200 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute -top-1 -right-1 w-4 h-4 bg-white border border-gray-200 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-coarse:hidden transition-opacity"
+                  aria-label={`${tab.name} 탭 편집`}
                 >
                   <Edit3 size={10} className="text-gray-400" />
                 </button>
@@ -1673,8 +1693,8 @@ const TodoView: React.FC<TodoViewProps> = ({
         {contextMenu && !contextMenu.expanded && (
           <div
             ref={contextMenuRef}
-            className="fixed bg-white rounded-lg border border-[#e9e9e8] py-1 z-50 w-48 animate-in fade-in zoom-in-95 duration-100"
-            style={{ top: contextMenu.y, left: contextMenu.x - 180 }}
+            className="fixed bg-white rounded-lg border border-[#e9e9e8] py-1 z-50 w-48 max-h-[70dvh] overflow-y-auto animate-in fade-in zoom-in-95 duration-100"
+            style={getMenuPosition(contextMenu.x, contextMenu.y, 192, 96 + lists.length * 36)}
           >
             <div className="px-3 py-2 border-b border-[#f0f0ef] text-xs font-medium text-[#9b9a97]">
               작업 이동
@@ -1705,7 +1725,7 @@ const TodoView: React.FC<TodoViewProps> = ({
           <div
             ref={listMenuRef}
             className="fixed bg-white rounded-lg border border-[#e9e9e8] py-1 z-50 w-40 animate-in fade-in zoom-in-95 duration-100"
-            style={{ top: listMenu.y, left: listMenu.x - 140 }}
+            style={getMenuPosition(listMenu.x, listMenu.y, 160, 140)}
           >
             <div className="px-3 py-2 border-b border-[#f0f0ef] text-xs font-medium text-[#9b9a97]">
               목록 관리

@@ -16,6 +16,7 @@ import { getDarkAdaptiveColor } from './utils/colorPalette';
 
 import { UserMenuPopover } from './components/UserMenuPopover';
 import { CalendarTagModal } from './components/CalendarTagModal';
+import { consumeBackLayerCleanupPop, useBackLayer } from './hooks/useBackLayer';
 import type { SettingsTab } from './views/SettingsView';
 
 const CalendarView = React.lazy(() => import('./views/CalendarView'));
@@ -1124,6 +1125,7 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewState>(() => resolveViewFromUrl());
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobileAccountMenuOpen, setIsMobileAccountMenuOpen] = useState(false);
+  useBackLayer(isMobileMenuOpen, () => setIsMobileMenuOpen(false));
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
@@ -1797,6 +1799,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const onPopState = () => {
+      if (consumeBackLayerCleanupPop()) return;
       const next = resolveViewFromUrl();
       setCurrentView(prev => (prev === next ? prev : next));
     };
@@ -4017,6 +4020,66 @@ const App: React.FC = () => {
     setCurrentView('chat');
   };
 
+  // Tag filter + tag management, shared by the desktop sidebar panel and the mobile menu.
+  const renderCalendarTagPanel = () => (
+    <>
+      <button
+        type="button"
+        onClick={() => { if (requireAuth()) setCalendarTagModal('new'); }}
+        className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
+      >
+        <Plus size={18} className="shrink-0" />
+        <span>새 태그</span>
+      </button>
+
+      <div className="mt-6 mb-1 px-3">
+        <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">태그 필터</span>
+      </div>
+      <div className="space-y-1">
+        {calendarTags.map(tag => {
+          const isVisible = visibleCalendarTagIds.includes(tag.id);
+
+          return (
+            <div key={tag.id} className="group relative">
+            <button
+              type="button"
+              onClick={() => toggleCalendarTagFilter(tag.id)}
+              className={`calendar-tag-filter-item w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
+                isVisible
+                  ? 'is-active text-[#171717] hover:bg-[#f7f7f7]'
+                  : 'text-[#8a8a8a] hover:bg-[#f7f7f7] hover:text-[#5f5f5f]'
+              }`}
+              style={{
+                '--calendar-tag-color': tag.color,
+                '--calendar-tag-dark-color': getDarkAdaptiveColor(tag.color),
+                '--calendar-tag-muted': `${tag.color}66`,
+              } as React.CSSProperties}
+            >
+              <span
+                className={`calendar-tag-filter-indicator flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] ${
+                  isVisible ? 'is-active' : ''
+                }`}
+              >
+                {isVisible && <Check size={12} className="text-white" strokeWidth={3} />}
+              </span>
+              <span className="min-w-0 flex-1 truncate pr-6 text-[15px] leading-5 font-normal">{tag.name}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { if (requireAuth()) setCalendarTagModal(tag.id); }}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
+              aria-label={`${tag.name} 태그 수정`}
+              title="태그 수정"
+            >
+              <Pencil size={13} />
+            </button>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+
   const handleMobileNavigate = (view: ViewState) => {
     if (view === 'chat') {
       handleNewChat();
@@ -4229,64 +4292,7 @@ const App: React.FC = () => {
                 </>
               )}
 
-              {currentView === 'calendar' && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => { if (requireAuth()) setCalendarTagModal('new'); }}
-                    className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
-                  >
-                    <Plus size={18} className="shrink-0" />
-                    <span>새 태그</span>
-                  </button>
-
-                  <div className="mt-6 mb-1 px-3">
-                    <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">태그 필터</span>
-                  </div>
-                  <div className="space-y-1">
-                    {calendarTags.map(tag => {
-                      const isVisible = visibleCalendarTagIds.includes(tag.id);
-
-                      return (
-                        <div key={tag.id} className="group relative">
-                        <button
-                          type="button"
-                          onClick={() => toggleCalendarTagFilter(tag.id)}
-                          className={`calendar-tag-filter-item w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
-                            isVisible
-                              ? 'is-active text-[#171717] hover:bg-[#f7f7f7]'
-                              : 'text-[#8a8a8a] hover:bg-[#f7f7f7] hover:text-[#5f5f5f]'
-                          }`}
-                          style={{
-                            '--calendar-tag-color': tag.color,
-                            '--calendar-tag-dark-color': getDarkAdaptiveColor(tag.color),
-                            '--calendar-tag-muted': `${tag.color}66`,
-                          } as React.CSSProperties}
-                        >
-                          <span
-                            className={`calendar-tag-filter-indicator flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] ${
-                              isVisible ? 'is-active' : ''
-                            }`}
-                          >
-                            {isVisible && <Check size={12} className="text-white" strokeWidth={3} />}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate pr-6 text-[15px] leading-5 font-normal">{tag.name}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { if (requireAuth()) setCalendarTagModal(tag.id); }}
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
-                          aria-label={`${tag.name} 태그 수정`}
-                          title="태그 수정"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
+              {currentView === 'calendar' && renderCalendarTagPanel()}
 
               {(currentView === 'todo' || currentView === 'journal') && (
                 <div ref={setSidebarPanelSlot} />
@@ -4299,12 +4305,12 @@ const App: React.FC = () => {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-white pb-0">
         {/* Top Mobile Bar (Visible only on small screens) */}
-        <header className="lg:hidden h-14 bg-white border-b border-[#e9e9e8] flex items-center justify-between px-4 font-medium text-sm z-40 relative">
+        <header className="lg:hidden h-[calc(3.5rem+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)] bg-white border-b border-[#e9e9e8] flex items-center justify-between px-4 font-medium text-sm z-40 relative">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(true)}
-              className="w-8 h-8 flex items-center justify-center text-[#787774] hover:text-[#37352f] transition-colors"
+              className="-ml-1.5 w-10 h-10 flex items-center justify-center rounded-lg text-[#787774] hover:text-[#37352f] transition-colors"
               aria-label="전체 메뉴 열기"
             >
               <Menu size={20} />
@@ -4313,13 +4319,18 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             {currentUser ? (
-              <div className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen(true)}
+                className="w-8 h-8 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[13px] leading-5 font-medium text-[#5f5f5f] overflow-hidden"
+                aria-label="계정 및 전체 메뉴 열기"
+              >
                 {currentUser?.avatar ? (
                   <img src={currentUser.avatar} alt={currentUser.name} style={getAvatarImageStyle(currentUser.avatarFrame)} className="w-full h-full object-cover" />
                 ) : (
                   currentUser?.name?.[0] || 'U'
                 )}
-              </div>
+              </button>
             ) : (
               <button
                 onClick={() => {
@@ -4345,7 +4356,7 @@ const App: React.FC = () => {
         </div>
 
         {needRefresh && (
-          <div className="fixed bottom-36 lg:bottom-24 right-3 lg:right-6 left-3 lg:left-auto z-50">
+          <div className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] lg:bottom-24 right-3 lg:right-6 left-3 lg:left-auto z-50">
             <div className="bg-white border border-[#e9e9e8] text-[#37352f] px-4 py-3 rounded-xl flex items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-medium">새 버전이 준비됐어요.</div>
@@ -4370,7 +4381,7 @@ const App: React.FC = () => {
         )}
 
         {undoToast && (
-          <div className="fixed bottom-20 lg:bottom-6 right-3 lg:right-6 left-3 lg:left-auto z-50">
+          <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] lg:bottom-6 right-3 lg:right-6 left-3 lg:left-auto z-50">
             <div className="bg-white border border-[#e9e9e8] text-[#171717] px-4 py-3 rounded-xl flex items-center gap-3">
               <span className="text-sm">{undoToast.label}</span>
               <button
@@ -4434,7 +4445,7 @@ const App: React.FC = () => {
           onClick={() => setIsMobileMenuOpen(false)}
           aria-hidden="true"
         />
-        <aside className={`absolute inset-y-0 left-0 w-[82vw] max-w-[340px] bg-white border-r border-[#e9e9e8] transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <aside className={`absolute inset-y-0 left-0 w-[82vw] max-w-[340px] bg-white border-r border-[#e9e9e8] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
           <div className="h-full flex flex-col">
             <div className="h-14 px-4 border-b border-[#e9e9e8] flex items-center justify-between">
               <span className="text-[14px] leading-5 font-medium text-[#37352f]">전체 메뉴</span>
@@ -4465,6 +4476,12 @@ const App: React.FC = () => {
                   );
                 })}
               </nav>
+
+              {currentView === 'calendar' && (
+                <div className="border-t border-[#e9e9e8] pt-3">
+                  {renderCalendarTagPanel()}
+                </div>
+              )}
 
               <div className="border-t border-[#e9e9e8] pt-3">
                 <button
