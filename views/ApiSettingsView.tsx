@@ -460,7 +460,7 @@ const ApiSettingsView: React.FC<ApiSettingsViewProps> = ({ settings, onUpdateSet
                                                         currentBaseUrl
                                                     )
                                                 }
-                                                placeholder="직접 모델ID 입력 (e.g. gemini-3.5-flash)"
+                                                placeholder="직접 모델ID 입력 (e.g. gemini-3.8-flash)"
                                                 className="flex-1 px-3 py-2 bg-[#fbfbfa] border border-[#e9e9e8] rounded-xl text-xs font-mono focus:bg-white focus:border-emerald-500 focus:outline-none transition-colors"
                                                 title="목록에 없는 신규/미래 모델명 직접 입력 가능"
                                             />

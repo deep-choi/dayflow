@@ -30,7 +30,8 @@ const readOpenAIResponseText = (data: any): string => {
     return (data?.choices?.[0]?.message?.content || '').trim();
 };
 
-const shouldOmitTemperature = (modelName: string): boolean => /^gpt-5\.6-(sol|terra|luna)$/i.test(modelName.trim());
+const shouldOmitTemperature = (modelName: string): boolean =>
+    /^gpt-(5\.6|6)-(astra|sol|terra|luna)$/i.test(modelName.trim());
 
 export const callOpenAIChatAPI = async (
     apiKey: string,
@@ -53,7 +54,7 @@ export const callOpenAIChatAPI = async (
         store: false,
     };
 
-    // GPT-5.6 Sol/Terra/Luna do not accept sampling parameters such as temperature.
+    // GPT-5.6 and GPT-6 (Astra/Sol/Terra/Luna) do not accept sampling parameters such as temperature.
     if (!shouldOmitTemperature(modelName)) {
         body.temperature = options?.temperature ?? 0.5;
     }

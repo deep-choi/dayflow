@@ -1,13 +1,13 @@
 import { AppSettings, ApiConnection } from '../types';
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash';
-export const DEFAULT_XAI_MODEL = 'grok-4.3';
-export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-sol';
-export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-0';
-export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
-export const DEFAULT_QWEN_MODEL = 'qwen3.7-max';
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_XAI_MODEL = 'grok-4.7';
+export const DEFAULT_OPENAI_MODEL = 'gpt-6-sol';
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
+export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-flash';
+export const DEFAULT_QWEN_MODEL = 'qwen3.8-max';
 export const DEFAULT_KIMI_MODEL = 'kimi-k3';
-export const DEFAULT_GLM_MODEL = 'glm-5.2';
+export const DEFAULT_GLM_MODEL = 'glm-5.3';
 export const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 export const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_QWEN_BASE_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
@@ -20,61 +20,55 @@ export interface ModelOption {
     description?: string;
 }
 
+// Each provider lists at most six models, newest release first.
 export const XAI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'grok-4.3', label: 'Grok 4.3', description: 'xAI 최신 4.3 플래그십' },
-    { id: 'grok-build-0.1', label: 'Grok Build 0.1', description: '코드/개발 특화' },
-    { id: 'grok-4.20-multi-agent', label: 'Grok 4.20 Multi-Agent', description: '멀티에이전트 고성능' },
-    { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning', description: '추론 강화 심층 모델' },
-    { id: 'grok-4-1-fast-reasoning', label: 'Grok 4.1 Fast Reasoning', description: '빠른 추론' },
-    { id: 'grok-3', label: 'Grok 3', description: 'Grok 3 플래그십' },
+    { id: 'grok-4.7', label: 'Grok 4.7', description: '최신 플래그십·코딩/지식 작업 (추천)' },
+    { id: 'grok-4.6', label: 'Grok 4.6', description: '이전 세대 플래그십' },
+    { id: 'grok-4.5', label: 'Grok 4.5', description: '범용 고성능' },
+    { id: 'grok-4.3', label: 'Grok 4.3', description: '1M 컨텍스트 범용 모델' },
+    { id: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning', description: '추론 강화 모델' },
+    { id: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning', description: '추론 없이 빠른 응답' },
 ];
 
 export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', description: '최신 고성능·고속 모델 (추천)' },
-    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: '에이전트·코딩 작업용 고성능 모델' },
+    { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: '최신 고성능 Flash·에이전트/코딩 (추천)' },
+    { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', description: '이전 세대 Flash' },
+    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', description: '고성능·고속 모델' },
+    { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: '에이전트·코딩 작업용 모델' },
     { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', description: '가장 빠르고 비용 효율적인 3.5 모델' },
     { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', description: '복합 추론 프로 미리보기' },
-    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', description: '경량 고속 모델' },
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: '2.5 세대 고급 추론' },
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: '2.5 세대 경량 응답' },
 ];
 
 export const OPENAI_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: '최신 플래그십·복잡한 작업용 (추천)' },
+    { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: '최고 성능·가장 어려운 작업용' },
+    { id: 'gpt-6-sol', label: 'GPT-6 Sol', description: '복잡한 코딩·에이전트 작업용 (추천)' },
+    { id: 'gpt-6-luna', label: 'GPT-6 Luna', description: '가장 효율적인 고처리량 모델' },
+    { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: '이전 세대 플래그십' },
     { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: '성능·속도·비용 균형형' },
-    { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: '가장 빠르고 경제적인 고처리량 모델' },
-    { id: 'gpt-5.5', label: 'GPT-5.5', description: '5.5 범용 고성능' },
-    { id: 'gpt-5.5-pro', label: 'GPT-5.5 Pro', description: '5.5 심층 프로' },
-    { id: 'gpt-5.4', label: 'GPT-5.4', description: '5.4 범용 고성능' },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: '5.4 고성능 미니' },
-    { id: 'gpt-4o', label: 'GPT-4o', description: 'Omni 멀티모달' },
-    { id: 'o1', label: 'o1', description: '복잡 논리 추론' },
+    { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: '빠르고 경제적인 모델' },
 ];
 
 export const ANTHROPIC_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'claude-opus-5-0', label: 'Claude Opus 5.0', description: '차세대 5세대 최고 성능 오퍼스 (추천)' },
-    { id: 'claude-5-sonnet', label: 'Claude 5 Sonnet', description: '5세대 차세대 소네트' },
-    { id: 'claude-fable-5', label: 'Claude Fable 5', description: '5세대 에이전트 특화' },
-    { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: '고성능 분석 오퍼스' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: '소네트 4.6 플래그십' },
-    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: '하이쿠 초고속' },
-    { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet', description: '3.5 세대 소네트' },
-    { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku', description: '3.5 세대 하이쿠' },
+    { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', description: '속도와 지능의 최적 균형' },
+    { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', description: '장기 에이전트·지식 작업용 (추천)' },
+    { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', description: '고난도 추론·장기 에이전트 작업' },
+    { id: 'claude-opus-5', label: 'Claude Opus 5', description: '5세대 오퍼스' },
+    { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', description: '5세대 소네트' },
+    { id: 'claude-fable-5', label: 'Claude Fable 5', description: '5세대 페이블' },
 ];
 
 export const DEEPSEEK_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', description: '최신 고속 범용 모델 (추천)' },
-    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: '최신 고성능 추론 모델' },
+    { id: 'deepseek-flash', label: 'DeepSeek V4.1 Flash', description: '최신 고속 범용·비전 모델 (추천)' },
+    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', description: '고성능 추론 모델' },
 ];
 
 export const QWEN_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'qwen3.7-max', label: 'Qwen3.7 Max', description: '최신 플래그십·복합 추론 (추천)' },
+    { id: 'qwen3.8-max', label: 'Qwen3.8 Max', description: '최신 플래그십·복합 추론 (추천)' },
+    { id: 'qwen3.8-flash', label: 'Qwen3.8 Flash', description: '최신 고속·1M 컨텍스트' },
+    { id: 'qwen3.7-max', label: 'Qwen3.7 Max', description: '이전 세대 플래그십' },
     { id: 'qwen3.7-plus', label: 'Qwen3.7 Plus', description: '범용 고성능' },
     { id: 'qwen3.6-plus', label: 'Qwen3.6 Plus', description: '안정적인 범용 모델' },
     { id: 'qwen3.6-flash', label: 'Qwen3.6 Flash', description: '빠른 응답·저비용' },
-    { id: 'qwen3.5-plus', label: 'Qwen3.5 Plus', description: '검증된 범용 모델' },
-    { id: 'qwen3.5-flash', label: 'Qwen3.5 Flash', description: '경량 고속 모델' },
-    { id: 'qwen3-max', label: 'Qwen3 Max', description: 'Qwen3 추론 모델' },
 ];
 
 export const KIMI_MODEL_OPTIONS: ModelOption[] = [
@@ -85,13 +79,12 @@ export const KIMI_MODEL_OPTIONS: ModelOption[] = [
 ];
 
 export const GLM_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'glm-5.2', label: 'GLM-5.2', description: '최신 1M 컨텍스트 플래그십 (추천)' },
+    { id: 'glm-5.3-flash', label: 'GLM-5.3 Flash', description: '최신 멀티모달 경량 모델' },
+    { id: 'glm-5.3-flashx', label: 'GLM-5.3 FlashX', description: '경량 고속 응답' },
+    { id: 'glm-5.3', label: 'GLM-5.3', description: '최신 1M 컨텍스트 플래그십 (추천)' },
+    { id: 'glm-5.2', label: 'GLM-5.2', description: '이전 세대 플래그십' },
     { id: 'glm-5.1', label: 'GLM-5.1', description: '장기 작업·코딩 강화' },
     { id: 'glm-5', label: 'GLM-5', description: 'Agent·복합 시스템 작업' },
-    { id: 'glm-5-turbo', label: 'GLM-5 Turbo', description: '장기 작업 최적화' },
-    { id: 'glm-4.7', label: 'GLM-4.7', description: '범용 대화·추론·에이전트' },
-    { id: 'glm-4.7-flashx', label: 'GLM-4.7 FlashX', description: '경량 고속 응답' },
-    { id: 'glm-4.7-flash', label: 'GLM-4.7 Flash', description: '무료 경량 모델' },
 ];
 
 export const CHAT_PROVIDERS: ApiConnection['provider'][] = [
@@ -125,6 +118,8 @@ export const isHostedOpenAICompatibleProvider = (provider: ApiConnection['provid
     provider === 'deepseek' || provider === 'qwen' || provider === 'kimi' || provider === 'glm';
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
+    'gemini-3.8': 'gemini-3.8-flash',
+    'gemini-3.7': 'gemini-3.7-flash',
     'gemini-3.6': 'gemini-3.6-flash',
     'gemini-3.5': 'gemini-3.5-flash',
     'gemini-3.5-flashlite': 'gemini-3.5-flash-lite',
@@ -179,13 +174,25 @@ export const hasProviderModelOptions = (provider: ApiConnection['provider']): bo
     return getModelOptionsForProvider(provider).length > 0;
 };
 
+// IDs saved by earlier versions of the picker that the Claude API never accepted,
+// or that belong to retired models.
+const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
+    'claude-opus-5-0': 'claude-opus-5',
+    'claude-5-sonnet': 'claude-sonnet-5',
+    'claude-3-5-sonnet-20241022': 'claude-sonnet-5-5',
+    'claude-3-5-haiku-20241022': 'claude-haiku-4-5-20251001',
+};
+
 export const normalizeProviderModelName = (
     provider: ApiConnection['provider'],
     modelName?: string
 ): string => {
+    const trimmed = (modelName || '').trim();
     const normalized = provider === 'gemini'
         ? normalizeGeminiModelName(modelName)
-        : (modelName || '').trim();
+        : provider === 'anthropic'
+            ? (ANTHROPIC_MODEL_ALIASES[trimmed.toLowerCase()] || trimmed)
+            : trimmed;
     const fallback = getDefaultModelForProvider(provider);
     if (!normalized) return fallback;
     return isMediaGenerationModelName(normalized) ? fallback : normalized;

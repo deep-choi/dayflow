@@ -46,6 +46,14 @@ const normalizeAnthropicMessages = (
     return { system, messages: merged };
 };
 
+// Dated snapshots (Claude Haiku 4.5 and older) still take `temperature`. From the 4.6
+// generation on, IDs are dateless; the current models (Opus 5.5, Fable 5.1, ...) reject
+// non-default sampling values and think adaptively, steered by `output_config.effort`.
+const isDatedSnapshotModel = (modelName: string): boolean => /-\d{8}$/.test(modelName.trim());
+
+// Thinking counts toward max_tokens, so leave room for it on top of the reply budget.
+const THINKING_TOKEN_HEADROOM = 1024;
+
 const readAnthropicResponseText = (data: any): string => {
     return (data?.content || [])
         .filter((content: any) => content?.type === 'text')
@@ -70,6 +78,22 @@ export const callAnthropicChatAPI = async (
         throw new Error('보낼 메시지가 없습니다.');
     }
 
+    const replyTokens = options?.maxTokens ?? 768;
+    const body: Record<string, unknown> = {
+        model: modelName,
+        system: normalized.system || undefined,
+        messages: normalized.messages,
+    };
+
+    if (isDatedSnapshotModel(modelName)) {
+        body.max_tokens = replyTokens;
+        body.temperature = options?.temperature ?? 0.5;
+    } else {
+        body.max_tokens = replyTokens + THINKING_TOKEN_HEADROOM;
+        // Everyday chat: keep thinking short so replies stay fast and within budget.
+        body.output_config = { effort: 'low' };
+    }
+
     const response = await fetch(`${ANTHROPIC_BASE_URL}/messages`, {
         method: 'POST',
         headers: {
@@ -78,13 +102,7 @@ export const callAnthropicChatAPI = async (
             'anthropic-version': ANTHROPIC_VERSION,
             'anthropic-dangerous-direct-browser-access': 'true',
         },
-        body: JSON.stringify({
-            model: modelName,
-            system: normalized.system || undefined,
-            messages: normalized.messages,
-            max_tokens: options?.maxTokens ?? 768,
-            temperature: options?.temperature ?? 0.5,
-        }),
+        body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -95,6 +113,9 @@ export const callAnthropicChatAPI = async (
     const data = await response.json();
     const text = readAnthropicResponseText(data);
     if (!text) {
+        if (data?.stop_reason === 'refusal') {
+            throw new Error('모델이 이 요청에 대한 응답을 거절했습니다.');
+        }
         throw new Error('응답이 비어 있습니다.');
     }
 

@@ -38,9 +38,15 @@ const readMessageContent = (content: unknown): string => {
     .trim();
 };
 
+// DeepSeek V4 models (including V4.1 served as `deepseek-flash`) support thinking modes.
+const isDeepSeekThinkingModel = (modelName: string): boolean => {
+  const model = modelName.trim().toLowerCase();
+  return model.startsWith('deepseek-v4') || model === 'deepseek-flash';
+};
+
 const shouldOmitTemperature = (modelName: string): boolean => {
   const model = modelName.trim().toLowerCase();
-  return model.startsWith('deepseek-v4') || model === 'kimi-k3' || model.startsWith('kimi-k2.7-code');
+  return isDeepSeekThinkingModel(model) || model === 'kimi-k3' || model.startsWith('kimi-k2.7-code');
 };
 
 export const callOpenAICompatibleChatAPI = async (
@@ -66,7 +72,7 @@ export const callOpenAICompatibleChatAPI = async (
     body.temperature = options.temperature ?? 0.5;
   }
 
-  if (modelName.trim().toLowerCase().startsWith('deepseek-v4')) {
+  if (isDeepSeekThinkingModel(modelName)) {
     body.thinking = { type: 'disabled' };
   } else if (modelName.trim().toLowerCase() === 'kimi-k3') {
     body.reasoning_effort = 'low';

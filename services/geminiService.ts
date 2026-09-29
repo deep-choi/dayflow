@@ -65,8 +65,8 @@ const getResponseLengthConfig = (responseLength?: AIAgent['responseLength']) =>
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const buildGeminiGenerationConfig = <T extends { temperature?: number }>(modelName: string, config: T): T => {
-  // Gemini 3.5 Flash-Lite and 3.6 Flash no longer accept sampling parameters.
-  if (!/^gemini-3\.(5|6)-/i.test(normalizeGeminiModelName(modelName))) return config;
+  // Gemini 3.5 and later (3.5 Flash-Lite, 3.6-3.8 Flash) no longer accept sampling parameters.
+  if (!/^gemini-3\.[5-9]-/i.test(normalizeGeminiModelName(modelName))) return config;
   const { temperature: _deprecatedTemperature, ...currentConfig } = config;
   return currentConfig as T;
 };
