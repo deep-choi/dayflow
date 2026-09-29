@@ -8,7 +8,7 @@ export const NATIVE_AUTH_REDIRECT_URL = 'com.deepchoi.dayflow://auth/callback';
 export const isNativeApp = (): boolean => Capacitor.isNativePlatform();
 
 export const getAuthRedirectUrl = (): string => (
-    isNativeApp() ? NATIVE_AUTH_REDIRECT_URL : window.location.origin
+    isNativeApp() ? NATIVE_AUTH_REDIRECT_URL : `${window.location.origin}/`
 );
 
 const saveNativeAuthError = (message: string) => {

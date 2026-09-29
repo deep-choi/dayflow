@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Mail, Lock, User, ArrowRight, Loader2, KeyRound, X } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { startGoogleSignIn } from '../utils/nativeAuth';
+import { getAuthRedirectUrl, startGoogleSignIn } from '../utils/nativeAuth';
 
 interface AuthViewProps {
     onLogin: (userData: any) => void;
@@ -101,6 +101,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
                     email,
                     password,
                     options: {
+                        emailRedirectTo: getAuthRedirectUrl(),
                         data: {
                             full_name: name,
                         }

@@ -20,6 +20,11 @@ View your app in AI Studio: https://ai.studio/apps/drive/1Duckm0yaNKJzyW14PA3wGB
 4. Run the app:
    `npm run dev`
 
+Google sign-in and signup confirmation return to the origin where you started
+(`http://localhost:3000/`, or `http://localhost:3001/` when port 3000 is busy).
+Supabase Authentication → URL Configuration must allow both origins and their
+`/**` paths. Keep the Site URL set to `https://dayflow.web.app` for production.
+
 ## Deployment
 
 Firebase Hosting is the only operational deploy target for this app.
