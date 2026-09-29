@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Mail, Lock, User, ArrowRight, Loader2, KeyRound, X } from 'lucide-react';
 import { supabase } from '../utils/supabase';
+import { startGoogleSignIn } from '../utils/nativeAuth';
 
 interface AuthViewProps {
     onLogin: (userData: any) => void;
@@ -54,9 +55,11 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
         };
 
         const authError = readAuthError();
-        if (!authError) return;
+        const nativeAuthError = window.sessionStorage.getItem('dayflow-native-auth-error');
+        if (!authError && !nativeAuthError) return;
 
-        setError(decodeURIComponent(authError.replace(/\+/g, ' ')));
+        setError(nativeAuthError || decodeURIComponent(authError!.replace(/\+/g, ' ')));
+        window.sessionStorage.removeItem('dayflow-native-auth-error');
         window.history.replaceState({}, document.title, window.location.pathname);
     }, []);
 
@@ -147,13 +150,7 @@ const AuthView: React.FC<AuthViewProps> = ({ onLogin, initialMode = 'login', var
         setLoading(true);
         setError(null);
         try {
-            const { error } = await supabase.auth.signInWithOAuth({
-                provider: 'google',
-                options: {
-                    redirectTo: window.location.origin
-                }
-            });
-            if (error) throw error;
+            await startGoogleSignIn();
         } catch (err: any) {
             setError(err.message || 'Google 로그인에 실패했습니다.');
             setLoading(false);

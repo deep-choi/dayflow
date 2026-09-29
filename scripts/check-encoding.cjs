@@ -5,7 +5,7 @@ const { TextDecoder } = require('util');
 const ROOT = process.cwd();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const SCAN_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.json', '.html', '.css', '.md', '.sql']);
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.firebase']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'android', '.firebase']);
 const IGNORE_FILES = new Set(['utils/encodingFix.ts']);
 const SUSPICIOUS = ['?쇱젙', '移댄뀒怨좊━', '寃뚯떆湲', '濡쒓렇', '硫붾え'];
 

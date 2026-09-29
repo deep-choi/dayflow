@@ -30,4 +30,22 @@ Firebase Hosting is the only operational deploy target for this app.
 - Deploy: `npm run deploy`
 - Hosting URL: `https://dayflow.web.app`
 
+## Android
+
+The Android app reuses the Vite build through Capacitor.
+
+1. Build and sync the web bundle: `npm run android:build`
+2. Open the native project: `npm run android:open`
+3. Build a release bundle from Android Studio or the `android/` Gradle project.
+
+The Android package ID is currently `com.deepchoi.dayflow`. Google OAuth uses the
+native callback `com.deepchoi.dayflow://auth/callback`; add that URL to the
+Supabase Auth redirect allow list before testing Google login on a device.
+
+Release signing is intentionally environment-only. Set
+`DAYFLOW_UPLOAD_KEYSTORE`, `DAYFLOW_UPLOAD_STORE_PASSWORD`,
+`DAYFLOW_UPLOAD_KEY_ALIAS`, and `DAYFLOW_UPLOAD_KEY_PASSWORD` before running
+`android\\gradlew.bat :app:clean :app:bundleRelease`. Without those values Gradle
+will produce an unsigned test bundle.
+
 For deployment details, see [docs/FIREBASE_HOSTING.md](docs/FIREBASE_HOSTING.md).
