@@ -1129,6 +1129,16 @@ select {
   background-color: var(--todo-tab-color);
 }
 
+/* Selected tab color: outline in the swatch color (Tailwind rings are disabled globally). */
+.todo-color-swatch.is-selected {
+  outline: 2px solid var(--todo-tab-color);
+  outline-offset: 2px;
+}
+
+:root[data-theme='dark'] .todo-color-swatch.is-selected {
+  outline-color: var(--todo-tab-dark-color);
+}
+
 .calendar-tag-filter-indicator {
   background-color: #ffffff;
   border: 1px solid var(--calendar-tag-muted);

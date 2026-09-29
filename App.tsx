@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ViewState, CalendarEvent, Todo, JournalEntry, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
-import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, CircleHelp, History } from 'lucide-react';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, CircleHelp, History, Pencil } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { supabase } from './utils/supabase';
 import { useRegisterSW } from 'virtual:pwa-register/react';
@@ -15,6 +15,7 @@ import { getAvatarImageStyle, sanitizeAvatarFrame } from './utils/avatarFrame';
 import { getDarkAdaptiveColor } from './utils/colorPalette';
 
 import { UserMenuPopover } from './components/UserMenuPopover';
+import { CalendarTagModal } from './components/CalendarTagModal';
 import type { SettingsTab } from './views/SettingsView';
 
 const CalendarView = React.lazy(() => import('./views/CalendarView'));
@@ -1129,6 +1130,8 @@ const App: React.FC = () => {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('account');
   const [isHideSettingsTabs, setIsHideSettingsTabs] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  // null: closed, 'new': creating, otherwise the id of the tag being edited
+  const [calendarTagModal, setCalendarTagModal] = useState<string | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const sidebarProfileButtonRef = useRef<HTMLButtonElement>(null);
   const [sidebarPanelSlot, setSidebarPanelSlot] = useState<HTMLDivElement | null>(null);
@@ -3604,11 +3607,11 @@ const App: React.FC = () => {
     }
   }
 
-  const addCalendarTag = () => {
+  const addCalendarTag = (name: string, color: string) => {
     const newTag: CalendarTag = {
       id: crypto.randomUUID(),
-      name: '새 태그',
-      color: '#37352f'
+      name,
+      color
     };
     setCalendarTags(prev => [...prev, newTag]);
   };
@@ -3617,9 +3620,36 @@ const App: React.FC = () => {
     setCalendarTags(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
   };
 
-  const deleteCalendarTag = (id: string) => {
-    if (calendarTags.length <= 1) return;
-    setCalendarTags(prev => prev.filter(t => t.id !== id));
+  // Events of a deleted tag move to the first remaining tag so they stay visible.
+  const deleteCalendarTag = async (id: string): Promise<boolean> => {
+    const fallbackTag = calendarTags.find(tag => tag.id !== id);
+    if (!fallbackTag) return false;
+
+    const affectedEvents = events.filter(event => event.type === id);
+    const message = affectedEvents.length > 0
+      ? `이 태그를 삭제할까요? 이 태그의 일정 ${affectedEvents.length}개는 '${fallbackTag.name}' 태그로 옮겨집니다.`
+      : '이 태그를 삭제할까요?';
+    if (!window.confirm(message)) return false;
+
+    const previousTags = calendarTags;
+    const previousEvents = events;
+    setCalendarTags(prev => prev.filter(tag => tag.id !== id));
+    if (affectedEvents.length === 0) return true;
+
+    setEvents(prev => prev.map(event => event.type === id ? { ...event, type: fallbackTag.id } : event));
+    if (currentUser) {
+      const { error } = await supabase
+        .from('calendar_events')
+        .update({ tags: [fallbackTag.id], color: fallbackTag.color })
+        .in('id', affectedEvents.map(event => event.id));
+      if (error) {
+        setCalendarTags(previousTags);
+        setEvents(previousEvents);
+        alert(`태그를 삭제하지 못했습니다: ${getSupabaseErrorMessage(error, '알 수 없는 오류')}`);
+        return false;
+      }
+    }
+    return true;
   };
 
   const updateAgents = async (agents: AIAgent[]) => {
@@ -4198,7 +4228,16 @@ const App: React.FC = () => {
 
               {currentView === 'calendar' && (
                 <>
-                  <div className="px-3 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => { if (requireAuth()) setCalendarTagModal('new'); }}
+                    className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
+                  >
+                    <Plus size={18} className="shrink-0" />
+                    <span>새 태그</span>
+                  </button>
+
+                  <div className="mt-6 mb-1 px-3">
                     <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">태그 필터</span>
                   </div>
                   <div className="space-y-1">
@@ -4206,8 +4245,8 @@ const App: React.FC = () => {
                       const isVisible = visibleCalendarTagIds.includes(tag.id);
 
                       return (
+                        <div key={tag.id} className="group relative">
                         <button
-                          key={tag.id}
                           type="button"
                           onClick={() => toggleCalendarTagFilter(tag.id)}
                           className={`calendar-tag-filter-item w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
@@ -4228,8 +4267,18 @@ const App: React.FC = () => {
                           >
                             {isVisible && <Check size={12} className="text-white" strokeWidth={3} />}
                           </span>
-                          <span className="min-w-0 flex-1 truncate text-[15px] leading-5 font-normal">{tag.name}</span>
+                          <span className="min-w-0 flex-1 truncate pr-6 text-[15px] leading-5 font-normal">{tag.name}</span>
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => { if (requireAuth()) setCalendarTagModal(tag.id); }}
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
+                          aria-label={`${tag.name} 태그 수정`}
+                          title="태그 수정"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -4331,6 +4380,20 @@ const App: React.FC = () => {
           </div>
         )}
       </main>
+
+      {calendarTagModal && (
+        <CalendarTagModal
+          key={calendarTagModal}
+          tag={calendarTagModal === 'new' ? null : calendarTags.find(tag => tag.id === calendarTagModal)}
+          canDelete={calendarTags.length > 1}
+          onClose={() => setCalendarTagModal(null)}
+          onSave={(name, color) => {
+            if (calendarTagModal === 'new') addCalendarTag(name, color);
+            else updateCalendarTag(calendarTagModal, { name, color });
+          }}
+          onDelete={calendarTagModal === 'new' ? undefined : () => deleteCalendarTag(calendarTagModal)}
+        />
+      )}
 
       {isSettingsModalOpen && (
         <div

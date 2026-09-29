@@ -235,15 +235,23 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
               {TODO_TAB_COLOR_OPTIONS.map(option => (
                 <button
                   key={option.value}
+                  type="button"
                   onClick={() => setColor(option.value)}
-                  className={`todo-color-swatch w-8 h-8 rounded-full transition-transform ${
-                    color === option.value ? 'scale-110 ring-2 ring-offset-2 ring-[#d4d4d4]' : 'hover:scale-105'
+                  className={`todo-color-swatch flex w-8 h-8 items-center justify-center rounded-full transition-transform ${
+                    color === option.value ? 'is-selected' : 'hover:scale-105'
                   }`}
                   style={{
                     '--todo-tab-color': option.value,
                     '--todo-tab-dark-color': option.dark,
                   } as React.CSSProperties}
-                />
+                  aria-label={option.label}
+                  aria-pressed={color === option.value}
+                  title={option.label}
+                >
+                  {color === option.value && (
+                    <Check size={16} strokeWidth={3} style={{ color: option.checkColor || '#ffffff' }} />
+                  )}
+                </button>
               ))}
             </div>
           </div>
@@ -1105,10 +1113,6 @@ const TodoView: React.FC<TodoViewProps> = ({
     if (filterMode === UNASSIGNED_TAB_FILTER) return isUnassignedList(list);
     return list.tabId === filterMode;
   };
-  const openNewListModal = (tabId?: string) => {
-    const fallbackTabId = tabIdSet.has(filterMode) ? filterMode : sortedTabs[0]?.id;
-    setNewListTabId(tabId || fallbackTabId || '');
-  };
 
   useEffect(() => {
     // Fall back to "all" when the selected tab disappears (deleted, or no unassigned lists left).
@@ -1451,24 +1455,15 @@ const TodoView: React.FC<TodoViewProps> = ({
     <>
       <button
         type="button"
-        onClick={() => openNewListModal()}
+        onClick={() => setNewTabModal(true)}
         className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
       >
         <Plus size={18} className="shrink-0" />
-        <span>새 목록</span>
+        <span>새 탭</span>
       </button>
 
-      <div className="group mt-6 mb-1 flex items-center justify-between px-3">
+      <div className="mt-6 mb-1 px-3">
         <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">탭</span>
-        <button
-          type="button"
-          onClick={() => setNewTabModal(true)}
-          className="rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
-          aria-label="탭 추가"
-          title="탭 추가"
-        >
-          <Plus size={14} />
-        </button>
       </div>
       <div className="space-y-0.5">
         {renderFilterRow('all', '모두 보기', lists.length)}
@@ -1625,7 +1620,7 @@ const TodoView: React.FC<TodoViewProps> = ({
                             <button
                               key={ADD_LIST_TILE}
                               type="button"
-                              onClick={() => openNewListModal(section.id)}
+                              onClick={() => setNewListTabId(section.id)}
                               className="flex h-12 w-full items-center gap-2.5 rounded-xl bg-[#f7f7f7] px-4 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
                             >
                               <Plus size={18} className="shrink-0" />
