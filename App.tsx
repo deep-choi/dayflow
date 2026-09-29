@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ViewState, CalendarEvent, Todo, JournalEntry, AIAgent, ActivityItem, AppSettings, TodoList, TodoTab, TodoStep, CalendarTag, JournalCategory, User, ChatSession, ChatMessage, PersonaMemory, PersonaMemoryType, RoutineProgress, AgentUsageStats, ThemeMode } from './types';
-import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, CircleHelp } from 'lucide-react';
+import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, ChevronDown, Plus, Trash2, Search, Layout, MoreVertical, User as UserIcon, X, Users, Menu, PanelLeftClose, PanelLeftOpen, CircleHelp, History } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { supabase } from './utils/supabase';
 import { useRegisterSW } from 'virtual:pwa-register/react';
@@ -694,6 +694,7 @@ const DEFAULT_TODO_LISTS: TodoList[] = [
 
 const THEME_STORAGE_KEY = 'dayflow-theme';
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'dayflow-sidebar-collapsed';
+const SIDEBAR_RAIL_LABELS: Partial<Record<ViewState, string>> = { chat: '채팅' };
 const THEME_META_COLOR = {
   light: '#ffffff',
   dark: '#0a0a0a',
@@ -748,15 +749,6 @@ const applyThemeToDocument = (theme: ThemeMode | undefined) => {
 const ROUTINE_DATE_FORMAT = 'yyyy-MM-dd';
 
 const getTodayDate = (): string => format(new Date(), ROUTINE_DATE_FORMAT);
-
-const parseJournalEntryDate = (dateValue?: string): Date | null => {
-  if (!dateValue) return null;
-  const parsed = parseISO(dateValue);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-};
-
-const getJournalEntryTime = (entry: JournalEntry): number =>
-  parseJournalEntryDate(entry.date)?.getTime() ?? 0;
 
 const isRoutineTab = (tab: TodoTab): boolean => {
   const normalizedName = (tab.name || '').toLowerCase();
@@ -1139,6 +1131,7 @@ const App: React.FC = () => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const sidebarProfileButtonRef = useRef<HTMLButtonElement>(null);
+  const [sidebarPanelSlot, setSidebarPanelSlot] = useState<HTMLDivElement | null>(null);
   const mobileAccountMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   const openSettingsModal = useCallback((tab: SettingsTab = 'account', hideTabs: boolean = false) => {
@@ -3851,6 +3844,7 @@ const App: React.FC = () => {
             onAddStep={(...args) => requireAuth() ? addTodoStep(...args) : undefined}
             onUpdateStep={(...args) => { if (requireAuth()) updateTodoStep(...args); }}
             onDeleteStep={(...args) => { if (requireAuth()) deleteTodoStep(...args); }}
+            sidebarSlot={sidebarPanelSlot}
           />
         );
       case 'journal':
@@ -3868,6 +3862,7 @@ const App: React.FC = () => {
             onAddEntry={(...args) => requireAuth() ? addEntry(...args) : undefined}
             onUpdateEntry={(...args) => { if (requireAuth()) updateEntry(...args); }}
             onDeleteEntry={(...args) => { if (requireAuth()) deleteEntry(...args); }}
+            sidebarSlot={sidebarPanelSlot}
           />
         );
       case 'chat':
@@ -3982,13 +3977,6 @@ const App: React.FC = () => {
   const historySessions = chatSessions
     .filter((session: ChatSession) => hasUserChatMessage(session))
     .sort((a, b) => getChatSessionActivityTime(b) - getChatSessionActivityTime(a));
-  const recentJournalEntries = useMemo(() => {
-    return [...entries].sort((a, b) => {
-      const byDate = getJournalEntryTime(b) - getJournalEntryTime(a);
-      if (byDate !== 0) return byDate;
-      return (a.order ?? 0) - (b.order ?? 0);
-    });
-  }, [entries]);
 
   const handleNewChat = () => {
     setActiveChatSessionId(null);
@@ -4023,313 +4011,237 @@ const App: React.FC = () => {
     <div className="flex h-[100dvh] bg-[#fbfbfa] font-sans selection:bg-black/10 relative overflow-x-hidden">
       {/* Full Page Loading Overlay Removed in v2.6 for "Instant" feel */}
       {/* Sidebar Navigation */}
-      <aside className={`hidden lg:flex ${isSidebarCollapsed ? 'lg:w-[76px] xl:w-[76px]' : 'lg:w-[280px] xl:w-[300px]'} bg-white border-r border-[#e9e9e8] flex-col justify-between transition-all duration-300 z-50 flex-shrink-0`}>
-        <div>
-          {/* Logo Section */}
-          <div className={`h-[72px] flex items-center ${isSidebarCollapsed ? 'justify-center px-3' : 'justify-between gap-3 px-6'}`}>
-            {!isSidebarCollapsed && (
-              <button
-                type="button"
-                onClick={handleNewChat}
-                className="sidebar-brand-logo rounded-lg text-left font-medium tracking-[-0.02em] text-[#37352f] transition-colors hover:text-[var(--color-primary)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-                aria-label="홈 화면으로 이동"
-                title="홈 화면으로 이동"
-              >
-                Dayflow
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setIsSidebarCollapsed(prev => !prev)}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors hover:bg-[#f7f7f7] hover:text-[#37352f]"
-              aria-label={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
-              title={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
-            >
-              {isSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-            </button>
-          </div>
-
-          <nav className="px-3 space-y-1">
-            {navItems.map(item => (
-              <button
-                key={item.id}
-                onClick={() => item.id === 'chat' ? handleNewChat() : setCurrentView(item.id)}
-                className={`
-                  w-full flex items-center ${isSidebarCollapsed ? 'justify-center px-0 py-3' : 'px-3 py-2.5'} rounded-lg transition-colors group
-                  ${currentView === item.id
-                    ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'
-                    : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#37352f]'}
-                `}
-                aria-label={item.label}
-                title={isSidebarCollapsed ? item.label : undefined}
-              >
-                <item.icon size={18} className={currentView === item.id ? 'text-[var(--color-primary)]' : 'text-[#8a8a8a] group-hover:text-[#37352f]'} strokeWidth={currentView === item.id ? 2.5 : 2} />
-                {!isSidebarCollapsed && (
-                  <span className={`ml-3 text-[15px] leading-5 ${currentView === item.id ? 'font-medium text-[var(--color-primary)]' : 'font-normal'}`}>
-                    {item.label}
-                  </span>
-                )}
-              </button>
-            ))}
-          </nav>
-          {
-            !isSidebarCollapsed && currentView === 'calendar' && (
-              <div className="hidden lg:block mt-6 pt-4 border-t border-[#e9e9e8] px-3">
-                <div className="px-3 mb-2">
-                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">태그 필터</span>
-                </div>
-                <div className="space-y-1">
-                  {calendarTags.map(tag => {
-                    const isVisible = visibleCalendarTagIds.includes(tag.id);
-
-                    return (
-                      <button
-                        key={tag.id}
-                        type="button"
-                        onClick={() => toggleCalendarTagFilter(tag.id)}
-                        className={`calendar-tag-filter-item w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
-                          isVisible
-                            ? 'is-active text-[#171717] hover:bg-[#f7f7f7]'
-                            : 'text-[#8a8a8a] hover:bg-[#f7f7f7] hover:text-[#5f5f5f]'
-                        }`}
-                        style={{
-                          '--calendar-tag-color': tag.color,
-                          '--calendar-tag-dark-color': getDarkAdaptiveColor(tag.color),
-                          '--calendar-tag-muted': `${tag.color}66`,
-                        } as React.CSSProperties}
-                      >
-                        <span
-                          className={`calendar-tag-filter-indicator flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] ${
-                            isVisible ? 'is-active' : ''
-                          }`}
-                        >
-                          {isVisible && <Check size={12} className="text-white" strokeWidth={3} />}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-[15px] leading-5 font-normal">{tag.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )
-          }
-          {
-            !isSidebarCollapsed && currentView === 'chat' && (
-              <div className="hidden lg:block mt-6 pt-4 border-t border-[#e9e9e8] px-3">
-                <div className="flex items-center justify-between px-3 mb-2 group">
-                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">채팅 기록</span>
-                  <button
-                    onClick={handleNewChat}
-                    className="p-1 hover:bg-[#f3f3f3] rounded text-[#8a8a8a] opacity-0 group-hover:opacity-100 transition-all"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-                <div className="space-y-1 overflow-y-auto max-h-[400px] scrollbar-hide">
-                  {historySessions.length === 0 ? (
-                    <div className="px-3 py-2 text-[13px] leading-5 text-[#8a8a8a]">
-                      진행 중인 대화가 없습니다.
-                    </div>
-                  ) : (
-                    historySessions
-                      .slice(0, 10)
-                      .map(session => (
-                        <div key={session.id} className="group relative">
-                          <div
-                            onClick={() => {
-                              const resolvedAgentIds = resolveSessionAgentIds(session, aiAgents, activeChatAgentIds);
-                              setActiveChatSessionId(session.id);
-                              setActiveChatAgentIds(resolvedAgentIds);
-                            }}
-                            className={`w-full text-left px-3 py-2 rounded-lg cursor-pointer transition-colors text-[14px] leading-5 group ${activeChatSessionId === session.id
-                              ? 'bg-[#f7f7f7] text-[#171717]'
-                              : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
-                              }`}
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                const resolvedAgentIds = resolveSessionAgentIds(session, aiAgents, activeChatAgentIds);
-                                setActiveChatSessionId(session.id);
-                                setActiveChatAgentIds(resolvedAgentIds);
-                              }
-                            }}
-                          >
-                            <div className="flex items-center">
-                              <span className="truncate flex-1 pr-6">{session.title}</span>
-                            </div>
-                          </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (window.confirm('이 대화 기록을 삭제하시겠습니까?')) {
-                                setChatSessions(prev => prev.filter(s => s.id !== session.id));
-                                if (activeChatSessionId === session.id) setActiveChatSessionId(null);
-                              }
-                            }}
-                            className="absolute right-1 top-1/2 -translate-y-1/2 p-1 hover:bg-[#eeeeee] z-10 rounded text-[#8a8a8a] opacity-0 group-hover:opacity-100 transition-all"
-                            aria-label="채팅 삭제"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      ))
-                  )}
-                </div>
-              </div>
-            )
-          }
-
-          {
-            !isSidebarCollapsed && currentView === 'journal' && (
-              <div className="px-3 overflow-hidden">
-                <div className="border-t border-[#e9e9e8] pt-6 mt-6 mb-2 px-3">
-                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">카테고리</span>
-                </div>
-
-                <div className="space-y-0.5">
-                  <button
-                    onClick={() => setSelectedJournalCategory('all')}
-                    className={`w-full flex items-center px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${selectedJournalCategory === 'all' ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
-                  >
-                    <span className="flex-1 text-left text-[15px] leading-5">전체</span>
-                    <span className={`text-[13px] leading-5 ${selectedJournalCategory === 'all' ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{entries.length}</span>
-                  </button>
-
-                  {journalCategories.map(cat => {
-                    const isActive = selectedJournalCategory === cat.name;
-
-                    return (
-                      <div
-                        key={cat.id}
-                        className="relative group/cat"
-                      >
-                        <button
-                          onClick={() => setSelectedJournalCategory(cat.name)}
-                          className={`w-full flex items-center px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${isActive ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
-                        >
-                          <span className="truncate flex-1 text-left text-[15px] leading-5">{cat.name}</span>
-                          <span className={`text-[13px] leading-5 ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>
-                            {entries.filter(e => e.category === cat.name).length}
-                          </span>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Entry List / Record List */}
-                <div className="border-t border-[#e9e9e8] pt-6 mt-6 mb-2 px-3">
-                  <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">기록 목록</span>
-                </div>
-                <div className="max-h-[320px] space-y-0.5 overflow-y-auto pr-1 custom-scrollbar">
-                  {recentJournalEntries.length === 0 ? (
-                    <div className="px-3 py-2 text-[13px] leading-5 text-[#8a8a8a]">
-                      아직 기록이 없습니다.
-                    </div>
-                  ) : (
-                    recentJournalEntries.map((entry) => {
-                      const isSelected = selectedJournalId === entry.id;
-
-                      return (
-                        <button
-                          key={entry.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedJournalCategory('all');
-                            setSelectedJournalId(entry.id);
-                          }}
-                          className={`journal-record-item w-full truncate rounded-lg px-3 py-2 text-left text-[15px] leading-5 transition-colors ${
-                            isSelected
-                              ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium'
-                              : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
-                          }`}
-                        >
-                          {entry.title || '제목 없음'}
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )
-          }
-
-        </div>
-
-        {/* Bottom Section: Customer support and user profile */}
-        <div className={`relative shrink-0 ${isSidebarCollapsed ? 'p-3' : 'p-4'}`}>
+      <aside className="hidden lg:flex h-full bg-white border-r border-[#e9e9e8] z-50 flex-shrink-0">
+        {/* Icon Rail */}
+        <div className="flex w-[72px] shrink-0 flex-col items-center bg-[#f7f7f7] py-3">
           <button
             type="button"
-            onClick={() => setCurrentView('support')}
-            className={`${isSidebarCollapsed ? 'mx-auto mb-3 flex h-11 w-11 items-center justify-center p-0' : 'mb-3 flex w-full items-center gap-3 rounded-[12px] px-3 py-2.5'} text-[#5f5f5f] transition-colors hover:bg-[#f7f7f7] hover:text-[#171717]`}
-            aria-label="고객지원"
-            title={isSidebarCollapsed ? '고객지원' : undefined}
+            onClick={() => setIsSidebarCollapsed(prev => !prev)}
+            className="mb-4 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors hover:bg-[var(--app-surface-hover)] hover:text-[#37352f]"
+            aria-label={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
+            title={isSidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
           >
-            <CircleHelp size={18} className="shrink-0 text-[#8a8a8a]" />
-            {!isSidebarCollapsed && <span className="text-[14px] leading-5 font-medium">고객지원</span>}
+            {isSidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button>
-          {currentUser ? (
-            <>
-              <button
-                ref={sidebarProfileButtonRef}
-                type="button"
-                onClick={() => setIsUserMenuOpen((prev) => !prev)}
-                className={`${isSidebarCollapsed ? 'mx-auto flex h-11 w-11 items-center justify-center rounded-xl p-0' : 'w-full rounded-[14px] p-3 text-left'} bg-white transition-colors hover:bg-[#f7f7f7] ${isUserMenuOpen ? 'bg-[#f7f7f7]' : ''}`}
-                title="프로필 및 설정 메뉴"
-                aria-label="프로필 및 설정 메뉴 열기"
-              >
-                <div className={`flex items-center min-w-0 ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
-                  <div className="w-9 h-9 rounded-full bg-[#00a67d] text-white flex items-center justify-center text-[14px] leading-5 font-medium flex-shrink-0 overflow-hidden shadow-xs">
-                    {currentUser?.avatar ? (
-                      <img src={currentUser.avatar} alt={currentUser.name} style={getAvatarImageStyle(currentUser.avatarFrame)} className="h-full w-full object-cover" />
-                    ) : (
-                      currentUser?.name?.[0]?.toUpperCase() || 'U'
-                    )}
-                  </div>
-                  {!isSidebarCollapsed && (
-                    <>
-                      <div className="min-w-0 flex-1 text-left">
-                        <div className="text-[14px] leading-5 font-medium text-[#37352f] truncate">{currentUser?.name || 'JNMED'}</div>
-                        <div className="text-[12px] leading-4 font-normal text-[#8a8a8a] truncate mt-0.5">
-                          {currentUser?.email || 'jnmed5672@gmail.com'}
-                        </div>
-                      </div>
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8a8a8a] transition-colors">
-                        <MoreVertical size={16} />
-                      </span>
-                    </>
-                  )}
-                </div>
-              </button>
 
-              <UserMenuPopover
-                isOpen={isUserMenuOpen}
-                onClose={() => setIsUserMenuOpen(false)}
-                currentUser={currentUser}
-                triggerRef={sidebarProfileButtonRef}
-                isSidebarCollapsed={isSidebarCollapsed}
-                onOpenTab={(tab, hideTabs = true) => openSettingsModal(tab, hideTabs)}
-                onOpenFullSettings={() => openSettingsModal('persona', false)}
-                onLogout={handleLogout}
-              />
-            </>
-          ) : (
-            <div className={isSidebarCollapsed ? 'flex justify-center' : 'px-1'}>
+          <nav className="flex w-full flex-col items-center gap-3 px-2">
+            {navItems.map(item => {
+              const isActive = currentView === item.id;
+              const railLabel = SIDEBAR_RAIL_LABELS[item.id] ?? item.label;
+
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => item.id === 'chat' ? handleNewChat() : setCurrentView(item.id)}
+                  className="group flex w-full flex-col items-center gap-1"
+                  aria-label={item.label}
+                  title={item.label}
+                >
+                  <span
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${isActive
+                      ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'
+                      : 'text-[#8a8a8a] group-hover:bg-[var(--app-surface-hover)] group-hover:text-[#37352f]'}`}
+                  >
+                    <item.icon size={20} strokeWidth={isActive ? 2.5 : 2} />
+                  </span>
+                  <span className={`text-[11px] leading-4 ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#5f5f5f]'}`}>
+                    {railLabel}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Rail Bottom: Customer support and user profile */}
+          <div className="relative mt-auto flex w-full flex-col items-center gap-3 px-2">
+            <button
+              type="button"
+              onClick={() => setCurrentView('support')}
+              className="group flex w-full flex-col items-center gap-1"
+              aria-label="고객지원"
+              title="고객지원"
+            >
+              <span className="flex h-11 w-11 items-center justify-center rounded-xl text-[#8a8a8a] transition-colors group-hover:bg-[var(--app-surface-hover)] group-hover:text-[#37352f]">
+                <CircleHelp size={20} />
+              </span>
+              <span className="text-[11px] leading-4 font-normal text-[#5f5f5f]">고객지원</span>
+            </button>
+            {currentUser ? (
+              <>
+                <button
+                  ref={sidebarProfileButtonRef}
+                  type="button"
+                  onClick={() => setIsUserMenuOpen((prev) => !prev)}
+                  className="group flex w-full flex-col items-center gap-1"
+                  title="프로필 및 설정 메뉴"
+                  aria-label="프로필 및 설정 메뉴 열기"
+                >
+                  <span className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors group-hover:bg-[var(--app-surface-hover)] ${isUserMenuOpen ? 'bg-[var(--app-surface-hover)]' : ''}`}>
+                    <span className="w-8 h-8 rounded-full bg-[#00a67d] text-white flex items-center justify-center text-[13px] leading-5 font-medium overflow-hidden shadow-xs">
+                      {currentUser?.avatar ? (
+                        <img src={currentUser.avatar} alt={currentUser.name} style={getAvatarImageStyle(currentUser.avatarFrame)} className="h-full w-full object-cover" />
+                      ) : (
+                        currentUser?.name?.[0]?.toUpperCase() || 'U'
+                      )}
+                    </span>
+                  </span>
+                  <span className="text-[11px] leading-4 font-normal text-[#5f5f5f]">내 정보</span>
+                </button>
+
+                <UserMenuPopover
+                  isOpen={isUserMenuOpen}
+                  onClose={() => setIsUserMenuOpen(false)}
+                  currentUser={currentUser}
+                  triggerRef={sidebarProfileButtonRef}
+                  isSidebarCollapsed
+                  onOpenTab={(tab, hideTabs = true) => openSettingsModal(tab, hideTabs)}
+                  onOpenFullSettings={() => openSettingsModal('persona', false)}
+                  onLogout={handleLogout}
+                />
+              </>
+            ) : (
               <button
-                onClick={() => {
-                  openAuthModal('login');
-                }}
-                className={`${isSidebarCollapsed ? 'h-11 w-11 px-0' : 'w-full gap-2 px-3 py-2'} flex items-center justify-center border border-[#e9e9e8] bg-[#f7f7f7] text-[#37352f] text-[14px] leading-5 font-normal rounded-lg hover:bg-[#eeeeee] transition-all`}
+                type="button"
+                onClick={() => openAuthModal('login')}
+                className="group flex w-full flex-col items-center gap-1"
                 aria-label="로그인 / 가입하기"
                 title="로그인 / 가입하기"
               >
-                <UserIcon size={14} strokeWidth={3} />
-                {!isSidebarCollapsed && '로그인 / 가입하기'}
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl text-[#8a8a8a] transition-colors group-hover:bg-[var(--app-surface-hover)] group-hover:text-[#37352f]">
+                  <UserIcon size={20} />
+                </span>
+                <span className="text-[11px] leading-4 font-normal text-[#5f5f5f]">로그인</span>
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
+
+        {/* Context Panel */}
+        {!isSidebarCollapsed && (
+          <div className="flex min-h-0 w-[208px] xl:w-[228px] flex-col">
+            <div className="h-[72px] shrink-0 flex items-center px-5">
+              <h2 className="truncate text-[18px] leading-6 font-semibold tracking-[-0.02em] text-[#37352f]">
+                {SIDEBAR_RAIL_LABELS[currentView] ?? headerLabel}
+              </h2>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-4 custom-scrollbar">
+              {currentView === 'chat' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleNewChat}
+                    className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
+                  >
+                    <Plus size={18} className="shrink-0" />
+                    <span>새 대화</span>
+                  </button>
+
+                  <div className="mt-4 mb-1 flex items-center gap-2.5 px-3 py-2 text-[15px] leading-5 font-medium text-[#37352f]">
+                    <History size={16} className="shrink-0" />
+                    <span>최근 기록</span>
+                  </div>
+                  <div className="space-y-1">
+                    {historySessions.length === 0 ? (
+                      <div className="px-3 py-2 text-[13px] leading-5 text-[#8a8a8a]">
+                        진행 중인 대화가 없습니다.
+                      </div>
+                    ) : (
+                      historySessions
+                        .slice(0, 10)
+                        .map(session => (
+                          <div key={session.id} className="group relative">
+                            <div
+                              onClick={() => {
+                                const resolvedAgentIds = resolveSessionAgentIds(session, aiAgents, activeChatAgentIds);
+                                setActiveChatSessionId(session.id);
+                                setActiveChatAgentIds(resolvedAgentIds);
+                              }}
+                              className={`w-full text-left px-3 py-2 rounded-lg cursor-pointer transition-colors text-[14px] leading-5 group ${activeChatSessionId === session.id
+                                ? 'bg-[#f7f7f7] text-[#171717]'
+                                : 'text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
+                                }`}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  const resolvedAgentIds = resolveSessionAgentIds(session, aiAgents, activeChatAgentIds);
+                                  setActiveChatSessionId(session.id);
+                                  setActiveChatAgentIds(resolvedAgentIds);
+                                }
+                              }}
+                            >
+                              <div className="flex items-center">
+                                <span className="truncate flex-1 pr-6">{session.title}</span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (window.confirm('이 대화 기록을 삭제하시겠습니까?')) {
+                                  setChatSessions(prev => prev.filter(s => s.id !== session.id));
+                                  if (activeChatSessionId === session.id) setActiveChatSessionId(null);
+                                }
+                              }}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 p-1 hover:bg-[#eeeeee] z-10 rounded text-[#8a8a8a] opacity-0 group-hover:opacity-100 transition-all"
+                              aria-label="채팅 삭제"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </>
+              )}
+
+              {currentView === 'calendar' && (
+                <>
+                  <div className="px-3 mb-2">
+                    <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">태그 필터</span>
+                  </div>
+                  <div className="space-y-1">
+                    {calendarTags.map(tag => {
+                      const isVisible = visibleCalendarTagIds.includes(tag.id);
+
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onClick={() => toggleCalendarTagFilter(tag.id)}
+                          className={`calendar-tag-filter-item w-full flex items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
+                            isVisible
+                              ? 'is-active text-[#171717] hover:bg-[#f7f7f7]'
+                              : 'text-[#8a8a8a] hover:bg-[#f7f7f7] hover:text-[#5f5f5f]'
+                          }`}
+                          style={{
+                            '--calendar-tag-color': tag.color,
+                            '--calendar-tag-dark-color': getDarkAdaptiveColor(tag.color),
+                            '--calendar-tag-muted': `${tag.color}66`,
+                          } as React.CSSProperties}
+                        >
+                          <span
+                            className={`calendar-tag-filter-indicator flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] ${
+                              isVisible ? 'is-active' : ''
+                            }`}
+                          >
+                            {isVisible && <Check size={12} className="text-white" strokeWidth={3} />}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-[15px] leading-5 font-normal">{tag.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {(currentView === 'todo' || currentView === 'journal') && (
+                <div ref={setSidebarPanelSlot} />
+              )}
+            </div>
+          </div>
+        )}
       </aside>
 
       {/* Main Content Area */}

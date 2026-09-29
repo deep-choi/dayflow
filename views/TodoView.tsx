@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Todo, TodoList, TodoTab, TodoStep } from '../types';
 import { Check, ChevronRight, MoreVertical, CalendarIcon, Trash2, Plus, GripVertical, AlertCircle, X, Maximize2, CheckSquare, Layout, Edit3 } from '../components/Icons';
 import { format, isToday, isTomorrow, isValid, parseISO } from 'date-fns';
@@ -49,6 +50,7 @@ interface TodoViewProps {
   onAddStep: (title: string, listId: string) => void;
   onUpdateStep: (id: string, updates: Partial<TodoStep>) => void;
   onDeleteStep: (id: string) => void;
+  sidebarSlot?: HTMLElement | null;
 }
 
 
@@ -1069,8 +1071,10 @@ const TodoView: React.FC<TodoViewProps> = ({
   steps,
   onAddStep,
   onUpdateStep,
-  onDeleteStep
+  onDeleteStep,
+  sidebarSlot
 }) => {
+  const hasSidebarSlot = Boolean(sidebarSlot);
   const [filterMode, setFilterMode] = useState<string>('all');
   const [listSettingsModal, setListSettingsModal] = useState<string | null>(null);
   const [newListModal, setNewListModal] = useState(false);
@@ -1357,6 +1361,76 @@ const TodoView: React.FC<TodoViewProps> = ({
     }),
   };
 
+  const sortedTabs = [...tabs].sort((a, b) => a.order - b.order);
+
+  const sidebarContent = (
+    <>
+      <button
+        type="button"
+        onClick={() => setNewListModal(true)}
+        className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
+      >
+        <Plus size={18} className="shrink-0" />
+        <span>새 목록</span>
+      </button>
+
+      <div className="group mt-6 mb-1 flex items-center justify-between px-3">
+        <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">탭</span>
+        <button
+          type="button"
+          onClick={() => setNewTabModal(true)}
+          className="rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label="탭 추가"
+          title="탭 추가"
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      <div className="space-y-0.5">
+        <button
+          type="button"
+          onClick={() => setFilterMode('all')}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${filterMode === 'all' ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
+        >
+          <span className="flex-1 truncate text-left">모두 보기</span>
+          <span className={`text-[13px] leading-5 ${filterMode === 'all' ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{lists.length}</span>
+        </button>
+
+        {sortedTabs.map(tab => {
+          const isActive = filterMode === tab.id;
+          const listCount = lists.filter(list => list.tabId === tab.id).length;
+
+          return (
+            <div key={tab.id} className="group relative">
+              <button
+                type="button"
+                onClick={() => setFilterMode(tab.id)}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${isActive ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
+                style={{
+                  '--todo-tab-color': tab.color,
+                  '--todo-tab-dark-color': getDarkAdaptiveColor(tab.color),
+                } as React.CSSProperties}
+              >
+                <span className="todo-tab-dot h-2 w-2 shrink-0 rounded-full" />
+                <span className="flex-1 truncate text-left">{tab.name}</span>
+                <span className={`text-[13px] leading-5 transition-opacity group-hover:opacity-0 ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{listCount}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTabSettingsModal(tab.id)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a8a8a] opacity-0 transition-all hover:bg-[#eeeeee] hover:text-[#171717] group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`${tab.name} 탭 편집`}
+                title="탭 편집"
+              >
+                <Edit3 size={13} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+
   return (
     <DndContext
       sensors={sensors}
@@ -1374,11 +1448,12 @@ const TodoView: React.FC<TodoViewProps> = ({
         onMouseLeave={handleMouseUp}
         style={{ cursor: isPanning ? 'grabbing' : 'auto' }}
       >
-        <div className="hidden min-h-16 sm:flex px-4 sm:px-8 border-b border-gray-100 items-center">
+        {sidebarSlot && createPortal(sidebarContent, sidebarSlot)}
+        <div className={`hidden min-h-16 sm:flex ${hasSidebarSlot ? 'lg:hidden' : ''} px-4 sm:px-8 border-b border-gray-100 items-center`}>
           <h1 className="text-lg font-medium text-[#37352f]">할 일</h1>
         </div>
 
-        <div className="px-4 pt-7 pb-5 sm:px-8">
+        <div className={`px-4 pt-7 pb-5 sm:px-8 ${hasSidebarSlot ? 'lg:hidden' : ''}`}>
           <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar scroll-smooth">
             <button
               onClick={() => setFilterMode('all')}
@@ -1390,7 +1465,7 @@ const TodoView: React.FC<TodoViewProps> = ({
               모두 보기
             </button>
 
-            {[...tabs].sort((a, b) => a.order - b.order).map(tab => (
+            {sortedTabs.map(tab => (
               <div key={tab.id} className="relative group flex-shrink-0">
                 <button
                   onClick={() => setFilterMode(tab.id)}
@@ -1424,7 +1499,7 @@ const TodoView: React.FC<TodoViewProps> = ({
         </div>
 
         {/* Infinite Canvas Content Area */}
-        <div className="flex-1 pt-1 pb-8 px-4 sm:px-8 min-w-fit min-h-fit">
+        <div className={`flex-1 pt-1 pb-8 px-4 sm:px-8 min-w-fit min-h-fit ${hasSidebarSlot ? 'lg:pt-8' : ''}`}>
           <SortableContext
             items={sortedLists.map(l => l.id)}
             strategy={rectSortingStrategy}

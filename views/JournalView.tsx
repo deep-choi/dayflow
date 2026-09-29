@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { JournalEntry, JournalCategory } from '../types';
 import {
   Trash2,
@@ -25,6 +26,7 @@ interface JournalViewProps {
   onAddEntry: (title: string, content: string, category: string) => void;
   onUpdateEntry: (id: string, updates: Partial<JournalEntry>) => void;
   onDeleteEntry: (id: string) => void;
+  sidebarSlot?: HTMLElement | null;
 }
 
 const DEFAULT_CATEGORY_NAME = '메모장';
@@ -70,12 +72,15 @@ const JournalView: React.FC<JournalViewProps> = ({
   selectedCategory,
   searchQuery,
   onSelectId,
+  onSelectCategory,
   onSearchQuery,
   onAddCategory,
   onAddEntry,
   onUpdateEntry,
   onDeleteEntry,
+  sidebarSlot,
 }) => {
+  const hasSidebarSlot = Boolean(sidebarSlot);
   const [isWriting, setIsWriting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showActions, setShowActions] = useState(false);
@@ -231,9 +236,95 @@ const JournalView: React.FC<JournalViewProps> = ({
     setIsAddingCategory(false);
   };
 
+  const sidebarContent = (
+    <>
+      <button
+        type="button"
+        onClick={startWriting}
+        className="w-full flex items-center gap-2.5 rounded-lg bg-[#f7f7f7] px-3 py-2.5 text-[15px] leading-5 font-medium text-[#37352f] transition-colors hover:bg-[#eeeeee]"
+      >
+        <Plus size={18} className="shrink-0" />
+        <span>새 메모</span>
+      </button>
+
+      <div className="relative mt-2">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9b9a97]" />
+        <input
+          type="text"
+          placeholder="메모 검색"
+          value={searchQuery}
+          onChange={(event) => onSearchQuery(event.target.value)}
+          className="h-9 w-full rounded-lg border border-[#e9e9e8] bg-white pl-9 pr-3 text-[14px] font-normal text-[#171717] transition-colors placeholder:text-[#b5b5b5] focus:border-[var(--color-primary)] focus:outline-none"
+        />
+      </div>
+
+      <div className="mt-6 mb-1 px-3">
+        <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">카테고리</span>
+      </div>
+      <div className="space-y-0.5">
+        {[{ id: 'all', name: 'all', label: '전체', count: entries.length }, ...categories.map(category => ({
+          id: category.id,
+          name: category.name,
+          label: category.name,
+          count: entries.filter(entry => entry.category === category.name).length,
+        }))].map(item => {
+          const isActive = selectedCategory === item.name;
+
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onSelectCategory(item.name)}
+              className={`w-full flex items-center px-3 py-2 rounded-lg transition-colors text-[15px] leading-5 ${isActive ? 'bg-[var(--color-primary-light)] text-[var(--color-primary)] font-medium' : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'}`}
+            >
+              <span className="truncate flex-1 text-left">{item.label}</span>
+              <span className={`text-[13px] leading-5 ${isActive ? 'font-medium text-[var(--color-primary)]' : 'font-normal text-[#8a8a8a]'}`}>{item.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-6 mb-1 px-3">
+        <span className="text-[13px] leading-5 font-normal text-[#8a8a8a]">메모</span>
+      </div>
+      <div className="space-y-0.5">
+        {filteredEntries.length === 0 ? (
+          <div className="px-3 py-2 text-[13px] leading-5 text-[#8a8a8a]">
+            {entries.length === 0 ? '아직 메모가 없습니다.' : '검색 결과가 없습니다.'}
+          </div>
+        ) : (
+          filteredEntries.map(entry => {
+            const isSelected = !isWriting && selectedId === entry.id;
+
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => {
+                  onSelectId(entry.id);
+                  setIsWriting(false);
+                  resetDraft();
+                }}
+                className={`journal-record-item w-full flex items-center gap-2 rounded-lg px-3 py-2 text-left text-[14px] leading-5 transition-colors ${
+                  isSelected
+                    ? 'bg-[#f7f7f7] text-[#171717] font-medium'
+                    : 'font-normal text-[#5f5f5f] hover:bg-[#f7f7f7] hover:text-[#171717]'
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate">{entry.title || '제목 없음'}</span>
+                <span className="shrink-0 text-[12px] leading-4 font-normal text-[#9b9a97]">{formatDateShort(entry.date)}</span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
-      <header className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} min-h-16 flex-col gap-3 border-b border-[#e9e9e8] px-4 py-3 sm:px-8 lg:flex-row lg:items-center lg:justify-between`}>
+      {sidebarSlot && createPortal(sidebarContent, sidebarSlot)}
+      <header className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} ${hasSidebarSlot ? 'lg:hidden' : ''} min-h-16 flex-col gap-3 border-b border-[#e9e9e8] px-4 py-3 sm:px-8 lg:flex-row lg:items-center lg:justify-between`}>
         <div className="hidden lg:block">
           <h1 className="text-lg font-medium text-[#171717]">메모장</h1>
         </div>
@@ -264,7 +355,7 @@ const JournalView: React.FC<JournalViewProps> = ({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        <aside className={`${isWriting || showMobileDetail ? 'hidden lg:block' : 'block'} h-full min-h-0 w-full overflow-y-auto border-b border-[#e9e9e8] bg-[#fbfbfa] custom-scrollbar lg:h-auto lg:w-[360px] lg:border-b-0 lg:border-r`}>
+        <aside className={`${isWriting || showMobileDetail ? 'hidden lg:block' : 'block'} ${hasSidebarSlot ? 'lg:hidden' : ''} h-full min-h-0 w-full overflow-y-auto border-b border-[#e9e9e8] bg-[#fbfbfa] custom-scrollbar lg:h-auto lg:w-[360px] lg:border-b-0 lg:border-r`}>
           {filteredEntries.map(entry => {
             const isSelected = selectedId === entry.id;
             return (
@@ -490,7 +581,9 @@ const JournalView: React.FC<JournalViewProps> = ({
               </div>
               <h2 className="mb-2 text-base font-medium text-[#171717]">메모를 선택하거나 새로 작성하세요</h2>
               <p className="max-w-[280px] text-sm font-normal leading-relaxed text-[#8a8a8a]">
-                메모를 선택해 내용을 확인하거나, 오른쪽 상단의 새 메모 버튼으로 시작하세요.
+                {hasSidebarSlot
+                  ? '메모를 선택해 내용을 확인하거나, 왼쪽의 새 메모 버튼으로 시작하세요.'
+                  : '메모를 선택해 내용을 확인하거나, 오른쪽 상단의 새 메모 버튼으로 시작하세요.'}
               </p>
             </div>
           )}
