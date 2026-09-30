@@ -1,5 +1,10 @@
-import { ApiUsageStats } from '../types';
-import { DEFAULT_ANTHROPIC_MODEL } from '../utils/aiConfig';
+import { ApiUsageStats, ReasoningEffort } from '../types';
+import {
+    DEFAULT_ANTHROPIC_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    REASONING_TOKEN_HEADROOM,
+    isClaudeAdaptiveThinkingModel,
+} from '../utils/aiConfig';
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -12,7 +17,14 @@ export interface AnthropicChatMessage {
 interface AnthropicCallOptions {
     temperature?: number;
     maxTokens?: number;
+    reasoningEffort?: ReasoningEffort;
 }
+
+const CLAUDE_EFFORT: Record<ReasoningEffort, 'low' | 'medium' | 'high'> = {
+    fast: 'low',
+    balanced: 'medium',
+    deep: 'high',
+};
 
 const normalizeAnthropicMessages = (
     messages: AnthropicChatMessage[]
@@ -46,14 +58,6 @@ const normalizeAnthropicMessages = (
     return { system, messages: merged };
 };
 
-// Dated snapshots (Claude Haiku 4.5 and older) still take `temperature`. From the 4.6
-// generation on, IDs are dateless; the current models (Opus 5.5, Fable 5.1, ...) reject
-// non-default sampling values and think adaptively, steered by `output_config.effort`.
-const isDatedSnapshotModel = (modelName: string): boolean => /-\d{8}$/.test(modelName.trim());
-
-// Thinking counts toward max_tokens, so leave room for it on top of the reply budget.
-const THINKING_TOKEN_HEADROOM = 1024;
-
 const readAnthropicResponseText = (data: any): string => {
     return (data?.content || [])
         .filter((content: any) => content?.type === 'text')
@@ -85,13 +89,17 @@ export const callAnthropicChatAPI = async (
         messages: normalized.messages,
     };
 
-    if (isDatedSnapshotModel(modelName)) {
+    // Dated snapshots (Claude Haiku 4.5 and older) still take `temperature`. From the 4.6
+    // generation on, IDs are dateless; the current models (Opus 5.5, Fable 5.1, ...) reject
+    // non-default sampling values and think adaptively, steered by `output_config.effort`.
+    if (isClaudeAdaptiveThinkingModel(modelName)) {
+        const effort = options?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+        // Thinking counts toward max_tokens, so leave room for it on top of the reply budget.
+        body.max_tokens = replyTokens + REASONING_TOKEN_HEADROOM[effort];
+        body.output_config = { effort: CLAUDE_EFFORT[effort] };
+    } else {
         body.max_tokens = replyTokens;
         body.temperature = options?.temperature ?? 0.5;
-    } else {
-        body.max_tokens = replyTokens + THINKING_TOKEN_HEADROOM;
-        // Everyday chat: keep thinking short so replies stay fast and within budget.
-        body.output_config = { effort: 'low' };
     }
 
     const response = await fetch(`${ANTHROPIC_BASE_URL}/messages`, {

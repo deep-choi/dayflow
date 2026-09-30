@@ -1,5 +1,10 @@
-import { ApiUsageStats } from '../types';
-import { DEFAULT_OPENAI_MODEL } from '../utils/aiConfig';
+import { ApiUsageStats, ReasoningEffort } from '../types';
+import {
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_REASONING_EFFORT,
+    REASONING_TOKEN_HEADROOM,
+    isOpenAIReasoningModel,
+} from '../utils/aiConfig';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -11,7 +16,16 @@ export interface OpenAIChatMessage {
 interface OpenAICallOptions {
     temperature?: number;
     maxTokens?: number;
+    reasoningEffort?: ReasoningEffort;
 }
+
+// `low` is the lightest level every current GPT-5.6/GPT-6 model accepts
+// (Astra rejects `none`, GPT-6.1 Sol rejects `none` and `minimal`).
+const OPENAI_EFFORT: Record<ReasoningEffort, 'low' | 'medium' | 'high'> = {
+    fast: 'low',
+    balanced: 'medium',
+    deep: 'high',
+};
 
 const readOpenAIResponseText = (data: any): string => {
     if (typeof data?.output_text === 'string' && data.output_text.trim()) {
@@ -30,8 +44,8 @@ const readOpenAIResponseText = (data: any): string => {
     return (data?.choices?.[0]?.message?.content || '').trim();
 };
 
-const shouldOmitTemperature = (modelName: string): boolean =>
-    /^gpt-(5\.6|6)-(astra|sol|terra|luna)$/i.test(modelName.trim());
+// Reasoning models (GPT-5.x, GPT-6, o-series) do not accept sampling parameters such as temperature.
+const shouldOmitTemperature = (modelName: string): boolean => isOpenAIReasoningModel(modelName);
 
 export const callOpenAIChatAPI = async (
     apiKey: string,
@@ -54,7 +68,13 @@ export const callOpenAIChatAPI = async (
         store: false,
     };
 
-    // GPT-5.6 and GPT-6 (Astra/Sol/Terra/Luna) do not accept sampling parameters such as temperature.
+    // Reasoning tokens count toward max_output_tokens, so add room for them.
+    if (isOpenAIReasoningModel(modelName)) {
+        const effort = options?.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+        body.reasoning = { effort: OPENAI_EFFORT[effort] };
+        body.max_output_tokens = (options?.maxTokens ?? 768) + REASONING_TOKEN_HEADROOM[effort];
+    }
+
     if (!shouldOmitTemperature(modelName)) {
         body.temperature = options?.temperature ?? 0.5;
     }

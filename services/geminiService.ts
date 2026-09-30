@@ -1,4 +1,4 @@
-import { GoogleGenAI, HarmBlockThreshold, HarmCategory, Type } from "@google/genai";
+import { GoogleGenAI, HarmBlockThreshold, HarmCategory, ThinkingLevel, Type } from "@google/genai";
 import {
   CalendarEvent,
   JournalEntry,
@@ -7,10 +7,14 @@ import {
   ApiConnection,
   ChatGeneratedAction,
   ChatSingleGeneratedAction,
+  ReasoningEffort,
 } from "../types";
 import {
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_REASONING_EFFORT,
+  REASONING_TOKEN_HEADROOM,
   getProviderDefaultBaseUrl,
+  isGeminiThinkingLevelModel,
   isHostedOpenAICompatibleProvider,
   normalizeGeminiModelName,
 } from "../utils/aiConfig";
@@ -64,11 +68,38 @@ const getResponseLengthConfig = (responseLength?: AIAgent['responseLength']) =>
   RESPONSE_LENGTH_CONFIG[responseLength || 'medium'];
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const buildGeminiGenerationConfig = <T extends { temperature?: number }>(modelName: string, config: T): T => {
+const GEMINI_THINKING_LEVEL: Record<ReasoningEffort, ThinkingLevel> = {
+  fast: ThinkingLevel.MINIMAL,
+  balanced: ThinkingLevel.MEDIUM,
+  deep: ThinkingLevel.HIGH,
+};
+
+const buildGeminiGenerationConfig = <T extends { temperature?: number; maxOutputTokens?: number }>(
+  modelName: string,
+  config: T,
+  reasoningEffort: ReasoningEffort = DEFAULT_REASONING_EFFORT,
+): T => {
+  const normalizedModelName = normalizeGeminiModelName(modelName);
+  const nextConfig: Record<string, unknown> = { ...config };
+
   // Gemini 3.5 and later (3.5 Flash-Lite, 3.6-3.8 Flash) no longer accept sampling parameters.
-  if (!/^gemini-3\.[5-9]-/i.test(normalizeGeminiModelName(modelName))) return config;
-  const { temperature: _deprecatedTemperature, ...currentConfig } = config;
-  return currentConfig as T;
+  if (/^gemini-3\.[5-9]-/i.test(normalizedModelName)) {
+    delete nextConfig.temperature;
+  }
+
+  // Gemini 3.x thinks by default (medium), and thought tokens count toward maxOutputTokens.
+  if (isGeminiThinkingLevelModel(normalizedModelName)) {
+    const isProModel = /-pro/i.test(normalizedModelName);
+    nextConfig.thinkingConfig = {
+      // Pro models have no MINIMAL level.
+      thinkingLevel: reasoningEffort === 'fast' && isProModel ? ThinkingLevel.LOW : GEMINI_THINKING_LEVEL[reasoningEffort],
+    };
+    if (typeof config.maxOutputTokens === 'number') {
+      nextConfig.maxOutputTokens = config.maxOutputTokens + REASONING_TOKEN_HEADROOM[reasoningEffort];
+    }
+  }
+
+  return nextConfig as T;
 };
 
 const stripModelfileExamplesForRuntime = (text: string): string => {
@@ -834,7 +865,7 @@ const callTextProviderChatAPI = async (
   apiKey: string,
   messages: ProviderChatMessage[],
   modelName: string,
-  options: { temperature?: number; maxTokens?: number } = {},
+  options: { temperature?: number; maxTokens?: number; reasoningEffort?: ReasoningEffort } = {},
   baseUrl?: string
 ): Promise<string> => {
   if (provider === "ollama") {
@@ -977,6 +1008,8 @@ export interface ChatGenerationOptions {
   sessionTimezone?: string;
   ollamaBaseUrl?: string;
   trialTurnId?: string;
+  /** Applies to the main reply; repair and continuation passes stay fast. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 const sanitizeAction = (): ChatActionResult["action"] => ({ type: "none" });
@@ -1006,6 +1039,7 @@ export const generateChatResponse = async (
     sessionStartedAt = "",
     sessionTimePeriod = "",
     sessionTimezone = "local time",
+    reasoningEffort = DEFAULT_REASONING_EFFORT,
   } = options;
 
   const today = new Date().toISOString().split("T")[0];
@@ -1144,7 +1178,7 @@ ${actionInstruction}
           apiKey,
           [systemMessage, ...providerMessages],
           modelName,
-          { temperature: 0.68, maxTokens: responseLengthConfig.maxOutputTokens },
+          { temperature: 0.68, maxTokens: responseLengthConfig.maxOutputTokens, reasoningEffort },
           options.ollamaBaseUrl
         );
 
@@ -1242,7 +1276,7 @@ ${actionInstruction}
         safetySettings: GEMINI_SAFETY_SETTINGS,
         temperature: 0.68,
         maxOutputTokens: responseLengthConfig.maxOutputTokens,
-      }),
+      }, reasoningEffort),
     });
 
     const firstResult = readGeminiResponseText(response);

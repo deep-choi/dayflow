@@ -16,9 +16,13 @@ import {
 import { generateChatResponse, ChatActionResult } from '../services/geminiService';
 import { Sparkles, Plus, Check } from '../components/Icons';
 import { ArrowUp, Edit3, Save, X, FlaskConical, Zap, ChevronDown, ChevronUp, CheckCircle2, Settings, Users, Cpu } from 'lucide-react';
+import { ReasoningEffortPopover } from '../components/ReasoningEffortPopover';
 import {
     DEFAULT_GEMINI_MODEL,
     DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_REASONING_EFFORT,
+    REASONING_EFFORT_OPTIONS,
+    supportsReasoningEffort,
     CHAT_PROVIDERS as DEFAULT_CHAT_PROVIDERS,
     getActiveAIConfig,
     getAgentAIConfig,
@@ -479,6 +483,26 @@ const ChatView: React.FC<ChatViewProps> = ({
     const [inputValue, setInputValue] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [showToolbar, setShowToolbar] = useState(false);
+    const [isReasoningPopoverOpen, setIsReasoningPopoverOpen] = useState(false);
+    const reasoningControlRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!isReasoningPopoverOpen) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (reasoningControlRef.current && !reasoningControlRef.current.contains(event.target as Node)) {
+                setIsReasoningPopoverOpen(false);
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setIsReasoningPopoverOpen(false);
+        };
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isReasoningPopoverOpen]);
     const [activeModalType, setActiveModalType] = useState<'model' | 'persona' | null>(null);
     const [selectedModalProvider, setSelectedModalProvider] = useState<ApiConnection['provider']>('gemini');
     const [selectedModalModel, setSelectedModalModel] = useState<string>(DEFAULT_GEMINI_MODEL);
@@ -1165,6 +1189,23 @@ const ChatView: React.FC<ChatViewProps> = ({
         };
     };
 
+    const reasoningEffort = settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+    // The trial key goes through a server proxy that doesn't forward thinking settings.
+    const isReasoningEffortSupported = activeAgents.some((activeAgent) => {
+        const config = resolveAgentConfig(activeAgent);
+        return config.apiKey !== DAYFLOW_TRIAL_API_KEY && supportsReasoningEffort(config.provider, config.modelName);
+    });
+    const selectedReasoningOption = REASONING_EFFORT_OPTIONS.find(option => option.id === reasoningEffort) || REASONING_EFFORT_OPTIONS[0];
+    const primaryAgentConfig = resolveAgentConfig(primaryAgent);
+    const primaryModelLabel = primaryAgentConfig.apiKey === DAYFLOW_TRIAL_API_KEY
+        ? '체험 모델'
+        : (getModelOptionsForProvider(primaryAgentConfig.provider).find(option => option.id === primaryAgentConfig.modelName)?.label
+            || primaryAgentConfig.modelName
+            || getConfiguredProviderDisplayName(primaryAgentConfig.provider));
+    const handleReasoningEffortChange = (nextEffort: typeof reasoningEffort) => {
+        onUpdateSettings?.((prev) => ({ ...prev, reasoningEffort: nextEffort }));
+    };
+
     const getAgentConnectionWarning = (targetAgent?: AIAgent): string => {
         if (!targetAgent) return '사용 가능한 AI 연결을 찾지 못했어요. 설정에서 API 연결을 확인해 주세요.';
         if (!targetAgent.connectionId && !getActiveAIConfig(settings)) return '사용 가능한 기본 API 연결이 없어요. 설정이나 페르소나 편집에서 API를 연결해 주세요.';
@@ -1427,6 +1468,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 sessionTimezone,
                                 ollamaBaseUrl: agentConfig.baseUrl,
                                 trialTurnId,
+                                reasoningEffort,
                             }
                         );
 
@@ -1500,6 +1542,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             sessionTimezone,
                             ollamaBaseUrl: singleAgentConfig.baseUrl,
                             trialTurnId,
+                            reasoningEffort,
                         }
                     );
 
@@ -1809,40 +1852,82 @@ const ChatView: React.FC<ChatViewProps> = ({
                         </div>
                     )}
 
-                    <div className="chat-input-shell flex items-center min-w-0 h-14 rounded-[9999px] border border-[#e9e9e8] bg-white shadow-none focus-within:border-[#d4d4d4] transition-all px-2 gap-1.5">
-                        <button
-                            type="button"
-                            onClick={() => setShowToolbar(prev => !prev)}
-                            className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-colors ${showToolbar ? 'bg-blue-600 text-white shadow-xs' : 'text-[#787774] hover:text-[#37352f] hover:bg-[#f4f4f2]'}`}
-                            aria-label={showToolbar ? "도구 닫기" : "도구 열기"}
-                            aria-expanded={showToolbar}
-                            title={showToolbar ? "닫기" : "페르소나 / 모델 선택"}
-                        >
-                            <span className={`flex items-center justify-center transition-transform duration-200 ease-out ${showToolbar ? 'rotate-45' : 'rotate-0'}`}>
-                                <Plus size={20} />
-                            </span>
-                        </button>
+                    <div ref={reasoningControlRef} className="relative">
+                        {isReasoningPopoverOpen && (
+                            <div className="absolute bottom-full right-0 z-[70] mb-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                                <ReasoningEffortPopover
+                                    value={reasoningEffort}
+                                    onChange={handleReasoningEffortChange}
+                                    isSupported={isReasoningEffortSupported}
+                                    modelLabel={primaryModelLabel}
+                                    onOpenModelPicker={() => {
+                                        setIsReasoningPopoverOpen(false);
+                                        setActiveModalType('model');
+                                    }}
+                                />
+                            </div>
+                        )}
 
-                        <input
-                            type="text"
-                            value={inputValue}
-                            onChange={(e) => setInputValue(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                            placeholder={isGuest ? "로그인하고 Dayflow와 대화해보세요..." : (onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요...")}
-                            className="chat-input-field flex-1 min-w-0 h-full px-2 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
-                            disabled={isProcessing}
-                        />
+                        <div className="chat-input-shell min-w-0 rounded-[28px] border border-[#e9e9e8] bg-white shadow-none focus-within:border-[#d4d4d4] transition-all px-2.5 pt-2 pb-2">
+                            <input
+                                type="text"
+                                value={inputValue}
+                                onChange={(e) => setInputValue(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                                placeholder={isGuest ? "로그인하고 Dayflow와 대화해보세요..." : (onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요...")}
+                                className="chat-input-field w-full min-w-0 h-11 px-2.5 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
+                                disabled={isProcessing}
+                            />
 
-                        <button
-                            type="button"
-                            onClick={() => handleSend()}
-                            disabled={!inputValue.trim() || isProcessing}
-                            className="chat-send-button shrink-0 w-9 h-9 rounded-[9999px] flex items-center justify-center transition-all disabled:cursor-not-allowed"
-                            aria-label="메시지 전송"
-                            title="메시지 전송"
-                        >
-                            <ArrowUp size={18} strokeWidth={2.4} />
-                        </button>
+                            <div className="flex items-center justify-between gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setIsReasoningPopoverOpen(false);
+                                        setShowToolbar(prev => !prev);
+                                    }}
+                                    className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-colors ${showToolbar ? 'bg-blue-600 text-white shadow-xs' : 'text-[#787774] hover:text-[#37352f] hover:bg-[#f4f4f2]'}`}
+                                    aria-label={showToolbar ? "도구 닫기" : "도구 열기"}
+                                    aria-expanded={showToolbar}
+                                    title={showToolbar ? "닫기" : "페르소나 / 모델 선택"}
+                                >
+                                    <span className={`flex items-center justify-center transition-transform duration-200 ease-out ${showToolbar ? 'rotate-45' : 'rotate-0'}`}>
+                                        <Plus size={20} />
+                                    </span>
+                                </button>
+
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setShowToolbar(false);
+                                            setIsReasoningPopoverOpen(prev => !prev);
+                                        }}
+                                        className={`flex min-w-0 items-center gap-1 rounded-full px-3 h-9 text-[14px] leading-5 transition-colors ${isReasoningPopoverOpen ? 'bg-[#f4f4f2]' : 'hover:bg-[#f4f4f2]'}`}
+                                        aria-haspopup="dialog"
+                                        aria-expanded={isReasoningPopoverOpen}
+                                        title="모델 및 추론 강도"
+                                    >
+                                        <span className="truncate font-medium text-[#37352f]">{primaryModelLabel}</span>
+                                        {isReasoningEffortSupported && (
+                                            <span className="shrink-0 font-normal text-[#8a8a8a]">{selectedReasoningOption.label}</span>
+                                        )}
+                                        <ChevronDown size={14} className="shrink-0 text-[#8a8a8a]" />
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => handleSend()}
+                                        disabled={!inputValue.trim() || isProcessing}
+                                        className="chat-send-button shrink-0 w-9 h-9 rounded-[9999px] flex items-center justify-center transition-all disabled:cursor-not-allowed"
+                                        aria-label="메시지 전송"
+                                        title="메시지 전송"
+                                    >
+                                        <ArrowUp size={18} strokeWidth={2.4} />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

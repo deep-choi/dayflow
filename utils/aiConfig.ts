@@ -1,4 +1,4 @@
-import { AppSettings, ApiConnection } from '../types';
+import { AppSettings, ApiConnection, ReasoningEffort } from '../types';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
 export const DEFAULT_XAI_MODEL = 'grok-4.7';
@@ -86,6 +86,64 @@ export const GLM_MODEL_OPTIONS: ModelOption[] = [
     { id: 'glm-5.1', label: 'GLM-5.1', description: '장기 작업·코딩 강화' },
     { id: 'glm-5', label: 'GLM-5', description: 'Agent·복합 시스템 작업' },
 ];
+
+// ─── Reasoning effort ─────────────────────────────────────────────
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'fast';
+
+export const REASONING_EFFORT_OPTIONS: Array<{ id: ReasoningEffort; label: string; description: string }> = [
+    { id: 'fast', label: '낮음', description: '생각을 최소화하고 바로 답해요' },
+    { id: 'balanced', label: '중간', description: '적당히 생각한 뒤 답해요' },
+    { id: 'deep', label: '높음', description: '충분히 생각해요. 느리고 토큰을 더 써요' },
+];
+
+/**
+ * Extra output tokens to reserve for thinking. Every supported provider counts thinking
+ * toward its output limit, so the reply budget alone would be eaten by the thoughts.
+ */
+export const REASONING_TOKEN_HEADROOM: Record<ReasoningEffort, number> = {
+    fast: 1024,
+    balanced: 4096,
+    deep: 12288,
+};
+
+export const isDeepSeekThinkingModel = (modelName: string): boolean => {
+    const model = modelName.trim().toLowerCase();
+    return model.startsWith('deepseek-v4') || model === 'deepseek-flash';
+};
+
+/** GLM-5.3 models always think; the API rejects turning it off. */
+export const isGlmForcedThinkingModel = (modelName: string): boolean =>
+    /^glm-5\.3/i.test(modelName.trim());
+
+export const isGlmThinkingModel = (modelName: string): boolean =>
+    /^glm-(5|4\.[5-9])/i.test(modelName.trim());
+
+export const isQwenThinkingModel = (modelName: string): boolean =>
+    /^qwen3/i.test(modelName.trim());
+
+export const isOpenAIReasoningModel = (modelName: string): boolean =>
+    /^(gpt-5|gpt-6|o\d)/i.test(modelName.trim());
+
+/** Claude models from the 4.6 generation on use dateless IDs and adaptive thinking. */
+export const isClaudeAdaptiveThinkingModel = (modelName: string): boolean =>
+    !/-\d{8}$/.test(modelName.trim());
+
+export const isGeminiThinkingLevelModel = (modelName: string): boolean =>
+    /^gemini-3\./i.test(normalizeGeminiModelName(modelName));
+
+/** Whether the chat "추론 강도" control changes anything for this model. */
+export const supportsReasoningEffort = (provider: ApiConnection['provider'], modelName: string): boolean => {
+    const model = (modelName || '').trim();
+    if (!model) return false;
+    if (provider === 'openai') return isOpenAIReasoningModel(model);
+    if (provider === 'anthropic') return isClaudeAdaptiveThinkingModel(model);
+    if (provider === 'gemini') return isGeminiThinkingLevelModel(model);
+    if (provider === 'deepseek') return isDeepSeekThinkingModel(model);
+    if (provider === 'qwen') return isQwenThinkingModel(model);
+    if (provider === 'glm') return isGlmThinkingModel(model) && !isGlmForcedThinkingModel(model);
+    if (provider === 'kimi') return model.toLowerCase() === 'kimi-k3';
+    return false;
+};
 
 export const CHAT_PROVIDERS: ApiConnection['provider'][] = [
     'gemini', 'openai', 'anthropic', 'xai', 'deepseek', 'qwen', 'kimi', 'glm', 'ollama', 'custom',

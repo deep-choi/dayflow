@@ -134,8 +134,12 @@ export interface RoutineProgress {
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
+/** How much the chat model thinks before answering (mapped to each provider's reasoning setting). */
+export type ReasoningEffort = 'fast' | 'balanced' | 'deep';
+
 export interface AppSettings {
   chatActionConfirm: boolean;
+  reasoningEffort?: ReasoningEffort;
   theme: ThemeMode;
   geminiApiKey?: string; // @deprecated use apiConnections
   apiConnections: ApiConnection[];
