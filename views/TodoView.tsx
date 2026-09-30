@@ -7,6 +7,8 @@ import { ko } from 'date-fns/locale';
 import {
   DndContext,
   closestCorners,
+  pointerWithin,
+  CollisionDetection,
   KeyboardSensor,
   PointerSensor,
   useSensor,
@@ -44,6 +46,8 @@ interface TodoViewProps {
   onUpdateTodo?: (id: string, updates: Partial<Todo>) => void;
   onToggleTodo: (id: string) => void;
   onDeleteTodo: (id: string) => void;
+  /** Places the dragged todo at the position of `overId`. */
+  onReorderTodo?: (activeId: string, overId: string) => void;
   onDeleteList: (id: string) => void;
   onAddTab: (name: string, color: string) => void;
   onUpdateTab: (id: string, updates: Partial<TodoTab>) => void;
@@ -65,7 +69,7 @@ const Checkbox = ({ checked, onClick }: { checked: boolean; onClick: (e: React.M
   <button
     type="button"
     aria-pressed={checked}
-    className={`todo-check-control ${checked ? 'is-checked' : 'is-unchecked'} w-[18px] h-[18px] mt-0.5 rounded-full border flex-shrink-0 cursor-pointer transition-all flex items-center justify-center
+    className={`todo-check-control ${checked ? 'is-checked' : 'is-unchecked'} w-[18px] h-[18px] mt-px rounded-full border flex-shrink-0 cursor-pointer transition-all flex items-center justify-center
       ${checked
         ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
         : 'border-[#5f6368] hover:bg-[#e8eaed]'
@@ -509,23 +513,26 @@ const SortableTodoItem = ({
             onPointerDown={e => e.stopPropagation()}
           />
         ) : (
-          <p className="text-[14px] text-[#1f1f1f] leading-snug break-words">
+          <p className="text-[14px] text-[#1f1f1f] leading-5 break-words">
             {todo.text}
           </p>
         )}
 
-        <div className="flex flex-wrap gap-2 mt-1.5 items-center">
-          {dueLabel && (
-            <span className="block text-[11px] text-[#d93025] font-medium mr-1.5">
-              {dueLabel}
-            </span>
-          )}
-          {totalSubTasks > 0 && !hideBadge && (
-            <span className={`block text-[11px] px-1.5 py-0.5 rounded font-medium ${completedSubTasks === totalSubTasks ? 'bg-[var(--color-primary)] text-white shadow-sm' : 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'}`}>
-              {completedSubTasks}/{totalSubTasks} 완료
-            </span>
-          )}
-        </div>
+        {/* Only render the meta row when it has content, so single-line todos stay vertically centered. */}
+        {(dueLabel || (totalSubTasks > 0 && !hideBadge)) && (
+          <div className="flex flex-wrap gap-2 mt-1.5 items-center">
+            {dueLabel && (
+              <span className="block text-[11px] text-[#d93025] font-medium mr-1.5">
+                {dueLabel}
+              </span>
+            )}
+            {totalSubTasks > 0 && !hideBadge && (
+              <span className={`block text-[11px] px-1.5 py-0.5 rounded font-medium ${completedSubTasks === totalSubTasks ? 'bg-[var(--color-primary)] text-white shadow-sm' : 'bg-[var(--color-primary-light)] text-[var(--color-primary)]'}`}>
+                {completedSubTasks}/{totalSubTasks} 완료
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Subtasks List */}
         {!isEditing && totalSubTasks > 0 && (
@@ -566,7 +573,7 @@ const SortableTodoItem = ({
       </div>
 
       {!isEditing && (
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-opacity">
+        <div className="-my-0.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 pointer-coarse:opacity-100 transition-opacity">
           <button
             className="p-1 hover:bg-[#e0e0e0] rounded-full text-[#5f6368] transition-all"
             onClick={(e) => {
@@ -728,6 +735,36 @@ const DroppableSection = ({
 };
 
 // Sortable Column (List) Component
+// A board section or sidebar tab row that accepts a dragged list card to move it to `tabId`.
+const TAB_ROW_DROP_PREFIX = 'tab-row-';
+const TAB_SECTION_DROP_PREFIX = 'tab-section-';
+
+const TabDropTarget = ({
+  dropId,
+  tabId,
+  disabled,
+  className = '',
+  children,
+}: {
+  dropId: string;
+  tabId: string;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) => {
+  const { isOver, active, setNodeRef } = useDroppable({
+    id: dropId,
+    data: { type: 'TabTarget', tabId },
+    disabled,
+  });
+  const isListOver = isOver && active?.data.current?.type === 'List' && active.data.current?.list?.tabId !== tabId;
+  return (
+    <div ref={setNodeRef} className={`${className} ${isListOver ? 'todo-tab-drop-active' : ''}`}>
+      {children}
+    </div>
+  );
+};
+
 const SortableList = ({
   list,
   lists,
@@ -792,7 +829,6 @@ const SortableList = ({
 
   const listTodos = todos.filter((t: Todo) => t.listId === list.id);
   const listSteps = steps.filter((s: TodoStep) => s.listId === list.id).sort((a: any, b: any) => a.order - b.order);
-  const listTab = tabs?.find((t: any) => t.id === list.tabId);
   const [draft, setDraft] = useState<{ text: string; stepId?: string | null }>({ text: '', stepId: null });
   const [showCompleted, setShowCompleted] = useState(false);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
@@ -822,21 +858,12 @@ const SortableList = ({
     isMobile,
   };
 
-  if (isDragging) {
-    return (
-      <div
-        ref={setSortableRef}
-        style={style}
-        className="min-w-[300px] w-[300px] h-[400px] bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg opacity-50"
-      />
-    );
-  }
-
+  // While dragging, the card stays in place as a faded ghost so the board layout doesn't jump.
   return (
     <div
       ref={setSortableRef}
       style={style}
-      className={`w-full sm:min-w-[300px] sm:w-[300px] flex flex-col h-fit max-h-full bg-white rounded-xl border border-[#e9e9e8] transition-all flex-shrink-0 ${isDragging ? 'opacity-0' : ''}`}
+      className={`w-full sm:min-w-[300px] sm:w-[300px] flex flex-col h-fit max-h-full bg-white rounded-xl border border-[#e9e9e8] transition-all flex-shrink-0 ${isDragging ? 'opacity-30' : ''}`}
     >
       {/* Column Header - Drag Handle */}
       <div
@@ -860,15 +887,6 @@ const SortableList = ({
         ) : (
           <div className="flex flex-col">
             <div className="flex items-center gap-2">
-              {listTab && (
-                <div
-                  className="todo-tab-dot w-2 h-2 rounded-full flex-shrink-0"
-                  style={{
-                    '--todo-tab-color': listTab.color,
-                    '--todo-tab-dark-color': getDarkAdaptiveColor(listTab.color),
-                  } as React.CSSProperties}
-                />
-              )}
               <h3
                 className="font-medium text-lg text-[#1f1f1f] cursor-text"
                 onClick={(e) => {
@@ -1077,6 +1095,7 @@ const TodoView: React.FC<TodoViewProps> = ({
   onUpdateTodo,
   onToggleTodo,
   onDeleteTodo,
+  onReorderTodo,
   onDeleteList,
   onAddTab,
   onUpdateTab,
@@ -1369,19 +1388,36 @@ const TodoView: React.FC<TodoViewProps> = ({
       // If it's not a todo, handle list reordering normally
       setActiveId(null);
       setActiveType(null);
-      if (!over) return;
+      if (!over || active.data.current?.type !== 'List' || !onUpdateListOrder) return;
       const activeId = active.id as string;
-      const overId = over.id as string;
+      const activeList = lists.find(l => l.id === activeId);
+      if (!activeList) return;
+      const orderedLists = [...lists].sort((a, b) => a.order - b.order);
+      const overData = over.data.current;
 
-      if (active.data.current?.type === 'List' && over.data.current?.type === 'List') {
-        if (activeId !== overId) {
-          const oldIndex = lists.findIndex(l => l.id === activeId);
-          const newIndex = lists.findIndex(l => l.id === overId);
-          const newLists = arrayMove<TodoList>(lists, oldIndex, newIndex);
-          const updatedLists = newLists.map((list, index) => ({ ...list, order: index }));
-          if (onUpdateListOrder) onUpdateListOrder(updatedLists);
-        }
+      // Dropped on a tab (sidebar row or board section): move the card to the end of that tab.
+      if (overData?.type === 'TabTarget') {
+        if (overData.tabId === activeList.tabId) return;
+        const remaining = orderedLists.filter(l => l.id !== activeId);
+        const moved = [...remaining, { ...activeList, tabId: overData.tabId }];
+        onUpdateListOrder(moved.map((list, index) => ({ ...list, order: index })));
+        return;
       }
+
+      // Dropped on another card: take its position, joining its tab if it differs.
+      const overListId: string | undefined = overData?.type === 'List'
+        ? (overData.list?.id ?? overData.listId)
+        : undefined;
+      const overList = overListId ? lists.find(l => l.id === overListId) : undefined;
+      if (!overList || overList.id === activeId) return;
+      const oldIndex = orderedLists.findIndex(l => l.id === activeId);
+      const newIndex = orderedLists.findIndex(l => l.id === overList.id);
+      const updatedLists = arrayMove<TodoList>(orderedLists, oldIndex, newIndex).map((list, index) => ({
+        ...list,
+        order: index,
+        tabId: list.id === activeId ? overList.tabId : list.tabId,
+      }));
+      onUpdateListOrder(updatedLists);
       return;
     }
 
@@ -1403,13 +1439,38 @@ const TodoView: React.FC<TodoViewProps> = ({
       return;
     }
 
-    // Dropped onto another todo
+    // Dropped onto another todo: join its list/step if needed, then take its position.
     const overTodo = todos.find(t => t.id === overId);
-    if (overTodo && onUpdateTodo) {
+    if (overTodo) {
       if ((activeTodo.listId !== overTodo.listId || activeTodo.stepId !== overTodo.stepId) && onUpdateTodo) {
         onUpdateTodo(activeId, { listId: overTodo.listId, stepId: overTodo.stepId });
       }
+      onReorderTodo?.(activeId, overId);
     }
+  };
+
+  // While dragging a todo, prefer the todo row under the pointer over the list/step
+  // containers around it, so reordering inside a card finds the right neighbour.
+  const collisionDetection: CollisionDetection = (args) => {
+    // Dragging a card: a sidebar tab row wins, then another card, then a tab section.
+    if (args.active.data.current?.type === 'List') {
+      const pointerHits = pointerWithin(args);
+      const tabRowHits = pointerHits.filter(hit => String(hit.id).startsWith(TAB_ROW_DROP_PREFIX));
+      if (tabRowHits.length > 0) return tabRowHits;
+      const listHits = pointerHits.filter(hit => hit.id !== args.active.id && lists.some(list => list.id === hit.id));
+      if (listHits.length > 0) return listHits;
+      const sectionHits = pointerHits.filter(hit => String(hit.id).startsWith(TAB_SECTION_DROP_PREFIX));
+      if (sectionHits.length > 0) return sectionHits;
+      return closestCorners({
+        ...args,
+        droppableContainers: args.droppableContainers.filter(container => lists.some(list => list.id === container.id)),
+      });
+    }
+    if (args.active.data.current?.type !== 'Todo') return closestCorners(args);
+    const pointerHits = pointerWithin(args);
+    const todoHits = pointerHits.filter(hit => hit.id !== args.active.id && todos.some(todo => todo.id === hit.id));
+    if (todoHits.length > 0) return todoHits;
+    return pointerHits.length > 0 ? pointerHits : closestCorners(args);
   };
 
   const dropAnimation: DropAnimation = {
@@ -1478,7 +1539,11 @@ const TodoView: React.FC<TodoViewProps> = ({
       </div>
       <div className="space-y-0.5">
         {renderFilterRow('all', '모두 보기', lists.length)}
-        {sortedTabs.map(tab => renderFilterRow(tab.id, tab.name, lists.filter(list => list.tabId === tab.id).length, { tab }))}
+        {sortedTabs.map(tab => (
+          <TabDropTarget key={tab.id} dropId={`${TAB_ROW_DROP_PREFIX}${tab.id}`} tabId={tab.id} disabled={isDragDisabled} className="rounded-lg">
+            {renderFilterRow(tab.id, tab.name, lists.filter(list => list.tabId === tab.id).length, { tab })}
+          </TabDropTarget>
+        ))}
         {unassignedListCount > 0 && renderFilterRow(UNASSIGNED_TAB_FILTER, UNASSIGNED_TAB_LABEL, unassignedListCount, { muted: true })}
       </div>
     </>
@@ -1522,7 +1587,7 @@ const TodoView: React.FC<TodoViewProps> = ({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
@@ -1616,6 +1681,12 @@ const TodoView: React.FC<TodoViewProps> = ({
             <div ref={boardRef} className="flex flex-col gap-10">
               {boardSections.map(section => (
                 <section key={section.id}>
+                <TabDropTarget
+                  dropId={`${TAB_SECTION_DROP_PREFIX}${section.id}`}
+                  tabId={section.id}
+                  disabled={isDragDisabled || !section.tab}
+                  className="-m-3 rounded-2xl p-3"
+                >
                   <div className="mb-4 flex items-center gap-2">
                     {section.tab ? (
                       <span
@@ -1651,6 +1722,7 @@ const TodoView: React.FC<TodoViewProps> = ({
                       </div>
                     ))}
                   </div>
+                </TabDropTarget>
                 </section>
               ))}
             </div>
@@ -1661,8 +1733,11 @@ const TodoView: React.FC<TodoViewProps> = ({
         <DragOverlay dropAnimation={dropAnimation}>
           {activeId ? (
             activeType === 'List' ? (
-              <div className="w-[calc(100vw-32px)] sm:w-[300px] h-[400px] bg-white rounded-xl border border-[#9bbcf3] opacity-90 cursor-grabbing p-4">
-                <div className="font-medium text-lg text-[#1f1f1f]">{lists.find(l => l.id === activeId)?.title}</div>
+              <div className="w-[calc(100vw-32px)] sm:w-[300px] bg-white rounded-xl border border-[#9bbcf3] opacity-95 cursor-grabbing px-4 py-3">
+                <div className="font-medium text-lg text-[#1f1f1f] truncate">{lists.find(l => l.id === activeId)?.title}</div>
+                <div className="mt-0.5 text-[13px] leading-5 text-[#8a8a8a]">
+                  할 일 {todos.filter(todo => todo.listId === activeId && !todo.completed).length}개
+                </div>
               </div>
             ) : (
               <div className="bg-white rounded-lg border border-[#9bbcf3] p-3 flex items-center gap-3 opacity-90 cursor-grabbing ring-1 ring-[#dce8fd] z-50">

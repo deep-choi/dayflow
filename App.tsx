@@ -3447,6 +3447,22 @@ const App: React.FC = () => {
     }
   };
 
+  // Moves a todo to the position of another one. Persisted by syncTodos, which writes
+  // each todo's array index as its `order`.
+  const reorderTodo = (activeId: string, overId: string) => {
+    if (activeId === overId) return;
+    markTodoDataMutated();
+    setTodos(prev => {
+      const fromIndex = prev.findIndex(todo => todo.id === activeId);
+      const toIndex = prev.findIndex(todo => todo.id === overId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
   const deleteTodo = async (id: string) => {
     const removed = todos.find(t => t.id === id);
     if (!removed) return;
@@ -3873,6 +3889,7 @@ const App: React.FC = () => {
             onUpdateTodo={(...args) => { if (requireAuth()) updateTodo(...args); }}
             onToggleTodo={(...args) => { if (requireAuth()) toggleTodo(...args); }}
             onDeleteTodo={(...args) => { if (requireAuth()) deleteTodo(...args); }}
+            onReorderTodo={(...args) => { if (requireAuth()) reorderTodo(...args); }}
             onDeleteList={(...args) => { if (requireAuth()) deleteTodoList(...args); }}
             onAddTab={(...args) => requireAuth() ? addTodoTab(...args) : undefined}
             onUpdateTab={(...args) => { if (requireAuth()) updateTodoTab(...args); }}
