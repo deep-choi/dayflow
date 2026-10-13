@@ -51,6 +51,7 @@ import {
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
 import AvatarCropperModal from '../components/AvatarCropperModal';
+import { submitAppSupport } from '../services/appSupportService';
 
 interface ChatViewProps {
     events: CalendarEvent[];
@@ -1758,6 +1759,15 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 )}
 
                                 {msg.role === 'assistant' && renderActionCard(msg)}
+                                {msg.role === 'assistant' && !isGuest && <button type="button" className="text-xs text-[#787774] hover:text-rose-600" onClick={async (event) => {
+                                    const button = event.currentTarget;
+                                    const reason = window.prompt('문제가 되는 이유를 입력해 주세요. 이 응답과 사유를 운영자에게 보냅니다.');
+                                    if (!reason?.trim()) return;
+                                    button.disabled = true;
+                                    try { window.alert(await submitAppSupport('ai-report', msg.content.slice(0, 4500), reason.trim().slice(0, 500))); }
+                                    catch (error) { window.alert(error instanceof Error ? error.message : '신고를 접수하지 못했습니다.'); }
+                                    finally { button.disabled = false; }
+                                }}>응답 신고</button>}
 
                                 {/* Quick Replies - Only for the first message */}
                                 {msg.role === 'assistant' && index === 0 && msg.quickReplies && msg.quickReplies.length > 0 && (

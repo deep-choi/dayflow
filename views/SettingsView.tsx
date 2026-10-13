@@ -12,6 +12,7 @@ import { DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL, CHAT_PROVIDERS, getDefau
 import PersonaSettingsView from './PersonaSettingsView';
 import AvatarCropperModal from '../components/AvatarCropperModal';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
+import { openServicePage, submitAppSupport } from '../services/appSupportService';
 
 export type SettingsTab = 'account' | 'theme' | 'api' | 'persona' | 'data';
 
@@ -96,6 +97,8 @@ const SettingsView: React.FC<SettingsViewProps> = ({
     onClearAgentPersonaMemories,
 }) => {
     const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+    const [deletionBusy, setDeletionBusy] = useState(false);
+    const [deletionStatus, setDeletionStatus] = useState('');
 
     useEffect(() => {
         if (initialTab) {
@@ -504,6 +507,18 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                             </div>
                         </div>
 
+                        <div className="pt-4 border-t border-[#f0f0ee] flex flex-wrap items-center gap-3 text-sm">
+                            <button type="button" onClick={() => void openServicePage('privacy')}>개인정보처리방침</button>
+                            <button type="button" onClick={() => void openServicePage('account-deletion')}>계정 삭제 안내</button>
+                            {currentUser && <button type="button" disabled={deletionBusy} className="text-rose-600 disabled:opacity-50" onClick={async () => {
+                                if (!window.confirm('계정과 연결된 데이터의 삭제를 운영자에게 요청할까요?\n확인 후 처리되며, 삭제가 완료되면 복구할 수 없습니다.')) return;
+                                setDeletionBusy(true); setDeletionStatus('');
+                                try { setDeletionStatus(await submitAppSupport('account-deletion')); }
+                                catch (error) { setDeletionStatus(error instanceof Error ? error.message : '요청을 접수하지 못했습니다.'); }
+                                finally { setDeletionBusy(false); }
+                            }}>{deletionBusy ? '접수 중…' : '계정 삭제 요청'}</button>}
+                            {deletionStatus && <p role="status" className="w-full">{deletionStatus}</p>}
+                        </div>
                         {/* Save Action Bar */}
                         <div className="pt-4 flex items-center justify-end gap-3">
                             {saveSuccessToast && (
