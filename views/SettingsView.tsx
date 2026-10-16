@@ -10,11 +10,12 @@ import { listOllamaModels, testOllamaConnection } from '../services/ollamaServic
 import { DEFAULT_LOCAL_SERVER_BASE_URL, listLocalServerModels, testLocalServerConnection } from '../services/localServerService';
 import { DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE_URL, CHAT_PROVIDERS, getDefaultModelForProvider, getModelOptionsForProvider, getProviderDefaultBaseUrl, getProviderDisplayName as getConfiguredProviderDisplayName, hasProviderModelOptions, isChatSupportedProvider, isHostedOpenAICompatibleProvider, normalizeProviderModelName } from '../utils/aiConfig';
 import PersonaSettingsView from './PersonaSettingsView';
+import AgentAccessSettings from './AgentAccessSettings';
 import AvatarCropperModal from '../components/AvatarCropperModal';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
 import { openServicePage, submitAppSupport } from '../services/appSupportService';
 
-export type SettingsTab = 'account' | 'theme' | 'api' | 'persona' | 'data';
+export type SettingsTab = 'account' | 'theme' | 'api' | 'persona' | 'agents' | 'data';
 
 interface SettingsViewProps {
     initialTab?: SettingsTab;
@@ -128,6 +129,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                 return {
                     title: 'API & AI 모델 설정',
                     description: 'Gemini, OpenAI, DeepSeek, Qwen, Kimi, GLM 등 AI 연동 Key를 설정합니다.',
+                };
+            case 'agents':
+                return {
+                    title: 'AI 에이전트 연동',
+                    description: 'Codex, Claude 같은 외부 AI 에이전트가 내 데이터를 쓸 수 있게 토큰을 관리합니다.',
                 };
             case 'theme':
                 return {
@@ -323,6 +329,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
             items: [
                 { id: 'persona', label: '페르소나 설정', icon: Users },
                 { id: 'api', label: 'API & AI 모델', icon: Cpu },
+                { id: 'agents', label: 'AI 에이전트 연동', icon: Link },
                 { id: 'theme', label: '테마', icon: Palette }
             ]
         },
@@ -771,6 +778,9 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                     onClearAgentPersonaMemories={onClearAgentPersonaMemories}
                 />
             )}
+
+            {/* ===== AI 에이전트 연동 탭 ===== */}
+            {activeTab === 'agents' && <AgentAccessSettings userId={currentUser?.id} />}
 
             {/* ===== 데이터 관리 탭 ===== */}
             {activeTab === 'data' && (
