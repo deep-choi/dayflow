@@ -22,6 +22,7 @@ import { callAnthropicChatAPI } from "./anthropicService";
 import {
   DAYFLOW_TRIAL_API_KEY,
   generateTrialGeminiContent,
+  isGuestTrialUnavailableError,
   isTrialExhaustedError,
 } from "./trialChatService";
 import { callOpenAIChatAPI } from "./openaiService";
@@ -1458,7 +1459,7 @@ ${actionInstruction}
 
     return finalizeChatResult(text, agentName, otherPersonaNames);
   } catch (error) {
-    if (isTrialExhaustedError(error)) throw error;
+    if (isTrialExhaustedError(error) || isGuestTrialUnavailableError(error)) throw error;
     console.error("Chat generation failed:", error);
     return { reply: "죄송해요 잠시 후 다시 시도해 주세요.", action: { type: "none" } };
   }

@@ -47,6 +47,7 @@ import {
     DAYFLOW_TRIAL_API_KEY,
     DAYFLOW_TRIAL_MODEL,
     isTrialExhaustedError,
+    TrialChatError,
 } from '../services/trialChatService';
 import { readImageFileAsDataUrl } from '../utils/imageAsset';
 import { getAvatarImageStyle } from '../utils/avatarFrame';
@@ -416,8 +417,8 @@ const getTimeBasedGreeting = (): string => {
     if (hour < 12) return '좋은 아침이에요! ☀️';
     if (hour < 14) return '점심시간이네요! 🍚';
     if (hour < 18) return '좋은 오후예요! 🌤️';
-    if (hour < 22) return '오늘 하루 어떠셨나요? ❤️';
-    return '늦은 밤이네요. 오늘도 수고하셨어요 ❤️';
+    if (hour < 22) return '오늘 하루 어떠셨나요?';
+    return '늦은 밤이네요. 오늘도 수고하셨어요.';
 };
 
 const ChatView: React.FC<ChatViewProps> = ({
@@ -459,7 +460,7 @@ const ChatView: React.FC<ChatViewProps> = ({
             return {
                 id: `onboarding-${crypto.randomUUID()}`,
                 role: 'assistant',
-                content: `${getTimeBasedGreeting()}\n\n처음 오셨네요! 저는 ${agent?.name || 'Dayflow'}예요. ${agent?.emoji || '💬'}\n당신의 일상을 함께 정리하고 더 나은 하루를 만들어 드릴게요.\n\n먼저, 뭐라고 불러드리면 될까요?`,
+                content: `${getTimeBasedGreeting()}\n\n처음 뵙겠습니다. 저는 ${agent?.name || 'Dayflow'}예요.\n일정과 할 일, 하루의 생각을 함께 정리해 드릴게요.\n\n먼저, 어떻게 불러드리면 좋을까요?`,
                 timestamp: new Date().toISOString(),
                 agentId: agent?.id,
                 action: { type: 'onboarding' },
@@ -470,7 +471,7 @@ const ChatView: React.FC<ChatViewProps> = ({
         return {
             id: `welcome-${crypto.randomUUID()}`,
             role: 'assistant',
-            content: `${userName ? `${userName}님, ` : ''}무엇부터 함께 해볼까요? ❤️\n\n일정과 할 일을 정리하거나 머릿속 생각을 편하게 나눠주세요.\n필요한 내용은 제가 차근차근 정리해드릴게요.`,
+            content: `${userName ? `${userName}님, ` : ''}무엇부터 함께 해볼까요?\n\n일정과 할 일을 정리하거나 머릿속 생각을 편하게 나눠주세요.\n필요한 내용은 제가 차근차근 정리해드릴게요.`,
             timestamp: new Date().toISOString(),
             agentId: agent?.id,
             quickReplies: ['오늘 일정 정리', '할 일 정리', '생각 정리', '편하게 대화'],
@@ -1337,10 +1338,6 @@ const ChatView: React.FC<ChatViewProps> = ({
     const handleSend = async (text?: string) => {
         const messageText = text || inputValue;
         if (!messageText.trim() || isProcessing) return;
-        if (isGuest) {
-            onRequestAuth?.();
-            return;
-        }
 
         const trimmedMessage = messageText.trim();
         const addressedAgentIdsForInput = resolveDirectAddressedAgentIds(trimmedMessage, activeAgents);
@@ -1577,9 +1574,11 @@ const ChatView: React.FC<ChatViewProps> = ({
                 const assistantMessage: ChatMessage = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
-                    content: isTrialExhaustedError(error)
-                        ? '무료 체험 10회를 모두 사용했어요. 계속 대화하려면 설정이나 페르소나 편집에서 개인 API를 연결해 주세요.'
-                        : '죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?',
+                    content: isGuest && error instanceof TrialChatError && (isTrialExhaustedError(error) || error.code === 'GUEST_TRIAL_UNAVAILABLE')
+                        ? error.message
+                        : isTrialExhaustedError(error)
+                            ? '무료 체험 10회를 모두 사용했어요. 계속 대화하려면 설정이나 페르소나 편집에서 개인 API를 연결해 주세요.'
+                            : '죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?',
                     timestamp: new Date().toISOString(),
                     agentId: primaryAgent?.id,
                 };
@@ -1700,7 +1699,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                     onClick={() => openAgentEditor(messageAgent)}
                                     disabled={!onUpdateAgent || !messageAgent}
                                     title={onUpdateAgent && messageAgent ? `${messageAgent.name} 편집` : undefined}
-                                    className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[#5f5f5f] flex-shrink-0 overflow-hidden mt-1 transition-transform ${onUpdateAgent && messageAgent ? 'hover:scale-[1.03] cursor-pointer' : 'cursor-default'}`}
+                                    className={`w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[#5f5f5f] flex-shrink-0 overflow-hidden mt-1 transition-transform ${onUpdateAgent && messageAgent ? 'hover:scale-[1.03] cursor-pointer' : 'cursor-default'}`}
                                 >
                                     {messageAgent?.avatar ? (
                                         <img src={messageAgent.avatar} alt={messageAgent.name} style={getAvatarImageStyle(messageAgent.avatarFrame)} className="w-full h-full object-cover" />
@@ -1791,7 +1790,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             onClick={() => openAgentEditor(primaryAgent)}
                             disabled={!onUpdateAgent || !primaryAgent}
                             title={onUpdateAgent && primaryAgent ? `${primaryAgent.name} 편집` : undefined}
-                            className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[#5f5f5f] flex-shrink-0 overflow-hidden mt-1 transition-transform ${onUpdateAgent && primaryAgent ? 'hover:scale-[1.03] cursor-pointer' : 'cursor-default'}`}
+                            className={`w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-[#f3f3f3] flex items-center justify-center text-[#5f5f5f] flex-shrink-0 overflow-hidden mt-1 transition-transform ${onUpdateAgent && primaryAgent ? 'hover:scale-[1.03] cursor-pointer' : 'cursor-default'}`}
                         >
                             {primaryAgent?.avatar ? (
                                 <img src={primaryAgent.avatar} alt={primaryAgent.name} style={getAvatarImageStyle(primaryAgent.avatarFrame)} className="w-full h-full object-cover" />
@@ -1818,7 +1817,7 @@ const ChatView: React.FC<ChatViewProps> = ({
             </div>
 
             {/* Input Area */}
-            <div className="px-2 py-3 bg-white relative z-20">
+            <div className="px-2 pt-3 pb-[calc(0.75rem+max(env(safe-area-inset-bottom),var(--safe-area-inset-bottom,0px)))] bg-white relative z-20">
                 <div className="space-y-3">
                     {/* Plus Button Action Popup Menu (Identical design to left sidebar UserMenuPopover) */}
                     {showToolbar && (
@@ -1880,7 +1879,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                                 value={inputValue}
                                 onChange={(e) => setInputValue(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                                placeholder={isGuest ? "로그인하고 Dayflow와 대화해보세요..." : (onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요...")}
+                                placeholder={onboardingStep === 0 ? "이름을 입력해주세요..." : "무엇이든 말씀해주세요..."}
                                 className="chat-input-field w-full min-w-0 h-11 px-2.5 bg-transparent text-base placeholder-[#b8b8b8] focus:outline-none"
                                 disabled={isProcessing}
                             />

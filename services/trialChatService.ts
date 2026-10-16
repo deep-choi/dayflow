@@ -33,6 +33,9 @@ export class TrialChatError extends Error {
 export const isTrialExhaustedError = (error: unknown): boolean =>
   error instanceof TrialChatError && error.code === 'TRIAL_EXHAUSTED';
 
+export const isGuestTrialUnavailableError = (error: unknown): boolean =>
+  error instanceof TrialChatError && error.code === 'GUEST_TRIAL_UNAVAILABLE';
+
 const readFunctionError = async (error: unknown): Promise<{ code: string; message: string }> => {
   const fallback = {
     code: 'TRIAL_REQUEST_FAILED',
@@ -52,11 +55,33 @@ const readFunctionError = async (error: unknown): Promise<{ code: string; messag
   }
 };
 
+const GUEST_DEVICE_ID_KEY = 'dayflow_guest_trial_device_id';
+let memoryGuestDeviceId = '';
+
+const getGuestDeviceId = (): string => {
+  try {
+    const stored = localStorage.getItem(GUEST_DEVICE_ID_KEY);
+    if (stored) return stored;
+    const created = crypto.randomUUID();
+    localStorage.setItem(GUEST_DEVICE_ID_KEY, created);
+    return created;
+  } catch {
+    memoryGuestDeviceId = memoryGuestDeviceId || crypto.randomUUID();
+    return memoryGuestDeviceId;
+  }
+};
+
 export const generateTrialGeminiContent = async (
   request: TrialGeminiRequest,
 ): Promise<TrialGeminiResponse> => {
+  // Visitors without a session are counted per device on the server.
+  const { data: sessionData } = await supabase.auth.getSession();
+  const body = sessionData.session
+    ? request
+    : { ...request, guestDeviceId: getGuestDeviceId() };
+
   const { data, error } = await supabase.functions.invoke<TrialGeminiResponse>('trial-chat', {
-    body: request,
+    body,
   });
 
   if (error) {

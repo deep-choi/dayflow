@@ -21,6 +21,11 @@ const isUuid = (value: unknown): value is string =>
   typeof value === 'string'
   && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
+const hashValue = async (value: string): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
 const readText = (value: unknown): string => typeof value === 'string' ? value : '';
 
 const getPayloadSize = (contents: unknown, systemInstruction: unknown): number =>
@@ -47,20 +52,24 @@ Deno.serve(async (request) => {
     return json(401, { code: 'UNAUTHORIZED', message: '로그인이 필요합니다.' });
   }
 
-  const userClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authorization } },
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const { data: userData, error: userError } = await userClient.auth.getUser();
-  if (userError || !userData.user) {
-    return json(401, { code: 'UNAUTHORIZED', message: '로그인 정보를 확인하지 못했습니다.' });
-  }
-
   let body: Record<string, unknown>;
   try {
     body = await request.json();
   } catch {
     return json(400, { code: 'INVALID_BODY', message: '요청 형식이 올바르지 않습니다.' });
+  }
+
+  // Signed-in users are counted per account. A request that carries no valid user
+  // session but names a device id is counted as a guest turn instead.
+  const userClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authorization } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: userData, error: userError } = await userClient.auth.getUser();
+  const user = userError ? null : userData.user;
+  const guestDeviceId = body.guestDeviceId;
+  if (!user && !isUuid(guestDeviceId)) {
+    return json(401, { code: 'UNAUTHORIZED', message: '로그인 정보를 확인하지 못했습니다.' });
   }
 
   const requestId = body.trialTurnId;
@@ -80,10 +89,24 @@ Deno.serve(async (request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data: claimRows, error: claimError } = await admin.rpc('claim_ai_trial_turn', {
-    p_user_id: userData.user.id,
-    p_request_id: requestId,
-  });
+
+  let ipHash = '';
+  if (!user) {
+    const forwarded = request.headers.get('x-forwarded-for') || '';
+    const clientIp = request.headers.get('cf-connecting-ip') || forwarded.split(',')[0].trim() || 'unknown';
+    ipHash = await hashValue(`${serviceRoleKey}:${clientIp}`);
+  }
+
+  const { data: claimRows, error: claimError } = user
+    ? await admin.rpc('claim_ai_trial_turn', {
+      p_user_id: user.id,
+      p_request_id: requestId,
+    })
+    : await admin.rpc('claim_ai_guest_trial_turn', {
+      p_device_id: guestDeviceId,
+      p_ip_hash: ipHash,
+      p_request_id: requestId,
+    });
   if (claimError) {
     console.error('Trial claim failed:', claimError.message);
     return json(500, { code: 'TRIAL_CLAIM_FAILED', message: '체험 사용량을 확인하지 못했습니다.' });
@@ -91,19 +114,34 @@ Deno.serve(async (request) => {
 
   const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
   if (!claim?.allowed) {
+    if (!user && (claim?.reason === 'IP_LIMIT' || claim?.reason === 'GLOBAL_LIMIT')) {
+      return json(429, {
+        code: 'GUEST_TRIAL_UNAVAILABLE',
+        message: '지금은 체험 이용이 많아요. 로그인하면 바로 대화를 이어갈 수 있어요.',
+        remaining: 0,
+      });
+    }
     return json(402, {
       code: 'TRIAL_EXHAUSTED',
-      message: `무료 체험 ${TRIAL_LIMIT}회를 모두 사용했어요. 계속 대화하려면 개인 API를 연결해 주세요.`,
+      message: user
+        ? `무료 체험 ${TRIAL_LIMIT}회를 모두 사용했어요. 계속 대화하려면 개인 API를 연결해 주세요.`
+        : `무료 체험 ${TRIAL_LIMIT}회를 모두 사용했어요. 로그인하면 계속 이용할 수 있어요.`,
       remaining: 0,
     });
   }
 
   const releaseClaim = async () => {
     if (!claim?.claimed_new) return;
-    const { error } = await admin.rpc('release_ai_trial_turn', {
-      p_user_id: userData.user.id,
-      p_request_id: requestId,
-    });
+    const { error } = user
+      ? await admin.rpc('release_ai_trial_turn', {
+        p_user_id: user.id,
+        p_request_id: requestId,
+      })
+      : await admin.rpc('release_ai_guest_trial_turn', {
+        p_device_id: guestDeviceId,
+        p_ip_hash: ipHash,
+        p_request_id: requestId,
+      });
     if (error) console.error('Trial claim release failed:', error.message);
   };
 
@@ -171,6 +209,7 @@ Deno.serve(async (request) => {
     candidates: (responseBody as { candidates?: unknown }).candidates,
     usageMetadata: (responseBody as { usageMetadata?: unknown }).usageMetadata,
     remaining: Number(claim.remaining_count ?? 0),
+    guest: !user,
     model: TRIAL_MODEL,
   });
 });

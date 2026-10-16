@@ -4,7 +4,7 @@ import { Calendar as CalendarIcon, Check, CheckSquare, BookOpen, MessageCircle, 
 import { format, parseISO } from 'date-fns';
 import { supabase } from './utils/supabase';
 import { useRegisterSW } from 'virtual:pwa-register/react';
-import { DEFAULT_AGENTS } from './data/defaultAgents';
+import { DEFAULT_AGENTS, migrateLegacyDefaultAgent } from './data/defaultAgents';
 import { normalizeKoreanText } from './utils/encodingFix';
 import { syncEvents, syncTodos, syncTodoLists, syncTodoTabs, syncTodoSteps, syncEntries, syncJournalCategories, syncAgents, syncChatSessions, syncPersonaMemories, syncUserData, setOnSyncError, seedSyncSnapshot, clearUserSyncState } from './services/syncService';
 import { debugManualSync } from './utils/debugSync';
@@ -469,7 +469,8 @@ const normalizeCachedCalendarEvent = (event: CalendarEvent): CalendarEvent => {
   };
 };
 
-const normalizeAIAgent = (agent: any, fallbackOrder: number = 0): AIAgent => {
+const normalizeAIAgent = (rawAgent: any, fallbackOrder: number = 0): AIAgent => {
+  const agent = migrateLegacyDefaultAgent(rawAgent || {});
   const avatar = typeof agent?.avatar === 'string' ? agent.avatar : undefined;
   const normalizeTone = (value: unknown): string => {
     if (typeof value !== 'string') return '';
@@ -4332,7 +4333,7 @@ const App: React.FC = () => {
             >
               <Menu size={20} />
             </button>
-            <span className="text-[#37352f] truncate">{headerLabel}</span>
+            <span className="text-[#37352f] text-[17px] font-semibold truncate">{headerLabel}</span>
           </div>
           <div className="flex items-center gap-2">
             {currentUser ? (
