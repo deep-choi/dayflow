@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Todo, TodoList, TodoTab, TodoStep } from '../types';
-import { Check, ChevronRight, MoreVertical, CalendarIcon, Trash2, Plus, GripVertical, AlertCircle, X, Maximize2, CheckSquare, Layout, Edit3 } from '../components/Icons';
+import { Check, ChevronRight, MoreVertical, CalendarIcon, Trash2, Plus, GripVertical, AlertCircle, X, CheckSquare, Layout, Edit3 } from '../components/Icons';
 import { format, isToday, isTomorrow, isValid, parseISO } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import {
@@ -294,7 +294,7 @@ const TabSettingsModal = ({ tabId, tabs, onClose, onAddTab, onUpdateTab, onDelet
 };
 
 // --- Expanded Todo Modal ---
-const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any) => {
+const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo, onDeleteTodo }: any) => {
   const todo = todos.find((t: Todo) => t.id === todoId);
   if (!todo) return null;
 
@@ -412,13 +412,24 @@ const ExpandedTodoModal = ({ todoId, todos, lists, onClose, onUpdateTodo }: any)
           </div>
         </div>
 
-        <div className="px-5 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-200 rounded-lg transition-colors">
-            취소
+        <div className="px-5 py-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center gap-2">
+          <button
+            onClick={() => {
+              onDeleteTodo(todoId);
+              onClose();
+            }}
+            className="text-xs text-red-600 font-medium hover:underline"
+          >
+            삭제하기
           </button>
-          <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-[#171717] bg-white border border-[#d4d4d4] hover:bg-[#f7f7f7] rounded-lg transition-colors">
-            저장
-          </button>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-200 rounded-lg transition-colors">
+              취소
+            </button>
+            <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-[#171717] bg-white border border-[#d4d4d4] hover:bg-[#f7f7f7] rounded-lg transition-colors">
+              저장
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -578,21 +589,10 @@ const SortableTodoItem = ({
             className="p-1 hover:bg-[#e0e0e0] rounded-full text-[#5f6368] transition-all"
             onClick={(e) => {
               e.stopPropagation();
-              onOpenMenu(e, todo, 'expand');
+              onOpenMenu(e, todo);
             }}
             onPointerDown={e => e.stopPropagation()}
-            title="상세 보기"
-          >
-            <Maximize2 size={14} />
-          </button>
-          <button
-            className="p-1 hover:bg-[#e0e0e0] rounded-full text-[#5f6368] transition-all"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenMenu(e, todo, 'menu');
-            }}
-            onPointerDown={e => e.stopPropagation()}
-            title="더보기"
+            title="상세 편집"
           >
             <MoreVertical size={16} />
           </button>
@@ -716,13 +716,7 @@ const DroppableSection = ({
       saveTodoText={saveTodoText}
       cancelEditing={() => { setEditingTodoId(null); setEditingTodoText(''); }}
       onToggleTodo={onToggleTodo}
-      onOpenMenu={(e: any, t: Todo, actionType: 'menu' | 'expand') => {
-        if (actionType === 'menu') {
-          setContextMenu({ id: t.id, x: e.clientX, y: e.clientY });
-        } else {
-          setContextMenu({ id: t.id, x: 0, y: 0, expanded: true });
-        }
-      }}
+      onOpenMenu={(_e: any, t: Todo) => setContextMenu({ id: t.id, x: 0, y: 0, expanded: true })}
       getDueLabel={getDueLabel}
       onUpdateTodo={onUpdateTodo}
       draft={draft}
@@ -1763,38 +1757,8 @@ const TodoView: React.FC<TodoViewProps> = ({
             lists={lists}
             onClose={() => setContextMenu(null)}
             onUpdateTodo={onUpdateTodo}
+            onDeleteTodo={onDeleteTodo}
           />
-        )}
-        {contextMenu && !contextMenu.expanded && (
-          <div
-            ref={contextMenuRef}
-            className="fixed bg-white rounded-lg border border-[#e9e9e8] py-1 z-50 w-48 max-h-[70dvh] overflow-y-auto animate-in fade-in zoom-in-95 duration-100"
-            style={getMenuPosition(contextMenu.x, contextMenu.y, 192, 96 + lists.length * 36)}
-          >
-            <div className="px-3 py-2 border-b border-[#f0f0ef] text-xs font-medium text-[#9b9a97]">
-              작업 이동
-            </div>
-            {lists.map(list => (
-              <button
-                key={list.id}
-                className="w-full text-left px-3 py-2 text-sm text-[#37352f] hover:bg-[#f7f7f5] flex items-center gap-2"
-                onClick={() => handleMoveTodo(contextMenu.id, list.id)}
-              >
-                {list.title}
-              </button>
-            ))}
-            <div className="my-1 border-t border-[#f0f0ef]" />
-            <button
-              className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-              onClick={() => {
-                onDeleteTodo(contextMenu.id);
-                setContextMenu(null);
-              }}
-            >
-              <Trash2 size={14} />
-              <span>삭제</span>
-            </button>
-          </div>
         )}
         {listMenu && (
           <div

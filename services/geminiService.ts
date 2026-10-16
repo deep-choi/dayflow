@@ -674,12 +674,13 @@ const buildChatActionInstruction = (today: string, currentTime: string): string 
 - 삭제와 수정은 아직 지원하지 않습니다. 삭제/수정 요청에는 직접 화면에서 처리하라고 안내하고 액션을 만들지 마세요.
 - 액션이 필요하면 일반 문장 대신 JSON 객체 하나만 반환하세요.
 - 현재 날짜는 ${today}, 현재 시간은 ${currentTime}입니다. 상대 날짜는 반드시 YYYY-MM-DD로 변환하세요.
-- 일정에 시간이 없으면 "isAllDay": true로 두세요. 할 일의 마감일이 불명확하면 dueDate를 생략하세요.
+- 일정에 시간이 없으면 "isAllDay": true로 두세요. 할 일은 사용자가 날짜나 기한을 직접 말한 경우에만 dueDate를 넣고, 그 외에는 "오늘" 등으로 임의로 채우지 말고 dueDate를 생략하세요.
 - 여러 개를 한 번에 추가해야 하면 batch 액션을 사용하고 actions는 최대 ${ACTION_JSON_MAX_ACTIONS}개까지만 넣으세요.
 
 액션 JSON 형식:
 {"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"add_event","data":{"title":"런닝","date":"YYYY-MM-DD","startTime":"07:00","endTime":"08:00","isAllDay":false,"description":"선택"}}}
-{"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"add_todo","data":{"text":"포트폴리오 수정","dueDate":"YYYY-MM-DD","category":"personal","listName":"선택"}}}
+{"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"add_todo","data":{"text":"포트폴리오 수정","category":"personal","listName":"선택"}}}
+(기한을 말한 경우에만 data에 "dueDate":"YYYY-MM-DD"를 추가)
 {"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"add_journal_entry","data":{"title":"아이디어","content":"기록할 내용","category":"메모장","mood":"neutral"}}}
 {"reply":"사용자에게 보여줄 짧은 확인 문장","action":{"type":"batch","actions":[{"type":"add_todo","data":{"text":"예시"}}]}}
 `;

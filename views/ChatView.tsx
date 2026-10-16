@@ -1617,37 +1617,33 @@ const ChatView: React.FC<ChatViewProps> = ({
         const statusLabel = getActionStatusLabel(action);
 
         return (
-            <div className="w-full max-w-full rounded-2xl border border-[#e9e9e8] bg-[#fbfbfa] p-3.5 shadow-[0_4px_12px_rgba(15,23,42,0.035)]">
-                <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                        <div className="text-sm font-medium text-[#37352f]">
-                            {items.length > 1 ? `${items.length}개 항목 추가` : `${getActionKindLabel(items[0])} 추가`}
-                        </div>
-                        <div className="mt-0.5 text-xs text-[#9b9a97]">{statusLabel}</div>
+            <div className="w-full max-w-full overflow-hidden rounded-2xl border border-[#e9e9e8] bg-white sm:w-[360px]">
+                <div className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2.5">
+                    <div className="min-w-0 truncate text-sm font-semibold text-[#37352f]">
+                        {items.length > 1 ? `${items.length}개 항목 추가` : `${getActionKindLabel(items[0])} 추가`}
                     </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${action.status === 'completed'
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${action.status === 'completed'
                         ? 'bg-[#edf7f1] text-[#2f7d4f]'
                         : action.status === 'failed'
                             ? 'bg-[#fff1f0] text-[#b42318]'
                             : action.status === 'cancelled'
                                 ? 'bg-[#f1f1f0] text-[#787774]'
-                                : 'bg-white text-[#787774] border border-[#e9e9e8]'}`}
+                                : 'bg-[#f5f5f4] text-[#787774]'}`}
                     >
                         {statusLabel}
                     </span>
                 </div>
 
-                <div className="mt-3 space-y-2">
+                <div className="divide-y divide-[#f0f0ee] border-t border-[#f0f0ee]">
                     {items.map((item, idx) => {
                         const secondary = getActionSecondaryText(item);
                         return (
-                            <div key={`${item.type}-${idx}`} className="rounded-xl border border-[#eeeeec] bg-white px-3 py-2.5">
-                                <div className="flex flex-wrap items-center gap-2 text-xs text-[#9b9a97]">
-                                    <span>{getActionKindLabel(item)}</span>
-                                    <span>·</span>
-                                    <span>{formatDateTimeSummary(item)}</span>
+                            <div key={`${item.type}-${idx}`} className="px-4 py-3">
+                                <div className="text-xs text-[#9b9a97]">
+                                    {items.length > 1 && <span>{getActionKindLabel(item)} · </span>}
+                                    {formatDateTimeSummary(item)}
                                 </div>
-                                <div className="mt-1 text-sm font-medium text-[#37352f] break-words">
+                                <div className="mt-1 text-[15px] font-medium leading-snug text-[#37352f] break-words">
                                     {getActionPrimaryText(item)}
                                 </div>
                                 {secondary && (
@@ -1664,16 +1660,16 @@ const ChatView: React.FC<ChatViewProps> = ({
                 </div>
 
                 {action.status === 'failed' && action.error && (
-                    <div className="mt-2 text-xs text-[#b42318]">{action.error}</div>
+                    <div className="border-t border-[#f0f0ee] px-4 py-2.5 text-xs text-[#b42318]">{action.error}</div>
                 )}
 
                 {isPending && (
-                    <div className="mt-3 flex justify-end gap-2">
+                    <div className="flex gap-2 border-t border-[#f0f0ee] px-4 py-3 sm:justify-end">
                         <button
                             type="button"
                             onClick={() => handleCancelMessageAction(msg.id, action)}
                             disabled={isBusy}
-                            className="px-3 py-1.5 rounded-lg border border-[#dcdcd9] bg-white text-sm text-[#37352f] hover:bg-[#f7f7f5] transition-colors disabled:opacity-60"
+                            className="flex-1 sm:flex-none px-4 py-2 rounded-lg border border-[#e3e3e0] bg-white text-sm text-[#37352f] hover:bg-[#f7f7f5] transition-colors disabled:opacity-60"
                         >
                             취소
                         </button>
@@ -1681,7 +1677,7 @@ const ChatView: React.FC<ChatViewProps> = ({
                             type="button"
                             onClick={() => void handleConfirmMessageAction(msg.id, action)}
                             disabled={isBusy}
-                            className="px-3 py-1.5 rounded-lg bg-[var(--color-primary)] text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-60"
+                            className="flex-1 sm:flex-none px-4 py-2 rounded-lg bg-[var(--color-primary)] text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-60"
                         >
                             {isBusy ? '추가 중...' : '추가하기'}
                         </button>
