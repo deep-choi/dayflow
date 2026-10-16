@@ -541,6 +541,32 @@ const getPersonalContextWindow = (latestUserText: string, today: Date): { start:
   if (explicitDate && parseLocalYmd(explicitDate)) {
     return { start: explicitDate, end: explicitDate, label: "명시 날짜" };
   }
+  const daysAgo = text.match(/(\d{1,3})\s*일\s*전/);
+  if (daysAgo) {
+    const d = toLocalYmd(addLocalDays(today, -Number(daysAgo[1])));
+    return { start: d, end: d, label: `${daysAgo[1]}일 전` };
+  }
+  if (/지난\s*(주|주간)/.test(text)) {
+    const mondayOffset = (today.getDay() + 6) % 7;
+    const thisMonday = addLocalDays(today, -mondayOffset);
+    return {
+      start: toLocalYmd(addLocalDays(thisMonday, -7)),
+      end: toLocalYmd(addLocalDays(thisMonday, -1)),
+      label: "지난주",
+    };
+  }
+  if (/지난\s*(달|월)/.test(text)) {
+    const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const end = new Date(today.getFullYear(), today.getMonth(), 0);
+    return { start: toLocalYmd(start), end: toLocalYmd(end), label: "지난달" };
+  }
+  if (/그저께|그제|엊그제/.test(text)) {
+    return {
+      start: toLocalYmd(addLocalDays(today, -2)),
+      end: toLocalYmd(addLocalDays(today, -1)),
+      label: "그저께~어제",
+    };
+  }
   if (/어제/.test(text)) {
     const y = toLocalYmd(addLocalDays(today, -1));
     return { start: y, end: y, label: "어제" };
@@ -585,7 +611,7 @@ const getPersonalContextWindow = (latestUserText: string, today: Date): { start:
 };
 
 const shouldIncludePersonalDataContext = (latestUserText: string): boolean =>
-  /(일정|캘린더|스케줄|할\s*일|할일|투두|todo|마감|기한|메모|메모장|일기|기록|노트|오늘|내일|어제|이번|다음|계획|추가|넣어|등록|저장|작성|정리|뭐\s*있|뭐해|해야\s*할)/i.test(latestUserText || "");
+  /(일정|캘린더|스케줄|할\s*일|할일|투두|todo|마감|기한|메모|메모장|일기|기록|노트|오늘|내일|어제|그저께|그제|이번|다음|지난|계획|추가|넣어|등록|저장|작성|정리|뭐\s*있|뭐해|해야\s*할|저번|전에|예전|그때|기억|적어|썼|말했|얘기했|며칠|언제)/i.test(latestUserText || "");
 
 const formatEventForContext = (event: CalendarEvent): string => {
   const time = event.isAllDay
@@ -604,9 +630,71 @@ const formatTodoForContext = (todo: Todo): string => {
 };
 
 const formatJournalForContext = (entry: JournalEntry): string => {
-  const date = (entry.date || "").slice(0, 10) || "날짜 없음";
+  const date = journalLocalYmd(entry) || "날짜 없음";
   const category = entry.category ? ` | ${entry.category}` : "";
   return `- ${date} | ${clampText(entry.title, 80)}${category} | ${clampText(entry.content, 160)}`;
+};
+
+const journalLocalYmd = (entry: JournalEntry): string => {
+  const parsed = new Date(entry.date);
+  return Number.isNaN(parsed.getTime()) ? "" : toLocalYmd(parsed);
+};
+
+const SEARCH_STOPWORDS = new Set([
+  "저번", "저번에", "기억", "기억나", "그때", "전에", "예전", "내가", "나는", "나도", "뭐였지", "뭐야", "알려줘", "말해줘",
+  "해줘", "있어", "없어", "있잖아", "오늘", "내일", "어제", "그저께", "이번", "다음", "지난", "메모", "메모장", "일기",
+  "기록", "일정", "할일", "캘린더", "그거", "그게", "이거", "저거", "어떤", "무슨", "그리고", "그런데", "근데", "진짜",
+  "너무", "정말", "많이", "조금", "우리", "있었", "했던", "했어", "했는데", "같이", "다시", "그냥", "아까",
+]);
+
+const extractSearchKeywords = (text: string): string[] => {
+  const tokens = (text || "").toLowerCase().match(/[가-힣a-z0-9]{2,}/g) || [];
+  const keywords = new Set<string>();
+  for (const token of tokens) {
+    const stem = token.replace(/(으로|에서|에게|한테|까지|부터|처럼|이랑|하고|였던|했던|인데|에는|에도|은|는|이|가|을|를|의|에|도|와|과|로)$/, "");
+    if (stem.length >= 2 && !SEARCH_STOPWORDS.has(stem) && !SEARCH_STOPWORDS.has(token)) keywords.add(stem);
+  }
+  return [...keywords].slice(0, 8);
+};
+
+// Searches every journal entry (not just the recent ones) for the user's keywords.
+const findRelevantJournal = (entries: JournalEntry[], latestUserText: string, limit: number): JournalEntry[] => {
+  const keywords = extractSearchKeywords(latestUserText);
+  if (keywords.length === 0) return [];
+  return (entries || [])
+    .map((entry) => {
+      const haystack = `${entry.title || ""} ${entry.content || ""}`.toLowerCase();
+      return { entry, score: keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0) };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || String(b.entry.date || "").localeCompare(String(a.entry.date || "")))
+    .slice(0, limit)
+    .map((item) => item.entry);
+};
+
+// Short summary that is attached to every message, so the persona always knows today's basics.
+const buildAlwaysOnSummary = (events: CalendarEvent[], todos: Todo[], journalCount: number, today: string): string => {
+  const todayEvents = (events || [])
+    .filter((event) => isYmdInRange(today, event.date, event.endDate || event.date))
+    .slice()
+    .sort((a, b) => (a.startTime || "").localeCompare(b.startTime || ""))
+    .slice(0, 5);
+  const openTodos = (todos || []).filter((todo) => !todo.completed);
+  const overdue = openTodos.filter((todo) => todo.dueDate && todo.dueDate < today).slice(0, 3);
+  const upcoming = openTodos
+    .filter((todo) => todo.dueDate && todo.dueDate >= today)
+    .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)))
+    .slice(0, 5);
+
+  return [
+    `[사용자 데이터 요약]`,
+    `- 오늘 날짜: ${today}`,
+    `- 오늘 일정: ${todayEvents.length > 0 ? `\n${todayEvents.map(formatEventForContext).join("\n")}` : "없음"}`,
+    overdue.length > 0 ? `- 기한이 지난 할 일:\n${overdue.map(formatTodoForContext).join("\n")}` : "",
+    upcoming.length > 0 ? `- 다가오는 마감:\n${upcoming.map(formatTodoForContext).join("\n")}` : "",
+    `- 미완료 할 일 ${openTodos.length}개, 메모장 기록 ${journalCount}개`,
+    `- 위에 없는 일정·할 일·메모는 추측하지 말고, 모르면 사용자에게 물어보세요.`,
+  ].filter(Boolean).join("\n");
 };
 
 const buildPersonalDataContext = (
@@ -616,53 +704,65 @@ const buildPersonalDataContext = (
   latestUserText: string,
   now: Date
 ): string => {
-  if (!shouldIncludePersonalDataContext(latestUserText)) return "";
-
   const today = toLocalYmd(now);
-  const window = getPersonalContextWindow(latestUserText, now);
-  const relevantEvents = (events || [])
-    .filter((event) => {
-      const eventStart = event.date;
-      const eventEnd = event.endDate || event.date;
-      return isYmdInRange(eventStart, window.start, window.end) || isYmdInRange(eventEnd, window.start, window.end);
-    })
-    .slice()
-    .sort((a, b) => `${a.date} ${a.startTime || ""}`.localeCompare(`${b.date} ${b.startTime || ""}`))
-    .slice(0, 14);
+  const sections: string[] = [buildAlwaysOnSummary(events, todos, (journalEntries || []).length, today)];
+  const shownJournalIds = new Set<string>();
 
-  const relevantTodos = (todos || [])
-    .filter((todo) => {
-      if (!todo.completed) return true;
-      const todoDate = todo.dueDate || todo.startDate || todo.date;
-      return isYmdInRange(todoDate, window.start, window.end);
-    })
-    .slice()
-    .sort((a, b) => {
-      const aDate = a.dueDate || a.startDate || a.date || "9999-12-31";
-      const bDate = b.dueDate || b.startDate || b.date || "9999-12-31";
-      return aDate.localeCompare(bDate);
-    })
-    .slice(0, 18);
+  if (shouldIncludePersonalDataContext(latestUserText)) {
+    const window = getPersonalContextWindow(latestUserText, now);
+    const relevantEvents = (events || [])
+      .filter((event) => {
+        const eventStart = event.date;
+        const eventEnd = event.endDate || event.date;
+        return isYmdInRange(eventStart, window.start, window.end) || isYmdInRange(eventEnd, window.start, window.end);
+      })
+      .slice()
+      .sort((a, b) => `${a.date} ${a.startTime || ""}`.localeCompare(`${b.date} ${b.startTime || ""}`))
+      .slice(0, 14);
 
-  const recentJournal = (journalEntries || [])
-    .slice()
-    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-    .slice(0, 8);
+    // Completed todos have no completion time, so they are matched by due/start/created date.
+    const relevantTodos = (todos || [])
+      .filter((todo) => {
+        if (!todo.completed) return true;
+        const todoDate = todo.dueDate || todo.startDate || todo.date;
+        return isYmdInRange(todoDate, window.start, window.end);
+      })
+      .slice()
+      .sort((a, b) => {
+        const aDate = a.dueDate || a.startDate || a.date || "9999-12-31";
+        const bDate = b.dueDate || b.startDate || b.date || "9999-12-31";
+        return aDate.localeCompare(bDate);
+      })
+      .slice(0, 18);
 
-  const sections = [
-    `[사용자 데이터 요약]`,
-    `- 오늘 날짜: ${today}`,
-    `- 참고 범위: ${window.label} (${window.start} ~ ${window.end})`,
-    ``,
-    `관련 일정:`,
-    relevantEvents.length > 0 ? relevantEvents.map(formatEventForContext).join("\n") : "- 없음",
-    ``,
-    `할 일:`,
-    relevantTodos.length > 0 ? relevantTodos.map(formatTodoForContext).join("\n") : "- 없음",
-    ``,
-    `최근 메모장 기록:`,
-    recentJournal.length > 0 ? recentJournal.map(formatJournalForContext).join("\n") : "- 없음",
-  ];
+    const byNewest = (journalEntries || []).slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const inWindow = byNewest.filter((entry) => isYmdInRange(journalLocalYmd(entry), window.start, window.end)).slice(0, 6);
+    const recent = byNewest.slice(0, 5);
+    const detailedJournal = [...inWindow, ...recent].filter((entry) => {
+      if (shownJournalIds.has(entry.id)) return false;
+      shownJournalIds.add(entry.id);
+      return true;
+    });
+
+    sections.push(
+      ``,
+      `[상세 참고 범위: ${window.label} (${window.start} ~ ${window.end})]`,
+      `관련 일정:`,
+      relevantEvents.length > 0 ? relevantEvents.map(formatEventForContext).join("\n") : "- 없음",
+      ``,
+      `할 일:`,
+      relevantTodos.length > 0 ? relevantTodos.map(formatTodoForContext).join("\n") : "- 없음",
+      ``,
+      `메모장 기록(해당 기간 및 최근):`,
+      detailedJournal.length > 0 ? detailedJournal.map(formatJournalForContext).join("\n") : "- 없음",
+    );
+  }
+
+  // Older memos that match what the user is talking about, regardless of the date window.
+  const matched = findRelevantJournal(journalEntries, latestUserText, 4).filter((entry) => !shownJournalIds.has(entry.id));
+  if (matched.length > 0) {
+    sections.push(``, `질문과 관련된 메모장 기록:`, matched.map(formatJournalForContext).join("\n"));
+  }
 
   return truncateForModel(sections.join("\n"), PERSONAL_CONTEXT_CHAR_LIMIT);
 };
@@ -1043,7 +1143,7 @@ export const generateChatResponse = async (
     reasoningEffort = DEFAULT_REASONING_EFFORT,
   } = options;
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = toLocalYmd(new Date());
   const now = new Date();
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const latestUserText = [...messageHistory].reverse().find((m) => m.role === "user")?.content || "";
@@ -1381,7 +1481,7 @@ export const generateGroupChatResponses = async (
   if (selectedAgents.length === 0) return { responses: [] };
 
   const ai = new GoogleGenAI({ apiKey });
-  const today = new Date().toISOString().split("T")[0];
+  const today = toLocalYmd(new Date());
   const now = new Date();
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const latestUserText = [...messageHistory].reverse().find((m) => m.role === "user")?.content || "";
