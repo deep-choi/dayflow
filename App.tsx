@@ -3953,10 +3953,10 @@ const App: React.FC = () => {
             todos={effectiveTodos}
             entries={entries}
             todoLists={todoLists}
-            onAddEvent={(event) => requireAuth() ? addEvent(event) : undefined}
-            onDeleteEvent={(id) => { if (requireAuth()) deleteEvent(id); }}
-            onAddTodo={(...args) => requireAuth() ? addTodo(...args) : undefined}
-            onAddEntry={(...args) => requireAuth() ? addEntry(...args) : undefined}
+            onAddEvent={addEvent}
+            onDeleteEvent={deleteEvent}
+            onAddTodo={addTodo}
+            onAddEntry={addEntry}
             requireConfirm={settings.chatActionConfirm}
             settings={settings}
             onUpdateSettings={setSettings}
