@@ -65,6 +65,9 @@ export const initializeNativeAuthRedirect = async (): Promise<void> => {
 
 export const startGoogleSignIn = async (): Promise<void> => {
     const native = isNativeApp();
+    if (!native && /^\/admin(?:\/|$)/u.test(window.location.pathname)) {
+        try { window.sessionStorage.setItem('dayflow-admin-auth-return', String(Date.now())); } catch { /* Storage can be unavailable. */ }
+    }
     const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {

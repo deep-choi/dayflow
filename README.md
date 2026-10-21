@@ -4,6 +4,8 @@
 
 # Dayflow
 
+운영자 전용 `/admin`의 기능, 권한, DB 변경과 배포 절차는 [관리자 운영 가이드](docs/ADMIN_OPERATIONS.md)에 정리되어 있습니다.
+
 This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/drive/1Duckm0yaNKJzyW14PA3wGBNf9fiWBNJh

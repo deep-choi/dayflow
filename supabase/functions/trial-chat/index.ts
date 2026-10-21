@@ -32,6 +32,7 @@ const getPayloadSize = (contents: unknown, systemInstruction: unknown): number =
   JSON.stringify(contents ?? []).length + JSON.stringify(systemInstruction ?? {}).length;
 
 Deno.serve(async (request) => {
+  const startedAt = Date.now();
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -89,6 +90,20 @@ Deno.serve(async (request) => {
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  const { data: operations, error: operationsError } = await admin.from('dayflow_operations_settings').select('trial_paused').eq('id', true).single();
+  if (operationsError) return json(503, { code: 'TRIAL_SETTINGS_UNAVAILABLE', message: '체험 운영 설정을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' });
+  if (operations.trial_paused) return json(503, { code: 'TRIAL_PAUSED', message: 'AI 체험을 잠시 쉬고 있어요. 기존 기록과 개인 API 연결은 계속 사용할 수 있습니다.' });
+  const recordUsage = async (status: 'succeeded' | 'failed', metadata: unknown = null, errorCode: string | null = null) => {
+    const usage = metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : {};
+    const count = (key: string) => Number.isFinite(Number(usage[key])) ? Math.max(0, Math.floor(Number(usage[key]))) : 0;
+    const { error } = await admin.from(user ? 'ai_usage_events' : 'dayflow_guest_ai_events').insert({
+      request_id: crypto.randomUUID(), model: TRIAL_MODEL, status,
+      ...(user ? { user_id: user.id, plan_id: 'dayflow_free', provider: 'google' } : {}),
+      input_tokens: count('promptTokenCount'), output_tokens: count('candidatesTokenCount'), total_tokens: count('totalTokenCount'),
+      duration_ms: Math.max(0, Date.now() - startedAt), error_code: errorCode,
+    });
+    if (error) console.error(JSON.stringify({ event: 'trial_metrics_write_failed', code: error.code }));
+  };
 
   let ipHash = '';
   if (!user) {
@@ -114,6 +129,7 @@ Deno.serve(async (request) => {
 
   const claim = Array.isArray(claimRows) ? claimRows[0] : claimRows;
   if (!claim?.allowed) {
+    if (claim?.reason === 'PAUSED') return json(503, { code: 'TRIAL_PAUSED', message: 'AI 체험을 잠시 쉬고 있어요.' });
     if (!user && (claim?.reason === 'IP_LIMIT' || claim?.reason === 'GLOBAL_LIMIT')) {
       return json(429, {
         code: 'GUEST_TRIAL_UNAVAILABLE',
@@ -175,6 +191,7 @@ Deno.serve(async (request) => {
   } catch (error) {
     console.error('Trial Gemini network request failed:', error);
     await releaseClaim();
+    await recordUsage('failed', null, 'NETWORK_ERROR');
     return json(502, {
       code: 'TRIAL_PROVIDER_ERROR',
       message: '체험 응답을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.',
@@ -186,6 +203,7 @@ Deno.serve(async (request) => {
     const upstreamMessage = readText((responseBody as { error?: { message?: unknown } })?.error?.message);
     console.error('Trial Gemini request failed:', geminiResponse.status, upstreamMessage);
     await releaseClaim();
+    await recordUsage('failed', null, `PROVIDER_${geminiResponse.status}`);
     return json(502, {
       code: 'TRIAL_PROVIDER_ERROR',
       message: '체험 응답을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.',
@@ -198,12 +216,14 @@ Deno.serve(async (request) => {
 
   if (!text.trim()) {
     await releaseClaim();
+    await recordUsage('failed', null, 'EMPTY_RESPONSE');
     return json(502, {
       code: 'TRIAL_EMPTY_RESPONSE',
       message: '체험 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.',
     });
   }
 
+  await recordUsage('succeeded', (responseBody as { usageMetadata?: unknown }).usageMetadata);
   return json(200, {
     text,
     candidates: (responseBody as { candidates?: unknown }).candidates,

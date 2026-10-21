@@ -16,6 +16,9 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        workbox: {
+          navigateFallbackDenylist: [/^\/admin(?:\/|$)/],
+        },
         includeAssets: ['favicon.svg', 'apple-touch-icon.svg', 'masked-icon.svg', 'robots.txt', 'sitemap.xml'],
         manifest: {
           name: 'Dayflow - AI Daily Flow Assistant',
