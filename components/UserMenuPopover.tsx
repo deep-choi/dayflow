@@ -35,7 +35,7 @@ export const UserMenuPopover: React.FC<UserMenuPopoverProps> = ({
     setIsAdmin(false);
     if (isOpen && currentUser?.id) void supabase.auth.getUser().then(({ data }) => {
       if (!cancelled && data.user?.id === currentUser.id) setIsAdmin(isAdminMetadata(data.user.app_metadata));
-    });
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [isOpen, currentUser?.id]);
 

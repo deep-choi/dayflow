@@ -202,6 +202,8 @@ Deno.serve(async (request) => {
         aiUsed,
         aiLimit: limit,
         aiRemaining: Math.max(0, limit - aiUsed),
+        trialUsed: trialUsageByUser.get(user.id) || 0,
+        trialLimit: PLAN_LIMITS.dayflow_free,
         noteCount: noteCountByUser.get(user.id) || 0,
       };
     });

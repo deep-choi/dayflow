@@ -8,6 +8,7 @@ export interface AdminMember {
   id: string; email: string; name: string; joinedAt: string; lastSignInAt: string | null;
   adminRole: string; bannedUntil: string | null; planId: string; subscriptionStatus: string;
   aiUsed: number; aiLimit: number; aiRemaining: number; noteCount: number;
+  trialUsed: number; trialLimit: number;
 }
 export interface SupportTicket {
   id: string; user_id: string; category: string; subject: string; status: 'open' | 'in_progress' | 'resolved' | 'closed';
