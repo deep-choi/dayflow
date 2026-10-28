@@ -1,4 +1,4 @@
-/* Flat admin layout; auth modal controls retain their own styles. */
+/* One card per section; content inside uses rows, spacing and dividers. */
 .df-admin{--admin-bg:#fff;--admin-surface:#fff;--admin-subtle:#f8f9fb;--admin-hover:#f0f2f6;--admin-line:#e9ecf1;--admin-line-strong:#d7dce5;--admin-text:#202634;--admin-text-2:#535f72;--admin-muted:#6c7788;--admin-accent:#365edb;--admin-accent-hover:#294bbb;--admin-accent-soft:#edf2ff;--admin-success:#287354;--admin-warning:#94641e;--admin-danger:#bc4343;--admin-info:#365edb;--admin-ring:0 0 0 3px #365edb24;color-scheme:light;color:var(--admin-text);background:var(--admin-bg);min-height:100dvh;font:14px/1.6 "Pretendard",-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif;word-break:keep-all;-webkit-font-smoothing:antialiased}
 .df-admin *{box-sizing:border-box}
 .df-admin a{color:inherit;text-decoration:none}
@@ -38,8 +38,8 @@
 .admin-count{font-size:12px;color:var(--admin-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .admin-num{font-variant-numeric:tabular-nums}
 
-/* Sidebar and page share a single, open canvas. */
-.admin-shell{display:grid;grid-template-columns:220px minmax(0,1fr)}
+/* A quiet page background separates the section cards. */
+.admin-shell{display:grid;grid-template-columns:220px minmax(0,1fr);background:#f5f7fa}
 .admin-sidebar{position:sticky;top:0;height:100dvh;display:flex;flex-direction:column;gap:40px;padding:32px 16px 24px;border-right:1px solid var(--admin-line);background:var(--admin-subtle);overflow-y:auto}
 .admin-brand{display:flex;align-items:center;gap:10px;padding:0 12px;font-size:18px;font-weight:700;letter-spacing:-.3px}
 .admin-brand small{display:block;font-size:11px;font-weight:400;color:var(--admin-muted);letter-spacing:.4px}
@@ -53,7 +53,7 @@
 .admin-sidebar-account{padding:0 14px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .admin-sidebar-footer a,.admin-sidebar-footer button{display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:36px;padding:6px 14px;border:0;background:transparent;font-size:12px;font-weight:400;color:inherit}
 .admin-sidebar-footer a:hover,.admin-sidebar-footer button:hover:not(:disabled){color:var(--admin-text)}
-.admin-main{width:100%;max-width:1400px;margin:0 auto;padding:52px 56px 80px;min-width:0}
+.admin-main{width:100%;max-width:1400px;margin:0 auto;padding:44px 40px 64px;min-width:0}
 .admin-header{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:40px}
 .admin-header-actions{display:flex;align-items:center;gap:14px}
 .admin-header-actions>button{color:var(--admin-text-2);font-size:12px}
@@ -65,9 +65,9 @@
 .admin-alert.error{background:#fff6f5;color:var(--admin-danger)}
 .admin-alert.success{background:#f1f9f4;color:var(--admin-success)}
 
-/* Sections use whitespace and rules instead of nested cards. */
-.admin-card{margin:0 0 36px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
-.admin-spaced{margin-top:48px}
+/* Only top-level sections receive a surface and border. */
+.admin-card,.admin-stats,.admin-ticket-list{margin:0 0 24px;padding:26px 28px;border:1px solid var(--admin-line);border-radius:12px;background:var(--admin-surface);box-shadow:0 2px 4px #20263403}
+.admin-spaced{margin-top:24px}
 .admin-section-title{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}
 .admin-section-title h2{margin:0}
 .admin-badge{display:inline-flex;align-items:center;gap:7px;color:var(--admin-text-2);font-size:12px;font-weight:500;line-height:1.6;white-space:nowrap}
@@ -81,14 +81,16 @@
 
 /* Overview */
 .admin-meta{margin:-22px 0 30px}
-.admin-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:32px;margin-bottom:44px;padding:0 0 40px;border-bottom:1px solid var(--admin-line)}
-.admin-stat{display:flex;flex-direction:column;align-items:flex-start}
+.admin-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0}
+.admin-stat{display:flex;flex-direction:column;align-items:flex-start;padding:0 28px}
+.admin-stat:first-child{padding-left:0}
+.admin-stat+.admin-stat{border-left:1px solid var(--admin-line)}
 .admin-stat-label{font-size:13px;color:var(--admin-muted)}
 .admin-stat strong{margin-top:12px;font-size:38px;font-weight:600;line-height:1.2;letter-spacing:-1.4px;font-variant-numeric:tabular-nums}
 .admin-stat small{margin-top:10px;font-size:12px;color:var(--admin-muted)}
 .admin-stat.warning strong{color:var(--admin-warning)}
 .admin-stat.danger strong{color:var(--admin-danger)}
-.admin-overview-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(240px,1fr);gap:48px;padding-bottom:40px;border-bottom:1px solid var(--admin-line)}
+.admin-overview-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);gap:24px}
 .admin-overview-grid>.admin-card{margin:0}
 .admin-usage{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin:0}
 .admin-usage dt{font-size:12px;color:var(--admin-muted)}
@@ -98,7 +100,7 @@
 .admin-trial-limits>div{display:flex;align-items:center;justify-content:space-between;gap:16px}
 .admin-trial-limits dt{color:var(--admin-muted)}
 .admin-trial-limits dd{margin:0;font-variant-numeric:tabular-nums}
-.admin-recent{margin-top:36px}
+.admin-recent{margin-top:24px}
 .admin-recent-list{margin:0;padding:0;list-style:none}
 .admin-recent-list li{display:grid;grid-template-columns:72px minmax(0,1fr) auto;align-items:center;gap:20px;padding:16px 0;border-top:1px solid var(--admin-line)}
 .admin-recent-list button.admin-text-button{justify-self:start;text-align:left;white-space:normal;color:var(--admin-text)}
@@ -110,8 +112,8 @@
 .admin-shell .admin-search-field input{padding-left:38px}
 .admin-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:24px}
 .admin-pagination>div{display:flex;gap:8px}
-.table-card{min-width:0}
-.table-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:0 0 20px}
+.table-card{min-width:0;padding:0;overflow:hidden}
+.table-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:24px 28px 20px}
 .table-card-head h2{margin:0}
 .admin-table-wrap{position:relative;overflow-x:auto;-webkit-overflow-scrolling:touch}
 .admin-table-wrap:focus-visible{outline-offset:-2px}
@@ -119,6 +121,8 @@
 .df-admin th{padding:12px 16px;border-top:1px solid var(--admin-line);border-bottom:1px solid var(--admin-line);background:var(--admin-subtle);color:var(--admin-muted);font-size:12px;font-weight:500;white-space:nowrap}
 .df-admin td{padding:18px 16px;border-bottom:1px solid var(--admin-line);vertical-align:middle;overflow-wrap:anywhere}
 .df-admin tbody tr:hover{background:#fbfcfe}
+.df-admin tbody tr:last-child td{border-bottom:0}
+.table-card>.admin-table-wrap:first-child th{border-top:0}
 .df-admin td strong{display:block;font-weight:550}
 .df-admin td small{display:block;max-width:300px;margin-top:4px;font-size:12px;color:var(--admin-muted);overflow-wrap:anywhere}
 .df-admin td small code{font-size:11px;color:inherit}
@@ -133,9 +137,11 @@
 
 /* AI settings */
 .admin-settings{width:100%}
-.admin-settings-grid{border-top:1px solid var(--admin-line)}
+.admin-settings-grid{border:0}
 .admin-setting-row{display:grid;grid-template-columns:240px minmax(0,1fr);gap:40px;padding:28px 0;border-bottom:1px solid var(--admin-line)}
+.admin-setting-row:first-child{padding-top:0}
 .admin-setting-row h2{margin:0 0 8px;font-size:14px}
+.admin-daily-allowance{align-self:center;font-size:18px;font-weight:600;letter-spacing:-.3px}
 .admin-shell .admin-check{display:flex;align-items:flex-start;gap:12px;margin:0;padding:0;color:var(--admin-text);cursor:pointer}
 .admin-check small{display:block;margin-top:4px;font-size:12px;font-weight:400;color:var(--admin-muted)}
 .admin-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:480px}
@@ -146,8 +152,12 @@
 .admin-billing-status{display:flex;align-items:center;gap:24px;margin-bottom:32px}
 
 /* Support is a single list. Only the expanded row reveals details. */
-.admin-ticket-list{border-top:1px solid var(--admin-line)}
+.admin-ticket-list:empty{display:none}
 .admin-ticket{border-bottom:1px solid var(--admin-line)}
+.admin-ticket:first-child>summary{padding-top:0}
+.admin-ticket:last-child{border-bottom:0}
+.admin-ticket:last-child:not([open])>summary{padding-bottom:0}
+.admin-ticket:last-child .admin-ticket-content{padding-bottom:0}
 .admin-ticket>summary{display:flex;align-items:center;gap:24px;padding:22px 0;list-style:none;cursor:pointer}
 .admin-ticket>summary::-webkit-details-marker{display:none}
 .admin-ticket>summary>.admin-badge{width:64px;flex-shrink:0}
@@ -200,8 +210,7 @@
 @media (max-width:1180px){
   .admin-shell{grid-template-columns:196px minmax(0,1fr)}
   .admin-main{padding:40px 32px 64px}
-  .admin-overview-grid{grid-template-columns:minmax(0,1fr);gap:32px}
-  .admin-trial-card{max-width:480px}
+  .admin-overview-grid{grid-template-columns:minmax(0,1fr);gap:24px}
   .admin-setting-row{grid-template-columns:180px minmax(0,1fr);gap:24px}
 }
 @media (max-width:860px){
@@ -219,17 +228,24 @@
   .admin-header{margin-bottom:32px}
   .admin-shell h1{font-size:24px}
   .admin-meta{margin-top:-16px}
-  .admin-stats{gap:24px}
+  .admin-stat{padding:0 16px}
   .admin-stat strong{font-size:32px}
   .df-admin table{min-width:680px}
   .admin-setting-row{grid-template-columns:170px minmax(0,1fr)}
 }
 @media (max-width:600px){
-  .admin-main{padding:28px 20px 48px}
+  .admin-main{padding:28px 16px 48px}
   .admin-header{gap:12px}
   .admin-header-actions{flex-wrap:wrap;justify-content:flex-end;max-width:50%}
   .admin-loading{font-size:11px}
-  .admin-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:28px 20px;margin-bottom:32px;padding-bottom:32px}
+  .admin-card,.admin-stats,.admin-ticket-list{padding:22px 20px;margin-bottom:20px}
+  .admin-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:24px 20px}
+  .admin-stat,.admin-stat:first-child{padding:0}
+  .admin-stat+.admin-stat{border-left:0}
+  .table-card{padding:0}
+  .table-card-head{padding:20px}
+  .admin-overview-grid{gap:20px}
+  .admin-recent{margin-top:20px}
   .admin-usage{grid-template-columns:minmax(0,1fr);gap:20px}
   .admin-usage>div{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .admin-usage dd{margin:0;font-size:22px}

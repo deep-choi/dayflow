@@ -1574,11 +1574,9 @@ const ChatView: React.FC<ChatViewProps> = ({
                 const assistantMessage: ChatMessage = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
-                    content: isGuest && error instanceof TrialChatError && (isTrialExhaustedError(error) || error.code === 'GUEST_TRIAL_UNAVAILABLE')
+                    content: error instanceof TrialChatError && (isTrialExhaustedError(error) || error.code === 'GUEST_TRIAL_UNAVAILABLE')
                         ? error.message
-                        : isTrialExhaustedError(error)
-                            ? '무료 체험 10회를 모두 사용했어요. 계속 대화하려면 설정이나 페르소나 편집에서 개인 API를 연결해 주세요.'
-                            : '죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?',
+                        : '죄송해요 대화 중 오류가 발생했어요. 다시 말씀해 주시겠어요?',
                     timestamp: new Date().toISOString(),
                     agentId: primaryAgent?.id,
                 };

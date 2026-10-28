@@ -140,8 +140,8 @@ Deno.serve(async (request) => {
     return json(402, {
       code: 'TRIAL_EXHAUSTED',
       message: user
-        ? `무료 체험 ${TRIAL_LIMIT}회를 모두 사용했어요. 계속 대화하려면 개인 API를 연결해 주세요.`
-        : `무료 체험 ${TRIAL_LIMIT}회를 모두 사용했어요. 로그인하면 계속 이용할 수 있어요.`,
+        ? `오늘 무료 체험 ${TRIAL_LIMIT}회를 모두 사용했어요. 한국 시간 오전 9시에 다시 ${TRIAL_LIMIT}회를 사용할 수 있어요. 지금 계속하려면 개인 API를 연결해 주세요.`
+        : `오늘 무료 체험 ${TRIAL_LIMIT}회를 모두 사용했어요. 한국 시간 오전 9시에 다시 ${TRIAL_LIMIT}회를 사용할 수 있어요. 로그인하면 계정의 일일 체험을 이용할 수 있어요.`,
       remaining: 0,
     });
   }
@@ -152,11 +152,13 @@ Deno.serve(async (request) => {
       ? await admin.rpc('release_ai_trial_turn', {
         p_user_id: user.id,
         p_request_id: requestId,
+        p_usage_date: claim.usage_date,
       })
       : await admin.rpc('release_ai_guest_trial_turn', {
         p_device_id: guestDeviceId,
         p_ip_hash: ipHash,
         p_request_id: requestId,
+        p_usage_date: claim.usage_date,
       });
     if (error) console.error('Trial claim release failed:', error.message);
   };

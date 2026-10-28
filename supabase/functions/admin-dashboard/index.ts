@@ -104,7 +104,7 @@ Deno.serve(async (request) => {
     admin.from('billing_payments').select('id,user_id,toss_order_id,plan_id,amount,currency,status,failure_code,failure_message,approved_at,created_at').order('created_at', { ascending: false }).limit(200),
     admin.from('billing_refunds').select('id,payment_id,user_id,admin_user_id,amount,reason,status,created_at').order('created_at', { ascending: false }).limit(200),
     admin.from('billing_attempts').select('id,subscription_id,user_id,scheduled_at,attempt_number,amount,status,failure_code,failure_message,processed_at,created_at').order('created_at', { ascending: false }).limit(200),
-    admin.from('ai_trial_usage').select('user_id,request_ids,updated_at').limit(2000),
+    admin.from('ai_trial_usage').select('user_id,request_ids,updated_at').eq('usage_date', now.toISOString().slice(0, 10)).limit(2000),
     admin.from('ai_subscription_usage').select('user_id,period_start,plan_id,request_ids,updated_at').order('period_start', { ascending: false }).limit(2000),
     admin.from('ai_usage_events').select('id,user_id,request_id,plan_id,provider,model,status,input_tokens,output_tokens,total_tokens,duration_ms,error_code,created_at').gte('created_at', lastThirtyDays.toISOString()).order('created_at', { ascending: false }).limit(2000),
     admin.from('admin_audit_logs').select('id,admin_user_id,action,target_type,target_id,reason,metadata,created_at').order('created_at', { ascending: false }).limit(200),

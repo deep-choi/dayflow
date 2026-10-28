@@ -29,7 +29,8 @@
 ## AI 제한과 측정
 
 - 서버 `trial-chat`만 관리한다. 사용자가 직접 연결한 Gemini/OpenAI/Anthropic/xAI/Ollama/개인 서버 요청의 키·과금·모델은 운영 콘솔에서 통제할 수 없다.
-- 로그인 전 기기당 체험 10회, 로그인 후 계정당 무료 체험 10회는 기존 정책을 유지한다.
+- 로그인 전 기기당, 로그인 후 계정당 무료 체험을 매일 10회 제공한다. UTC 자정(한국 시간 오전 9시)에 초기화한다. 사용자 목록의 체험 사용량도 해당 날짜만 집계한다.
+- 사용량 행의 `usage_date`가 지난 날짜이면 다음 예약에서 원자적으로 초기화한다. 별도 스케줄러 없이 서버 시간으로 판단하며, 같은 날 같은 요청 ID의 재시도는 추가 차감하지 않는다. 공급자 실패 시 예약 날짜를 함께 전달해 지난날의 응답이 오늘 사용량을 차감하지 않게 한다.
 - 비로그인 IP별/전체 일일 상한은 기존 기본값 30/1,000이며 설정 저장 시 다음 예약부터 반영된다. 전체 상한은 비로그인 체험에만 적용한다.
 - 일일 초기화는 UTC 자정(한국 시간 오전 9시). 재시작과 다중 인스턴스에서도 SQL transaction으로 공유하며, 같은 기기의 동시 예약도 직렬화한다.
 - 일시 중지는 로그인 여부와 무관하게 서버 체험 호출 전에 검사한다. 이미 진행 중인 공급자 요청은 취소하지 않는다.
@@ -41,6 +42,7 @@
 ## DB 및 서버
 
 - 새 마이그레이션: `supabase/migrations/20261021140000_dayflow_admin_console.sql`.
+- 일일 체험 전환: `supabase/migrations/20261028090000_daily_trial_allowance.sql`. 기존 사용량의 마지막 수정일을 유지하고, 날짜가 지난 행은 다음 예약부터 10회로 갱신한다. `tests/daily-trial-transaction.sql`은 임시 사용자·기기만 사용하고 모든 변경을 rollback한다.
 - 새 설정 테이블은 RLS 활성화, 일반/비로그인 권한 모두 회수, service role만 접근한다. 저장 RPC는 서버의 검증된 운영자 UID를 전달받아 실제 `auth.users` 권한을 다시 확인한다.
 - 설정 변경과 감사 로그, 문의 상태 변경과 감사 로그는 각각 같은 DB transaction에서 저장한다. 설정 revision과 문의 updated_at으로 동시 편집을 감지한다.
 - 기존 운영 서버의 `admin-dashboard`, `admin-operations` 소스를 회수해 저장소에 포함했다. 서비스 키는 서버 환경에만 있다. 기존 금융 실행 경로는 새 UI에서 호출하지 않는다.
@@ -48,9 +50,10 @@
 기존 DB 이력과 관계없는 마이그레이션을 일괄 재실행하지 않는다. 이번 파일만 적용한 뒤 이력을 반영한다.
 
 ```powershell
-npx supabase db query --linked --project-ref mlpikaguvatuggzxqzve --file supabase/migrations/20261021140000_dayflow_admin_console.sql
-npx supabase migration repair 20261021140000 --status applied --linked
-npx supabase functions deploy dayflow-admin admin-dashboard admin-operations trial-chat --project-ref mlpikaguvatuggzxqzve
+npx supabase db query --linked --project-ref mlpikaguvatuggzxqzve --file supabase/migrations/20261028090000_daily_trial_allowance.sql
+npx supabase migration repair 20261028090000 --status applied --linked
+npx supabase db query --linked --project-ref mlpikaguvatuggzxqzve --file tests/daily-trial-transaction.sql
+npx supabase functions deploy admin-dashboard trial-chat --project-ref mlpikaguvatuggzxqzve --use-api
 npm run deploy -- --project life-a01e2 --non-interactive
 ```
 
