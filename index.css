@@ -985,6 +985,13 @@ select {
   line-height: 1.25rem !important;
 }
 
+/* 모바일 메모 목록은 위 검색 영역과 같은 바탕으로 이어 붙여, 바탕색 경계가 또 하나의 선처럼 보이지 않게 합니다. */
+@media (max-width: 63.999rem) {
+  .journal-entry-list {
+    background-color: var(--app-surface) !important;
+  }
+}
+
 :root[data-theme='dark'] .journal-entry-list-item {
   background-color: transparent !important;
 }

@@ -507,7 +507,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({
                             </div>
                         </div>
 
-                        <div className="pt-4 border-t border-[#f0f0ee] flex flex-wrap items-center gap-3 text-sm">
+                        <div className="pt-2 flex flex-wrap items-center gap-3 text-sm">
                             <button type="button" onClick={() => void openServicePage('privacy')}>개인정보처리방침</button>
                             <button type="button" onClick={() => void openServicePage('account-deletion')}>계정 삭제 안내</button>
                             {currentUser && <button type="button" disabled={deletionBusy} className="text-rose-600 disabled:opacity-50" onClick={async () => {

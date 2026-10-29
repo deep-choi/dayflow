@@ -353,7 +353,7 @@ const JournalView: React.FC<JournalViewProps> = ({
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
       {sidebarSlot && createPortal(sidebarContent, sidebarSlot)}
-      <header className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} ${hasSidebarSlot ? 'lg:hidden' : ''} min-h-16 flex-col gap-3 border-b border-[#e9e9e8] px-4 py-3 sm:px-8 lg:flex-row lg:items-center lg:justify-between`}>
+      <header className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} ${hasSidebarSlot ? 'lg:hidden' : ''} min-h-16 flex-col gap-3 border-[#e9e9e8] px-4 py-3 sm:px-8 lg:flex-row lg:items-center lg:justify-between lg:border-b`}>
         <div className="hidden lg:block">
           <h1 className="text-lg font-medium text-[#171717]">메모장</h1>
         </div>
@@ -384,7 +384,7 @@ const JournalView: React.FC<JournalViewProps> = ({
       </header>
 
       {categories.length > 0 && (
-        <div className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} ${hasSidebarSlot ? 'lg:hidden' : ''} shrink-0 items-center gap-2 overflow-x-auto border-b border-[#e9e9e8] px-4 py-2.5 no-scrollbar sm:px-8`}>
+        <div className={`${isWriting || showMobileDetail ? 'hidden lg:flex' : 'flex'} ${hasSidebarSlot ? 'lg:hidden' : ''} shrink-0 items-center gap-2 overflow-x-auto border-[#e9e9e8] px-4 pb-3 no-scrollbar sm:px-8 lg:border-b lg:py-2.5`}>
           {[{ id: 'all', name: 'all', label: '전체' }, ...categories.map(category => ({ id: category.id, name: category.name, label: category.name }))].map(item => {
             const isActive = selectedCategory === item.name;
 
@@ -406,7 +406,7 @@ const JournalView: React.FC<JournalViewProps> = ({
       )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        <aside className={`${isWriting || showMobileDetail ? 'hidden lg:block' : 'block'} ${hasSidebarSlot ? 'lg:hidden' : ''} h-full min-h-0 w-full overflow-y-auto border-b border-[#e9e9e8] bg-[#fbfbfa] custom-scrollbar lg:h-auto lg:w-[360px] lg:border-b-0 lg:border-r`}>
+        <aside className={`${isWriting || showMobileDetail ? 'hidden lg:block' : 'block'} ${hasSidebarSlot ? 'lg:hidden' : ''} journal-entry-list h-full min-h-0 w-full space-y-1 overflow-y-auto border-[#e9e9e8] bg-[#fbfbfa] px-2 pb-6 custom-scrollbar lg:h-auto lg:w-[360px] lg:space-y-0 lg:border-r lg:p-0`}>
           {filteredEntries.map(entry => {
             const isSelected = selectedId === entry.id;
             return (
@@ -418,7 +418,7 @@ const JournalView: React.FC<JournalViewProps> = ({
                   setShowMobileDetail(true);
                   setIsWriting(false);
                 }}
-                className={`journal-entry-list-item w-full border-b border-l-0 border-b-[#e9e9e8] px-4 py-3 text-left transition-colors sm:p-5 lg:border-l-2 ${
+                className={`journal-entry-list-item w-full rounded-xl border-0 border-b-[#e9e9e8] px-3 py-3.5 text-left transition-colors max-lg:hover:bg-[#f7f7f7] max-lg:active:bg-[#f7f7f7] sm:px-4 sm:py-4 lg:rounded-none lg:border-b lg:border-l-2 lg:p-5 ${
                   isSelected
                     ? 'is-selected lg:border-l-[var(--color-primary)] lg:bg-white'
                     : 'border-l-transparent border-t-transparent border-r-transparent hover:bg-white/50'
