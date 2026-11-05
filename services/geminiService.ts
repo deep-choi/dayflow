@@ -1,10 +1,18 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, HarmBlockThreshold, HarmCategory, Type } from "@google/genai";
 import { CalendarEvent, JournalEntry, Todo, AiPost, AIAgent, ChatMode, ApiConnection } from "../types";
 import { DEFAULT_GEMINI_MODEL, normalizeGeminiModelName } from "../utils/aiConfig";
 import { callXaiChatJSON } from "./xaiService";
 
 const CHAT_HISTORY_LIMIT = 12;
 const MODEL_MESSAGE_CHAR_LIMIT = 600;
+
+// Apply to text chat requests; provider-level protections may still apply.
+const CHAT_SAFETY_SETTINGS = [
+  HarmCategory.HARM_CATEGORY_HARASSMENT,
+  HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+  HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+  HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+].map((category) => ({ category, threshold: HarmBlockThreshold.BLOCK_NONE }));
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
@@ -514,6 +522,7 @@ IMPORTANT: You MUST respond with a valid JSON object with exactly these keys:
       contents: validContents,
       config: {
         systemInstruction: { parts: [{ text: geminiSystemInstruction }] },
+        safetySettings: CHAT_SAFETY_SETTINGS,
         responseMimeType: "application/json",
         temperature: 0.68,
         maxOutputTokens: 2048,
@@ -711,6 +720,7 @@ Output rules:
       contents: validContents,
       config: {
         systemInstruction: { parts: [{ text: systemInstruction }] },
+        safetySettings: CHAT_SAFETY_SETTINGS,
         responseMimeType: "application/json",
         temperature: 0.55,
         maxOutputTokens: 3000,
